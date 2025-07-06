@@ -5,11 +5,11 @@ from typing import List, Tuple, Optional
 # ----- Configuration -----
 # Edit these values as needed. They also serve as defaults for CLI arguments.
 CSV_FILE = 'EURUSD_M30_Data.csv'
-P3 = 0.0002  # Range amount
-Q3 = 5        # Lookback length
-R3 = 3        # Duration
-P6 = 0.0003  # Stop loss
-Q6 = 0.0004  # Take profit
+P3 = 0.0038  # Range amount
+Q3 = 6        # Lookback length
+R3 = 12        # Duration
+P6 = 0.0009  # Stop loss
+Q6 = 0.0025  # Take profit
 
 
 def load_data(csv_file: str) -> List[dict]:
