@@ -1,10 +1,10 @@
 import csv
 
-P3 = 0.005  # range amount
-Q3 = 10     # length (lookback)
-R3 = 10     # duration (lookahead)
-P6 = 0.002  # stop loss
-Q6 = 0.003  # take profit
+P3 = 0.0038  # range amount
+Q3 = 6     # length (lookback)
+R3 = 12     # duration (lookahead)
+P6 = 0.0009  # stop loss
+Q6 = 0.0025  # take profit
 
 with open('EURUSD_M30_Data.csv', newline='') as f:
     reader = csv.DictReader(f)
