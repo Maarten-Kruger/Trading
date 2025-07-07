@@ -1,4 +1,5 @@
 import csv
+import pandas as pd
 
 # ============================================
 # Hover Breakout Strategy Backtest (No pandas/numpy)
@@ -187,14 +188,14 @@ def _svg_line_chart(values, width=600, height=300, pad=10, max_points=300):
         '</svg>'
     )
 
+
+
 def write_html_report(metrics, equity_curve, output_path="hover_backtest_report.html"):
     """Write backtest metrics and account growth to an HTML file."""
-    rows_metrics = "\n".join(
-        f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in metrics.items()
-    )
+    df = pd.DataFrame(list(metrics.items()), columns=["Metric", "Value"])
+    table_html = df.to_html(index=False)
 
     svg = _svg_line_chart(equity_curve)
-
 
     html = f"""
 <html>
@@ -211,9 +212,7 @@ th {{background: #eee;}}
 <body>
 <h1>Hover Breakout Backtest Report</h1>
 <h2>Metrics</h2>
-<table>
-{rows_metrics}
-</table>
+{table_html}
 
 <h2>Equity Curve</h2>
 {svg}
@@ -248,9 +247,10 @@ def main():
     for k, v in metrics.items():
         print(f"{k}: {v}")
 
-    # create html report
+    # output HTML report
     write_html_report(metrics, equity_curve)
 
 
 if __name__ == '__main__':
     main()
+
