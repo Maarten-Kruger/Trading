@@ -1,4 +1,5 @@
 import csv
+import matplotlib.pyplot as plt
 
 # ============================================
 # Hover Breakout Strategy Backtest (No pandas/numpy)
@@ -187,6 +188,19 @@ def _svg_line_chart(values, width=600, height=300, pad=10, max_points=300):
         '</svg>'
     )
 
+
+def plot_equity_curve(curve):
+    """Display equity growth using matplotlib."""
+    plt.figure(figsize=(8, 4))
+    plt.plot(curve, label="Balance")
+    plt.title("Account Balance Over Time")
+    plt.xlabel("Trade")
+    plt.ylabel("Balance")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.legend()
+    plt.show()
+
 def write_html_report(metrics, equity_curve, output_path="hover_backtest_report.html"):
     """Write backtest metrics and account growth to an HTML file."""
     rows_metrics = "\n".join(
@@ -248,7 +262,8 @@ def main():
     for k, v in metrics.items():
         print(f"{k}: {v}")
 
-    # create html report
+    # output visuals
+    plot_equity_curve(equity_curve)
     write_html_report(metrics, equity_curve)
 
 
