@@ -48,3 +48,49 @@ Sum of other hits: 8.999999999992347e-05
 ```
 
 No additional dependencies are required beyond the Python standard library.
+
+## Script: `strategy_test.py`
+
+`strategy_test.py` evaluates a breakout strategy that triggers after a period of
+consolidation. The script checks whether the previous `--period` candles fit
+within a specified range. If so, a trade is opened and the next `--duration`
+bars are inspected to see whether the take profit or stop loss is reached.
+Any trade that hits neither exit is closed at the end of the forward window for
+its partial gain or loss.
+
+By default the range is derived from the average candle size (ATR) multiplied by
+a factor of two. This avoids situations where a fixed threshold is too small
+for the dataset.
+
+Run the script with:
+
+```bash
+python3 strategy_test.py
+```
+
+Important arguments:
+
+```
+--period INT       lookback bars for range (default: 10)
+--duration INT     forward bars to check TP/SL (default: 6)
+--threshold FLOAT  fixed range width. Use 0 to derive from ATR
+--atr-mult FLOAT   ATR multiplier when threshold is 0 (default: 2.0)
+--risk FLOAT       stop loss distance
+--rr FLOAT         reward-to-risk ratio
+--spread FLOAT     spread in price units
+```
+
+Example using a fixed threshold:
+
+```bash
+python3 strategy_test.py --threshold 0.002 --period 10
+```
+
+The program prints metrics such as win rate, risk-reward ratio and expectancy
+along with a simple sensitivity analysis.
+
+You can also modify the default parameters directly in `strategy_test.py`. The
+top of the file defines a `DEFAULT_CONFIG` dictionary containing the CSV path,
+range period, thresholds and other settings. Edit these values to run the
+strategy with your preferred configuration without using command line
+arguments.
