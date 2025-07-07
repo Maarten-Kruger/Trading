@@ -148,6 +148,7 @@ def compute_metrics(trades, initial_equity=10000):
     }
 
 
+
 def simulate_account_growth(trades, kelly_fraction, starting_balance=10000):
     """Return equity curve using Kelly sizing."""
     equity = starting_balance
@@ -186,13 +187,14 @@ def _svg_line_chart(values, width=600, height=300, pad=10, max_points=300):
         '</svg>'
     )
 
-
 def write_html_report(metrics, equity_curve, output_path="hover_backtest_report.html"):
     """Write backtest metrics and account growth to an HTML file."""
     rows_metrics = "\n".join(
         f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in metrics.items()
     )
+
     svg = _svg_line_chart(equity_curve)
+
 
     html = f"""
 <html>
@@ -212,8 +214,10 @@ th {{background: #eee;}}
 <table>
 {rows_metrics}
 </table>
+
 <h2>Equity Curve</h2>
 {svg}
+
 </body>
 </html>
 """

@@ -1,5 +1,6 @@
 import argparse
 from itertools import product
+
 from Hover_Breakout_Test import (
     load_data,
     run_backtest,
@@ -36,6 +37,7 @@ def _svg_line_chart(values, width=600, height=300, pad=10, max_points=300):
     )
 
 
+
 def write_html_report(best_params, best_metrics, equity_curve, output_path="hover_optimize_report.html"):
     """Write optimization results and demo account growth to an HTML file."""
     params_rows = "\n".join(
@@ -44,7 +46,9 @@ def write_html_report(best_params, best_metrics, equity_curve, output_path="hove
     metrics_rows = "\n".join(
         f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in best_metrics.items()
     )
+
     svg = _svg_line_chart(equity_curve)
+
 
     html = f"""
 <html>
@@ -69,7 +73,9 @@ th {{background: #eee;}}
 {metrics_rows}
 </table>
 <h2>Equity Curve</h2>
+
 {svg}
+
 </body>
 </html>
 """
@@ -120,6 +126,9 @@ def main():
     print("\nMetrics:")
     for k, v in best_metrics.items():
         print(f"{k}: {v}")
+
+    write_html_report(best_params, best_metrics, equity_curve)
+
 
     write_html_report(best_params, best_metrics, equity_curve)
 
