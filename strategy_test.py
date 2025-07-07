@@ -6,12 +6,12 @@ from typing import List, Dict
 # arguments override these values if provided.
 DEFAULT_CONFIG = {
     'csv': 'EURUSD_M30_Data.csv',  # path to the OHLC data
-    'period': 10,                  # lookback bars defining the consolidation range
-    'threshold': 0.0,              # fixed range width. 0 -> derive from ATR
+    'period': 6,                  # lookback bars defining the consolidation range
+    'threshold': 0.0038,              # fixed range width. 0 -> derive from ATR
     'atr_mult': 2.0,               # ATR multiplier when threshold is 0
-    'duration': 6,                 # forward bars to check TP/SL
-    'risk': 0.0010,                # stop loss distance in price units
-    'rr': 2.0,                     # reward-to-risk ratio
+    'duration': 12,                 # forward bars to check TP/SL
+    'risk': 0.0009,                # stop loss distance in price units
+    'rr': 2.777777,                     # reward-to-risk ratio
     'spread': 0.0002,              # bid/ask spread in price units
 }
 
