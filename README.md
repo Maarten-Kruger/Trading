@@ -93,3 +93,21 @@ python3 strategy_test.py --threshold 0.002 --period 10
 
 The program prints metrics such as win rate, risk-reward ratio and expectancy
 along with a simple sensitivity analysis.
+
+## Script: `Hover_Breakout_Test.py`
+
+Runs a breakout backtest on the sample data. The script prints a metrics summary,
+creates `hover_backtest_report.html` with an equity chart and shows a
+`matplotlib` graph of the account balance over time.
+
+Execute it with:
+
+```bash
+python3 Hover_Breakout_Test.py
+```
+
+`matplotlib` is required for the plot:
+
+```bash
+pip install matplotlib
+```
