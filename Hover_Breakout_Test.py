@@ -199,8 +199,6 @@ def main():
     for k, v in metrics.items():
         print(f"{k}: {v}")
 
-    # create html report
-    write_html_report(metrics)
 
 
 if __name__ == '__main__':
