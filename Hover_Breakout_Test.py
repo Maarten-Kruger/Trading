@@ -148,11 +148,27 @@ def compute_metrics(trades, initial_equity=10000):
     }
 
 
-def write_html_report(metrics, output_path="hover_backtest_report.html"):
-    """Write backtest metrics to an HTML file."""
+
+def simulate_account_growth(trades, kelly_fraction, starting_balance=10000):
+    """Return equity curve using Kelly sizing."""
+    equity = starting_balance
+    curve = [equity]
+    for t in trades:
+        trade_amount = equity * kelly_fraction
+        equity += t['pnl'] * trade_amount
+        curve.append(equity)
+    return curve
+
+
+def write_html_report(metrics, equity_curve, output_path="hover_backtest_report.html"):
+    """Write backtest metrics and account growth to an HTML file."""
     rows_metrics = "\n".join(
         f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in metrics.items()
     )
+    curve_rows = "\n".join(
+        f"<tr><th>{i}</th><td>{round(b, 2)}</td></tr>" for i, b in enumerate(equity_curve)
+    )
+
 
     html = f"""
 <html>
@@ -172,6 +188,13 @@ th {{background: #eee;}}
 <table>
 {rows_metrics}
 </table>
+
+<h2>Equity Curve</h2>
+<table>
+<tr><th>Trade</th><th>Balance</th></tr>
+{curve_rows}
+</table>
+
 </body>
 </html>
 """
@@ -194,11 +217,16 @@ def main():
     }
     trades = run_backtest(data, **params)
     metrics = compute_metrics(trades)
+    kelly = metrics.get('kelly', 0)
+    equity_curve = simulate_account_growth(trades, kelly, 10000)
+    metrics['final_balance'] = round(equity_curve[-1], 2)
 
     print("Backtest Metrics:")
     for k, v in metrics.items():
         print(f"{k}: {v}")
 
+    # create html report
+    write_html_report(metrics, equity_curve)
 
 
 if __name__ == '__main__':
