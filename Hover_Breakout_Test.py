@@ -1,5 +1,4 @@
 import csv
-import itertools
 
 # ============================================
 # Hover Breakout Strategy Backtest (No pandas/numpy)
@@ -149,21 +148,78 @@ def compute_metrics(trades, initial_equity=10000):
     }
 
 
-def sensitivity_analysis(data, params_grid, top_n=5):
-    """
-    Grid search over parameter combinations without pandas.
-    Returns a list of top_n result dicts sorted by net_profit.
-    """
-    results = []
-    keys = list(params_grid.keys())
-    for combo in itertools.product(*params_grid.values()):
-        p = dict(zip(keys, combo))
-        trades = run_backtest(data, **p)
-        metrics = compute_metrics(trades)
-        results.append({**p, **metrics})
-    # sort and return top_n
-    sorted_res = sorted(results, key=lambda x: x['net_profit'], reverse=True)
-    return sorted_res[:top_n]
+def simulate_account_growth(trades, kelly_fraction, starting_balance=10000):
+    """Return equity curve using Kelly sizing."""
+    equity = starting_balance
+    curve = [equity]
+    for t in trades:
+        trade_amount = equity * kelly_fraction
+        equity += t['pnl'] * trade_amount
+        curve.append(equity)
+    return curve
+
+
+def _svg_line_chart(values, width=600, height=300, pad=10, max_points=300):
+    """Return an SVG line chart string sampling long series for readability."""
+    if not values:
+        return "<svg></svg>"
+
+    step = max(1, len(values) // max_points)
+    sampled = values[::step]
+    if sampled[-1] != values[-1]:
+        sampled.append(values[-1])
+
+    max_v = max(sampled)
+    min_v = min(sampled)
+    x_scale = (width - 2 * pad) / (len(sampled) - 1) if len(sampled) > 1 else 1
+    y_scale = (height - 2 * pad) / (max_v - min_v) if max_v != min_v else 1
+    points = []
+    for i, v in enumerate(sampled):
+        x = pad + i * x_scale
+        y = height - pad - (v - min_v) * y_scale
+        points.append(f"{x:.2f},{y:.2f}")
+    pts = " ".join(points)
+    return (
+        f'<svg width="{width}" height="{height}" ' +
+        'xmlns="http://www.w3.org/2000/svg">' +
+        f'<polyline fill="none" stroke="blue" stroke-width="2" points="{pts}"/>' +
+        '</svg>'
+    )
+
+
+def write_html_report(metrics, equity_curve, output_path="hover_backtest_report.html"):
+    """Write backtest metrics and account growth to an HTML file."""
+    rows_metrics = "\n".join(
+        f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in metrics.items()
+    )
+    svg = _svg_line_chart(equity_curve)
+
+    html = f"""
+<html>
+<head>
+<title>Hover Breakout Backtest Report</title>
+<style>
+body {{font-family: Arial, sans-serif; margin: 40px;}}
+h1 {{color: #333;}}
+table {{border-collapse: collapse; width: 80%; margin-bottom: 20px;}}
+th, td {{border: 1px solid #ccc; padding: 8px; text-align: center;}}
+th {{background: #eee;}}
+</style>
+</head>
+<body>
+<h1>Hover Breakout Backtest Report</h1>
+<h2>Metrics</h2>
+<table>
+{rows_metrics}
+</table>
+<h2>Equity Curve</h2>
+{svg}
+</body>
+</html>
+"""
+    with open(output_path, "w") as f:
+        f.write(html)
+    print(f"HTML report saved to {output_path}")
 
 
 def main():
@@ -180,23 +236,16 @@ def main():
     }
     trades = run_backtest(data, **params)
     metrics = compute_metrics(trades)
+    kelly = metrics.get('kelly', 0)
+    equity_curve = simulate_account_growth(trades, kelly, 10000)
+    metrics['final_balance'] = round(equity_curve[-1], 2)
 
     print("Backtest Metrics:")
     for k, v in metrics.items():
         print(f"{k}: {v}")
 
-    # sensitivity analysis
-    grid = {
-        'lookback': [5, 10, 15],
-        'hover_range': [0.0010, 0.0020, 0.0030],
-        'tp': [0.0020, 0.0040, 0.0060],
-        'sl': [0.0010, 0.0020],
-        'max_hold': [5, 10]
-    }
-    top_sets = sensitivity_analysis(data, grid)
-    print("\nTop Parameter Sets by Net Profit:")
-    for res in top_sets:
-        print(res)
+    # create html report
+    write_html_report(metrics, equity_curve)
 
 
 if __name__ == '__main__':
