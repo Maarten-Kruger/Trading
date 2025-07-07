@@ -166,6 +166,53 @@ def sensitivity_analysis(data, params_grid, top_n=5):
     return sorted_res[:top_n]
 
 
+def write_html_report(metrics, top_sets, output_path="hover_backtest_report.html"):
+    """Write metrics and top parameter sets to an HTML file."""
+    rows_metrics = "\n".join(
+        f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in metrics.items()
+    )
+
+    if top_sets:
+        headers = top_sets[0].keys()
+        head_row = "".join(f"<th>{h}</th>" for h in headers)
+        body_rows = []
+        for row in top_sets:
+            cells = "".join(f"<td>{row[h]}</td>" for h in headers)
+            body_rows.append(f"<tr>{cells}</tr>")
+        params_table = (
+            f"<table><tr>{head_row}</tr>" + "".join(body_rows) + "</table>"
+        )
+    else:
+        params_table = "<p>No parameter sets</p>"
+
+    html = f"""
+<html>
+<head>
+<title>Hover Breakout Backtest Report</title>
+<style>
+body {{font-family: Arial, sans-serif; margin: 40px;}}
+h1 {{color: #333;}}
+table {{border-collapse: collapse; width: 80%; margin-bottom: 20px;}}
+th, td {{border: 1px solid #ccc; padding: 8px; text-align: center;}}
+th {{background: #eee;}}
+</style>
+</head>
+<body>
+<h1>Hover Breakout Backtest Report</h1>
+<h2>Metrics</h2>
+<table>
+{rows_metrics}
+</table>
+<h2>Top Parameter Sets</h2>
+{params_table}
+</body>
+</html>
+"""
+    with open(output_path, "w") as f:
+        f.write(html)
+    print(f"HTML report saved to {output_path}")
+
+
 def main():
     data = load_data('EURUSD_M30_Data.csv')
 
@@ -197,6 +244,9 @@ def main():
     print("\nTop Parameter Sets by Net Profit:")
     for res in top_sets:
         print(res)
+
+    # create html report
+    write_html_report(metrics, top_sets)
 
 
 if __name__ == '__main__':
