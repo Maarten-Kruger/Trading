@@ -1,5 +1,17 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Table,
+    TableStyle,
+    Paragraph,
+    Image,
+    Spacer,
+)
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet
+import os
 
 
 def load_data(path="EURUSD_M30_Data.csv"):
@@ -196,6 +208,49 @@ th {{background: #eee;}}
     print(f"HTML report saved to {output_path}")
 
 
+def write_pdf_report(metrics, equity_curve, explanations, output_path="hover_strategy_report.pdf"):
+    """Write metrics and equity curve to a PDF file using ReportLab."""
+    # Save equity curve plot to a temporary image
+    img_path = "_equity_curve.png"
+    plt.figure(figsize=(6, 3))
+    plt.plot(equity_curve)
+    plt.title("Demo Account Growth")
+    plt.xlabel("Trade #")
+    plt.ylabel("Balance")
+    plt.tight_layout()
+    plt.savefig(img_path)
+    plt.close()
+
+    styles = getSampleStyleSheet()
+    doc = SimpleDocTemplate(output_path, pagesize=letter)
+    elements = []
+    elements.append(Paragraph("Hover Breakout Strategy Report", styles["Title"]))
+    elements.append(Spacer(1, 12))
+
+    data = [["Metric", "Value", "Description"]]
+    for k, v in metrics.items():
+        val = f"{v*100:.2f}%" if k == "win_rate" else v
+        data.append([k, val, explanations.get(k, "")])
+
+    table = Table(data)
+    table.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ])
+    )
+
+    elements.append(table)
+    elements.append(Spacer(1, 12))
+    elements.append(Image(img_path, width=400, height=200))
+
+    doc.build(elements)
+    if os.path.exists(img_path):
+        os.remove(img_path)
+    print(f"PDF report saved to {output_path}")
+
+
 def main():
     df = load_data()
     trades = backtest(df)
@@ -219,6 +274,7 @@ def main():
 
     eq_curve = simulate_equity(trades, metrics["kelly"], 10000)
     write_html_report(metrics, eq_curve, explanations)
+    write_pdf_report(metrics, eq_curve, explanations)
     plt.figure(figsize=(8, 4))
     plt.plot(eq_curve)
     plt.title("Demo Account Growth")
