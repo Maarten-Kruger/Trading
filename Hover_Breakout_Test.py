@@ -1,5 +1,4 @@
 import csv
-import itertools
 
 # ============================================
 # Hover Breakout Strategy Backtest (No pandas/numpy)
@@ -149,21 +148,36 @@ def compute_metrics(trades, initial_equity=10000):
     }
 
 
-def sensitivity_analysis(data, params_grid, top_n=5):
-    """
-    Grid search over parameter combinations without pandas.
-    Returns a list of top_n result dicts sorted by net_profit.
-    """
-    results = []
-    keys = list(params_grid.keys())
-    for combo in itertools.product(*params_grid.values()):
-        p = dict(zip(keys, combo))
-        trades = run_backtest(data, **p)
-        metrics = compute_metrics(trades)
-        results.append({**p, **metrics})
-    # sort and return top_n
-    sorted_res = sorted(results, key=lambda x: x['net_profit'], reverse=True)
-    return sorted_res[:top_n]
+def write_html_report(metrics, output_path="hover_backtest_report.html"):
+    """Write backtest metrics to an HTML file."""
+    rows_metrics = "\n".join(
+        f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in metrics.items()
+    )
+
+    html = f"""
+<html>
+<head>
+<title>Hover Breakout Backtest Report</title>
+<style>
+body {{font-family: Arial, sans-serif; margin: 40px;}}
+h1 {{color: #333;}}
+table {{border-collapse: collapse; width: 80%; margin-bottom: 20px;}}
+th, td {{border: 1px solid #ccc; padding: 8px; text-align: center;}}
+th {{background: #eee;}}
+</style>
+</head>
+<body>
+<h1>Hover Breakout Backtest Report</h1>
+<h2>Metrics</h2>
+<table>
+{rows_metrics}
+</table>
+</body>
+</html>
+"""
+    with open(output_path, "w") as f:
+        f.write(html)
+    print(f"HTML report saved to {output_path}")
 
 
 def write_html_report(metrics, top_sets, output_path="hover_backtest_report.html"):
@@ -232,18 +246,8 @@ def main():
     for k, v in metrics.items():
         print(f"{k}: {v}")
 
-    # sensitivity analysis
-    grid = {
-        'lookback': [5, 10, 15],
-        'hover_range': [0.0010, 0.0020, 0.0030],
-        'tp': [0.0020, 0.0040, 0.0060],
-        'sl': [0.0010, 0.0020],
-        'max_hold': [5, 10]
-    }
-    top_sets = sensitivity_analysis(data, grid)
-    print("\nTop Parameter Sets by Net Profit:")
-    for res in top_sets:
-        print(res)
+    # create html report
+    write_html_report(metrics)
 
     # create html report
     write_html_report(metrics, top_sets)
