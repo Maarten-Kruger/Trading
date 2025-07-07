@@ -82,3 +82,4 @@ python3 strategy_test.py --threshold 0.002 --period 10
 
 The program prints metrics such as win rate, risk-reward ratio and expectancy
 along with a simple sensitivity analysis.
+
