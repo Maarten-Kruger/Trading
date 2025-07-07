@@ -9,6 +9,19 @@ script for calculating "hits" based on simple trading rules.
 September 2024 until July 2025. Each row has `Time`, `Open`, `High`, `Low` and
 `Close` columns.
 
+## Script: `create_sample_html.py`
+
+`create_sample_html.py` loads the CSV with pandas and outputs a small HTML
+file containing the first 50 rows as a candlestick chart and a data table.
+
+Run the script with:
+
+```bash
+python3 create_sample_html.py
+```
+
+It generates `sample_candles.html` in the repository directory.
+
 ## Script: `compute_hits.py`
 
 The `compute_hits.py` script reads the CSV file and applies a basic trading
