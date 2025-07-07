@@ -130,8 +130,5 @@ def main():
     write_html_report(best_params, best_metrics, equity_curve)
 
 
-    write_html_report(best_params, best_metrics, equity_curve)
-
-
 if __name__ == '__main__':
     main()
