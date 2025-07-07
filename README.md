@@ -97,14 +97,16 @@ along with a simple sensitivity analysis.
 ## Script: `Hover_Breakout_Test.py`
 Runs a breakout backtest on the sample data. The script prints a metrics summary and generates `hover_backtest_report.html` with a metrics table from pandas and an embedded SVG equity curve of account balance over time.
 
+
 Execute it with:
 
 ```bash
 python3 Hover_Breakout_Test.py
 ```
 
+
 The script requires `pandas`:
 
 ```bash
 pip install pandas
-```
+
