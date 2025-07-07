@@ -172,10 +172,10 @@ def main():
     # example parameters
     params = {
         'lookback': 5,
-        'hover_range': 0.003,
-        'tp': 0.004,
-        'sl': 0.001,
-        'max_hold': 5,
+        'hover_range': 0.004,
+        'tp': 0.003,
+        'sl': 0.0009,
+        'max_hold': 12,
         'spread': 0.0002
     }
     trades = run_backtest(data, **params)
