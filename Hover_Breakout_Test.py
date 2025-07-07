@@ -148,6 +148,7 @@ def compute_metrics(trades, initial_equity=10000):
     }
 
 
+
 def simulate_account_growth(trades, kelly_fraction, starting_balance=10000):
     """Return equity curve using Kelly sizing."""
     equity = starting_balance
@@ -168,6 +169,7 @@ def write_html_report(metrics, equity_curve, output_path="hover_backtest_report.
         f"<tr><th>{i}</th><td>{round(b, 2)}</td></tr>" for i, b in enumerate(equity_curve)
     )
 
+
     html = f"""
 <html>
 <head>
@@ -186,11 +188,13 @@ th {{background: #eee;}}
 <table>
 {rows_metrics}
 </table>
+
 <h2>Equity Curve</h2>
 <table>
 <tr><th>Trade</th><th>Balance</th></tr>
 {curve_rows}
 </table>
+
 </body>
 </html>
 """
