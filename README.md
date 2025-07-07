@@ -93,3 +93,18 @@ python3 strategy_test.py --threshold 0.002 --period 10
 
 The program prints metrics such as win rate, risk-reward ratio and expectancy
 along with a simple sensitivity analysis.
+
+## Script: `Hover_Breakout_Test.py`
+Runs a breakout backtest on the sample data. The script prints a metrics summary and generates `hover_backtest_report.html` with tables built using pandas. One table lists the metrics and another shows the account balance after each trade. An SVG equity curve visualizes balance growth over time.
+
+Execute it with:
+
+```bash
+python3 Hover_Breakout_Test.py
+```
+
+The script requires `pandas`:
+
+```bash
+pip install pandas
+```
