@@ -129,11 +129,11 @@ def sensitivity_analysis(
 def main():
     parser = argparse.ArgumentParser(description="Test range breakout strategy")
     parser.add_argument('--csv', default='EURUSD_M30_Data.csv', help='CSV file path')
-    parser.add_argument('--period', type=int, default=10, help='Lookback bars for range')
+    parser.add_argument('--period', type=int, default=12, help='Lookback bars for range')
     parser.add_argument(
         '--threshold',
         type=float,
-        default=0.0,
+        default=0.0038,
         help='Maximum range width. If 0, use ATR-based threshold.'
     )
     parser.add_argument(
@@ -142,8 +142,8 @@ def main():
         default=2.0,
         help='Multiplier for ATR when threshold is 0'
     )
-    parser.add_argument('--risk', type=float, default=0.0010, help='Stop loss in price units')
-    parser.add_argument('--rr', type=float, default=2.0, help='Reward-to-risk ratio')
+    parser.add_argument('--risk', type=float, default=0.0009, help='Stop loss in price units')
+    parser.add_argument('--rr', type=float, default=2.77777, help='Reward-to-risk ratio')
     parser.add_argument('--spread', type=float, default=0.0002, help='Spread in price units')
     args = parser.parse_args()
 
