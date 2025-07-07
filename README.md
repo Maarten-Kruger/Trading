@@ -52,10 +52,7 @@ No additional dependencies are required beyond the Python standard library.
 ## Script: `strategy_test.py`
 
 `strategy_test.py` evaluates a breakout strategy that triggers after a period of
-consolidation. By default the script determines a "tight" range using the
-average candle range (ATR) of the lookback period multiplied by a factor of two.
-This avoids situations where the strategy produces no trades because the fixed
-threshold is too small for the dataset.
+
 
 Run the script with:
 
@@ -67,6 +64,7 @@ Important arguments:
 
 ```
 --period INT       lookback bars for range (default: 10)
+
 --threshold FLOAT  fixed range width. Use 0 to derive from ATR
 --atr-mult FLOAT   ATR multiplier when threshold is 0 (default: 2.0)
 --risk FLOAT       stop loss distance
@@ -82,4 +80,3 @@ python3 strategy_test.py --threshold 0.002 --period 10
 
 The program prints metrics such as win rate, risk-reward ratio and expectancy
 along with a simple sensitivity analysis.
-
