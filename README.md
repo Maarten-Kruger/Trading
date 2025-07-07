@@ -95,10 +95,8 @@ The program prints metrics such as win rate, risk-reward ratio and expectancy
 along with a simple sensitivity analysis.
 
 ## Script: `Hover_Breakout_Test.py`
+Runs a breakout backtest on the sample data. The script prints a metrics summary and generates `hover_backtest_report.html` with a metrics table from pandas and an embedded SVG equity curve of account balance over time.
 
-Runs a breakout backtest on the sample data. The script prints a metrics summary,
-creates `hover_backtest_report.html` with an equity chart and shows a
-`matplotlib` graph of the account balance over time.
 
 Execute it with:
 
@@ -106,8 +104,9 @@ Execute it with:
 python3 Hover_Breakout_Test.py
 ```
 
-`matplotlib` is required for the plot:
+
+The script requires `pandas`:
 
 ```bash
-pip install matplotlib
-```
+pip install pandas
+

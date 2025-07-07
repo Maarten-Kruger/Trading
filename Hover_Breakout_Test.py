@@ -1,5 +1,7 @@
 import csv
-import matplotlib.pyplot as plt
+import pandas as pd
+
+
 
 # ============================================
 # Hover Breakout Strategy Backtest (No pandas/numpy)
@@ -189,26 +191,13 @@ def _svg_line_chart(values, width=600, height=300, pad=10, max_points=300):
     )
 
 
-def plot_equity_curve(curve):
-    """Display equity growth using matplotlib."""
-    plt.figure(figsize=(8, 4))
-    plt.plot(curve, label="Balance")
-    plt.title("Account Balance Over Time")
-    plt.xlabel("Trade")
-    plt.ylabel("Balance")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.legend()
-    plt.show()
 
 def write_html_report(metrics, equity_curve, output_path="hover_backtest_report.html"):
     """Write backtest metrics and account growth to an HTML file."""
-    rows_metrics = "\n".join(
-        f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in metrics.items()
-    )
+    df = pd.DataFrame(list(metrics.items()), columns=["Metric", "Value"])
+    table_html = df.to_html(index=False)
 
     svg = _svg_line_chart(equity_curve)
-
 
     html = f"""
 <html>
@@ -225,9 +214,7 @@ th {{background: #eee;}}
 <body>
 <h1>Hover Breakout Backtest Report</h1>
 <h2>Metrics</h2>
-<table>
-{rows_metrics}
-</table>
+{table_html}
 
 <h2>Equity Curve</h2>
 {svg}
@@ -262,10 +249,10 @@ def main():
     for k, v in metrics.items():
         print(f"{k}: {v}")
 
-    # output visuals
-    plot_equity_curve(equity_curve)
+    # output HTML report
     write_html_report(metrics, equity_curve)
 
 
 if __name__ == '__main__':
     main()
+
