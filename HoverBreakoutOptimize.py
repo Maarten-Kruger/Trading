@@ -1,6 +1,41 @@
 import argparse
 from itertools import product
-from Hover_Breakout_Test import load_data, run_backtest, compute_metrics, simulate_account_growth
+
+from Hover_Breakout_Test import (
+    load_data,
+    run_backtest,
+    compute_metrics,
+    simulate_account_growth,
+)
+
+
+def _svg_line_chart(values, width=600, height=300, pad=10, max_points=300):
+    """Return an SVG line chart string sampling long series for readability."""
+    if not values:
+        return "<svg></svg>"
+
+    step = max(1, len(values) // max_points)
+    sampled = values[::step]
+    if sampled[-1] != values[-1]:
+        sampled.append(values[-1])
+
+    max_v = max(sampled)
+    min_v = min(sampled)
+    x_scale = (width - 2 * pad) / (len(sampled) - 1) if len(sampled) > 1 else 1
+    y_scale = (height - 2 * pad) / (max_v - min_v) if max_v != min_v else 1
+    pts = []
+    for i, v in enumerate(sampled):
+        x = pad + i * x_scale
+        y = height - pad - (v - min_v) * y_scale
+        pts.append(f"{x:.2f},{y:.2f}")
+    points = " ".join(pts)
+    return (
+        f'<svg width="{width}" height="{height}" ' +
+        'xmlns="http://www.w3.org/2000/svg">' +
+        f'<polyline fill="none" stroke="blue" stroke-width="2" points="{points}"/>' +
+        '</svg>'
+    )
+
 
 
 def write_html_report(best_params, best_metrics, equity_curve, output_path="hover_optimize_report.html"):
@@ -11,9 +46,9 @@ def write_html_report(best_params, best_metrics, equity_curve, output_path="hove
     metrics_rows = "\n".join(
         f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in best_metrics.items()
     )
-    curve_rows = "\n".join(
-        f"<tr><th>{i}</th><td>{round(b, 2)}</td></tr>" for i, b in enumerate(equity_curve)
-    )
+
+    svg = _svg_line_chart(equity_curve)
+
 
     html = f"""
 <html>
@@ -38,49 +73,9 @@ th {{background: #eee;}}
 {metrics_rows}
 </table>
 <h2>Equity Curve</h2>
-<table>
-<tr><th>Trade</th><th>Balance</th></tr>
-{curve_rows}
-</table>
-</body>
-</html>
-"""
-    with open(output_path, "w") as f:
-        f.write(html)
-    print(f"HTML report saved to {output_path}")
 
+{svg}
 
-def write_html_report(best_params, best_metrics, output_path="hover_optimize_report.html"):
-    """Write optimization results to an HTML file."""
-    params_rows = "\n".join(
-        f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in best_params.items()
-    )
-    metrics_rows = "\n".join(
-        f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in best_metrics.items()
-    )
-
-    html = f"""
-<html>
-<head>
-<title>Hover Breakout Optimization Report</title>
-<style>
-body {{font-family: Arial, sans-serif; margin: 40px;}}
-h1 {{color: #333;}}
-table {{border-collapse: collapse; width: 60%; margin-bottom: 20px;}}
-th, td {{border: 1px solid #ccc; padding: 8px; text-align: center;}}
-th {{background: #eee;}}
-</style>
-</head>
-<body>
-<h1>Hover Breakout Optimization Report</h1>
-<h2>Best Parameters</h2>
-<table>
-{params_rows}
-</table>
-<h2>Metrics</h2>
-<table>
-{metrics_rows}
-</table>
 </body>
 </html>
 """
@@ -131,6 +126,8 @@ def main():
     print("\nMetrics:")
     for k, v in best_metrics.items():
         print(f"{k}: {v}")
+
+    write_html_report(best_params, best_metrics, equity_curve)
 
 
     write_html_report(best_params, best_metrics, equity_curve)

@@ -160,14 +160,40 @@ def simulate_account_growth(trades, kelly_fraction, starting_balance=10000):
     return curve
 
 
+def _svg_line_chart(values, width=600, height=300, pad=10, max_points=300):
+    """Return an SVG line chart string sampling long series for readability."""
+    if not values:
+        return "<svg></svg>"
+
+    step = max(1, len(values) // max_points)
+    sampled = values[::step]
+    if sampled[-1] != values[-1]:
+        sampled.append(values[-1])
+
+    max_v = max(sampled)
+    min_v = min(sampled)
+    x_scale = (width - 2 * pad) / (len(sampled) - 1) if len(sampled) > 1 else 1
+    y_scale = (height - 2 * pad) / (max_v - min_v) if max_v != min_v else 1
+    points = []
+    for i, v in enumerate(sampled):
+        x = pad + i * x_scale
+        y = height - pad - (v - min_v) * y_scale
+        points.append(f"{x:.2f},{y:.2f}")
+    pts = " ".join(points)
+    return (
+        f'<svg width="{width}" height="{height}" ' +
+        'xmlns="http://www.w3.org/2000/svg">' +
+        f'<polyline fill="none" stroke="blue" stroke-width="2" points="{pts}"/>' +
+        '</svg>'
+    )
+
 def write_html_report(metrics, equity_curve, output_path="hover_backtest_report.html"):
     """Write backtest metrics and account growth to an HTML file."""
     rows_metrics = "\n".join(
         f"<tr><th>{k}</th><td>{v}</td></tr>" for k, v in metrics.items()
     )
-    curve_rows = "\n".join(
-        f"<tr><th>{i}</th><td>{round(b, 2)}</td></tr>" for i, b in enumerate(equity_curve)
-    )
+
+    svg = _svg_line_chart(equity_curve)
 
 
     html = f"""
@@ -190,10 +216,7 @@ th {{background: #eee;}}
 </table>
 
 <h2>Equity Curve</h2>
-<table>
-<tr><th>Trade</th><th>Balance</th></tr>
-{curve_rows}
-</table>
+{svg}
 
 </body>
 </html>
