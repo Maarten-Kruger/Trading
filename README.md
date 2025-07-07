@@ -83,8 +83,3 @@ python3 strategy_test.py --threshold 0.002 --period 10
 The program prints metrics such as win rate, risk-reward ratio and expectancy
 along with a simple sensitivity analysis.
 
-You can also modify the default parameters directly in `strategy_test.py`. The
-top of the file defines a `DEFAULT_CONFIG` dictionary containing the CSV path,
-range period, thresholds and other settings. Edit these values to run the
-strategy with your preferred configuration without using command line
-arguments.
