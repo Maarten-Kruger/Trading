@@ -158,7 +158,7 @@ def main():
     parser.add_argument("--sl", type=float, default=0.0009)
     parser.add_argument("--max_hold", type=int, default=12)
     parser.add_argument("--spread", type=float, default=0.0002)
-    parser.add_argument("--risk_pct", type=float, default=0.01,
+    parser.add_argument("--risk_pct", type=float, default=0.05,
                         help="fraction of equity to risk per trade")
     parser.add_argument("--pdf", default="hover_report.pdf",
                         help="output PDF path")
