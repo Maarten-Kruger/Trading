@@ -6,3 +6,7 @@ scripts for testing different strategies
 Package list:
 Pandas, NumPy, MatLab and ReportLab
 
+
+## Examples
+
+- `guess_game.py`: A simple number guessing game demonstrating basic Python input/output.
