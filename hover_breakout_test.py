@@ -6,11 +6,11 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
 
 # Strategy parameters (all values in pips or bars)
-LOOKBACK = 5              # number of candles to check for tight range
-RANGE_THRESHOLD_PIPS = 40 # maximum high-low range to qualify as hovering
-STOP_LOSS_PIPS = 9        # stop loss distance
+LOOKBACK = 8              # number of candles to check for tight range
+RANGE_THRESHOLD_PIPS = 10 # maximum high-low range to qualify as hovering
+STOP_LOSS_PIPS = 15       # stop loss distance
 TAKE_PROFIT_PIPS = 30     # take profit distance
-HOLD_PERIOD = 12          # number of candles to hold trade if TP/SL not hit
+HOLD_PERIOD = 4           # number of candles to hold trade if TP/SL not hit
 SPREAD_PIPS = 2           # assumed spread cost per trade
 
 # Account parameters
@@ -45,7 +45,11 @@ def simulate_strategy(df):
     times = [df['Time'].iloc[0]]
     trades = []
 
-    for i in range(LOOKBACK, len(df) - HOLD_PERIOD - 1):
+
+    half_spread = (SPREAD_PIPS / 2) * PIP_SIZE
+
+    for i in range(LOOKBACK, len(df) - HOLD_PERIOD):
+
         range_high = df['High'].iloc[i-LOOKBACK:i].max()
         range_low = df['Low'].iloc[i-LOOKBACK:i].min()
         if range_high - range_low <= RANGE_THRESHOLD_PIPS * PIP_SIZE:
@@ -57,8 +61,11 @@ def simulate_strategy(df):
                 breakout = 'short'
             if breakout:
 
-                entry_price = df['Open'].iloc[i]
+                direction = 1 if breakout == 'long' else -1
+                entry_price_raw = df['Open'].iloc[i]
+                entry_price = entry_price_raw + half_spread * direction
                 entry_time = df['Time'].iloc[i]
+
                 sl = entry_price - STOP_LOSS_PIPS * PIP_SIZE if breakout == 'long' else entry_price + STOP_LOSS_PIPS * PIP_SIZE
                 tp = entry_price + TAKE_PROFIT_PIPS * PIP_SIZE if breakout == 'long' else entry_price - TAKE_PROFIT_PIPS * PIP_SIZE
 
@@ -69,41 +76,46 @@ def simulate_strategy(df):
                 exit_price = None
                 exit_time = None
 
-                for j in range(i+1, i+1+HOLD_PERIOD):
+                for j in range(i, i + HOLD_PERIOD + 1):
                     candle = df.iloc[j]
                     if breakout == 'long':
                         if candle['Low'] <= sl:
-                            result_pips = -STOP_LOSS_PIPS
-                            exit_price = sl
+                            exit_raw = sl
                             exit_time = candle['Time']
+                            exit_price = exit_raw - half_spread
+                            result_pips = (exit_price - entry_price) / PIP_SIZE
                             break
                         if candle['High'] >= tp:
-                            result_pips = TAKE_PROFIT_PIPS
-                            exit_price = tp
+                            exit_raw = tp
                             exit_time = candle['Time']
+                            exit_price = exit_raw - half_spread
+                            result_pips = (exit_price - entry_price) / PIP_SIZE
                             break
                     else:
                         if candle['High'] >= sl:
-                            result_pips = -STOP_LOSS_PIPS
-                            exit_price = sl
+                            exit_raw = sl
                             exit_time = candle['Time']
+                            exit_price = exit_raw + half_spread
+                            result_pips = (entry_price - exit_price) / PIP_SIZE
                             break
                         if candle['Low'] <= tp:
-                            result_pips = TAKE_PROFIT_PIPS
-                            exit_price = tp
+                            exit_raw = tp
                             exit_time = candle['Time']
+                            exit_price = exit_raw + half_spread
+                            result_pips = (entry_price - exit_price) / PIP_SIZE
                             break
 
                 if result_pips is None:
-                    candle = df.iloc[i+HOLD_PERIOD]
-                    exit_price = candle['Close']
+                    candle = df.iloc[i + HOLD_PERIOD]
+                    exit_raw = candle['Close']
                     exit_time = candle['Time']
                     if breakout == 'long':
+                        exit_price = exit_raw - half_spread
                         result_pips = (exit_price - entry_price) / PIP_SIZE
                     else:
+                        exit_price = exit_raw + half_spread
                         result_pips = (entry_price - exit_price) / PIP_SIZE
 
-                result_pips -= SPREAD_PIPS
                 profit = result_pips * PIP_VALUE_PER_LOT * lot_size
                 equity += profit
 
@@ -168,7 +180,6 @@ def plot_equity_curve(times, equity_curve, path='equity_curve.png'):
     plt.close()
 
 
-
 def generate_report(metrics, params, path_img, output_pdf):
 
     styles = getSampleStyleSheet()
@@ -201,7 +212,9 @@ def main():
     trade_df, equity_curve, times = simulate_strategy(df)
     metrics = calculate_metrics(trade_df, equity_curve)
     plot_equity_curve(times, equity_curve)
+
     generate_report(metrics, STRATEGY_PARAMS, 'equity_curve.png', 'Hover_Breakout_Strategy_Report.pdf')
+
     trade_df.to_csv('tradelog_Hover_Breakout_Strategy.csv', index=False)
 
 
