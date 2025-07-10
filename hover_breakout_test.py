@@ -39,20 +39,24 @@ def load_data(path):
     return df
 
 
-def simulate_strategy(df):
-    equity = INITIAL_EQUITY
+
+def simulate_strategy(df, lookback, range_threshold_pips, stop_loss_pips,
+                      take_profit_pips, hold_period, spread_pips,
+                      risk_per_trade, initial_equity):
+    equity = initial_equity
+
     equity_curve = [equity]
     times = [df['Time'].iloc[0]]
     trades = []
 
 
-    half_spread = (SPREAD_PIPS / 2) * PIP_SIZE
+    half_spread = (spread_pips / 2) * PIP_SIZE
 
-    for i in range(LOOKBACK, len(df) - HOLD_PERIOD):
+    for i in range(lookback, len(df) - hold_period):
+        range_high = df['High'].iloc[i-lookback:i].max()
+        range_low = df['Low'].iloc[i-lookback:i].min()
+        if range_high - range_low <= range_threshold_pips * PIP_SIZE:
 
-        range_high = df['High'].iloc[i-LOOKBACK:i].max()
-        range_low = df['Low'].iloc[i-LOOKBACK:i].min()
-        if range_high - range_low <= RANGE_THRESHOLD_PIPS * PIP_SIZE:
             current_close = df['Close'].iloc[i]
             breakout = None
             if current_close > range_high:
@@ -65,18 +69,19 @@ def simulate_strategy(df):
                 entry_price_raw = df['Open'].iloc[i]
                 entry_price = entry_price_raw + half_spread * direction
                 entry_time = df['Time'].iloc[i]
+                sl = entry_price - stop_loss_pips * PIP_SIZE if breakout == 'long' else entry_price + stop_loss_pips * PIP_SIZE
+                tp = entry_price + take_profit_pips * PIP_SIZE if breakout == 'long' else entry_price - take_profit_pips * PIP_SIZE
 
-                sl = entry_price - STOP_LOSS_PIPS * PIP_SIZE if breakout == 'long' else entry_price + STOP_LOSS_PIPS * PIP_SIZE
-                tp = entry_price + TAKE_PROFIT_PIPS * PIP_SIZE if breakout == 'long' else entry_price - TAKE_PROFIT_PIPS * PIP_SIZE
+                risk_amount = equity * risk_per_trade
+                lot_size = risk_amount / (stop_loss_pips * PIP_VALUE_PER_LOT)
 
-                risk_amount = equity * RISK_PER_TRADE
-                lot_size = risk_amount / (STOP_LOSS_PIPS * PIP_VALUE_PER_LOT)
                 trade_equity_start = equity
                 result_pips = None
                 exit_price = None
                 exit_time = None
 
-                for j in range(i, i + HOLD_PERIOD + 1):
+                for j in range(i, i + hold_period + 1):
+
                     candle = df.iloc[j]
                     if breakout == 'long':
                         if candle['Low'] <= sl:
@@ -106,7 +111,9 @@ def simulate_strategy(df):
                             break
 
                 if result_pips is None:
-                    candle = df.iloc[i + HOLD_PERIOD]
+
+                    candle = df.iloc[i + hold_period]
+
                     exit_raw = candle['Close']
                     exit_time = candle['Time']
                     if breakout == 'long':
@@ -115,7 +122,6 @@ def simulate_strategy(df):
                     else:
                         exit_price = exit_raw + half_spread
                         result_pips = (entry_price - exit_price) / PIP_SIZE
-
                 profit = result_pips * PIP_VALUE_PER_LOT * lot_size
                 equity += profit
 
@@ -181,7 +187,6 @@ def plot_equity_curve(times, equity_curve, path='equity_curve.png'):
 
 
 def generate_report(metrics, params, path_img, output_pdf):
-
     styles = getSampleStyleSheet()
     doc = SimpleDocTemplate(output_pdf, pagesize=letter)
     elements = []
@@ -194,7 +199,6 @@ def generate_report(metrics, params, path_img, output_pdf):
 
     elements.append(Spacer(1, 12))
     elements.append(Paragraph('Performance Metrics', styles['Heading2']))
-
     for key, value in metrics.items():
         if key == 'Win Rate' or 'Expectancy' in key or 'Drawdown' in key or 'Size' in key:
             text = f"{key}: {value*100:.2f}%"
@@ -209,12 +213,20 @@ def generate_report(metrics, params, path_img, output_pdf):
 
 def main():
     df = load_data('EURUSD_M30_Data.csv')
-    trade_df, equity_curve, times = simulate_strategy(df)
+    trade_df, equity_curve, times = simulate_strategy(
+        df,
+        LOOKBACK,
+        RANGE_THRESHOLD_PIPS,
+        STOP_LOSS_PIPS,
+        TAKE_PROFIT_PIPS,
+        HOLD_PERIOD,
+        SPREAD_PIPS,
+        RISK_PER_TRADE,
+        INITIAL_EQUITY,
+    )
     metrics = calculate_metrics(trade_df, equity_curve)
     plot_equity_curve(times, equity_curve)
-
     generate_report(metrics, STRATEGY_PARAMS, 'equity_curve.png', 'Hover_Breakout_Strategy_Report.pdf')
-
     trade_df.to_csv('tradelog_Hover_Breakout_Strategy.csv', index=False)
 
 
