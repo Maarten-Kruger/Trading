@@ -30,11 +30,11 @@ DEFAULT_PARAMS = {
 }
 
 PARAM_GRID = {
-    'Lookback': [2, 6, 8, 12],
+    'Lookback': [1, 2, 6, 8],
     'Range Threshold (pips)': [10, 40, 80, 150],
     'Stop Loss (pips)': [3, 9, 15, 30],
-    'Take Profit (pips)': [10, 30, 60, 120],
-    'Hold Period (bars)': [6, 12, 20, 30],
+    'Take Profit (pips)': [10, 30, 40, 60],
+    'Hold Period (bars)': [2, 12, 20, 30],
     'Risk Per Trade': [0.005, 0.01, 0.02, 0.05],
 }
 

@@ -14,7 +14,7 @@ HOLD_PERIOD = 6           # number of candles to hold trade if TP/SL not hit
 SPREAD_PIPS = 2           # assumed spread cost per trade
 
 # Account parameters
-RISK_PER_TRADE = 0.03     # fraction of equity to risk per trade
+RISK_PER_TRADE = 0.01     # fraction of equity to risk per trade
 INITIAL_EQUITY = 10000.0  # starting demo account
 
 PIP_SIZE = 0.0001         # EURUSD pip size
@@ -45,8 +45,7 @@ def simulate_strategy(df, lookback, range_threshold_pips, stop_loss_pips,
                       risk_per_trade, initial_equity):
     equity = initial_equity
 
-    # Use a fixed risk amount based on the starting equity so trade size does
-    # not grow uncontrollably as the account balance increases.
+    # Use a fixed risk amount based on the starting equity
     fixed_risk_amount = initial_equity * risk_per_trade
 
     equity_curve = [equity]
