@@ -6,10 +6,10 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
 
 # Strategy parameters (all values in pips or bars)
-LOOKBACK = 6              # number of candles to check for tight range
-RANGE_THRESHOLD_PIPS = 38 # maximum high-low range to qualify as hovering
+LOOKBACK = 5              # number of candles to check for tight range
+RANGE_THRESHOLD_PIPS = 40 # maximum high-low range to qualify as hovering
 STOP_LOSS_PIPS = 9        # stop loss distance
-TAKE_PROFIT_PIPS = 25     # take profit distance
+TAKE_PROFIT_PIPS = 30     # take profit distance
 HOLD_PERIOD = 12          # number of candles to hold trade if TP/SL not hit
 SPREAD_PIPS = 2           # assumed spread cost per trade
 
@@ -57,8 +57,8 @@ def simulate_strategy(df):
                 breakout = 'short'
             if breakout:
 
-                entry_price = df['Open'].iloc[i + 1]
-                entry_time = df['Time'].iloc[i + 1]
+                entry_price = df['Open'].iloc[i]
+                entry_time = df['Time'].iloc[i]
                 sl = entry_price - STOP_LOSS_PIPS * PIP_SIZE if breakout == 'long' else entry_price + STOP_LOSS_PIPS * PIP_SIZE
                 tp = entry_price + TAKE_PROFIT_PIPS * PIP_SIZE if breakout == 'long' else entry_price - TAKE_PROFIT_PIPS * PIP_SIZE
 
@@ -201,8 +201,7 @@ def main():
     trade_df, equity_curve, times = simulate_strategy(df)
     metrics = calculate_metrics(trade_df, equity_curve)
     plot_equity_curve(times, equity_curve)
-
-
+    generate_report(metrics, STRATEGY_PARAMS, 'equity_curve.png', 'Hover_Breakout_Strategy_Report.pdf')
     trade_df.to_csv('tradelog_Hover_Breakout_Strategy.csv', index=False)
 
 
