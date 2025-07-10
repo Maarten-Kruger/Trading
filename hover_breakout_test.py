@@ -45,6 +45,10 @@ def simulate_strategy(df, lookback, range_threshold_pips, stop_loss_pips,
                       risk_per_trade, initial_equity):
     equity = initial_equity
 
+    # Use a fixed risk amount based on the starting equity so trade size does
+    # not grow uncontrollably as the account balance increases.
+    fixed_risk_amount = initial_equity * risk_per_trade
+
     equity_curve = [equity]
     times = [df['Time'].iloc[0]]
     trades = []
@@ -72,8 +76,9 @@ def simulate_strategy(df, lookback, range_threshold_pips, stop_loss_pips,
                 sl = entry_price - stop_loss_pips * PIP_SIZE if breakout == 'long' else entry_price + stop_loss_pips * PIP_SIZE
                 tp = entry_price + take_profit_pips * PIP_SIZE if breakout == 'long' else entry_price - take_profit_pips * PIP_SIZE
 
-                risk_amount = equity * risk_per_trade
-                lot_size = risk_amount / (stop_loss_pips * PIP_VALUE_PER_LOT)
+                # Position size is based on the fixed risk amount so each trade
+                # risks the same dollar value regardless of account growth.
+                lot_size = fixed_risk_amount / (stop_loss_pips * PIP_VALUE_PER_LOT)
 
                 trade_equity_start = equity
                 result_pips = None
