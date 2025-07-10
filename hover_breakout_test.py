@@ -20,6 +20,7 @@ INITIAL_EQUITY = 10000.0  # starting demo account
 PIP_SIZE = 0.0001         # EURUSD pip size
 PIP_VALUE_PER_LOT = 10    # USD per pip for 1 standard lot
 
+
 STRATEGY_PARAMS = {
     'Lookback': LOOKBACK,
     'Range Threshold (pips)': RANGE_THRESHOLD_PIPS,
@@ -55,6 +56,7 @@ def simulate_strategy(df):
             elif current_close < range_low:
                 breakout = 'short'
             if breakout:
+
                 entry_price = df['Open'].iloc[i + 1]
                 entry_time = df['Time'].iloc[i + 1]
                 sl = entry_price - STOP_LOSS_PIPS * PIP_SIZE if breakout == 'long' else entry_price + STOP_LOSS_PIPS * PIP_SIZE
@@ -166,7 +168,9 @@ def plot_equity_curve(times, equity_curve, path='equity_curve.png'):
     plt.close()
 
 
+
 def generate_report(metrics, params, path_img, output_pdf):
+
     styles = getSampleStyleSheet()
     doc = SimpleDocTemplate(output_pdf, pagesize=letter)
     elements = []
@@ -179,6 +183,7 @@ def generate_report(metrics, params, path_img, output_pdf):
 
     elements.append(Spacer(1, 12))
     elements.append(Paragraph('Performance Metrics', styles['Heading2']))
+
     for key, value in metrics.items():
         if key == 'Win Rate' or 'Expectancy' in key or 'Drawdown' in key or 'Size' in key:
             text = f"{key}: {value*100:.2f}%"
@@ -196,7 +201,8 @@ def main():
     trade_df, equity_curve, times = simulate_strategy(df)
     metrics = calculate_metrics(trade_df, equity_curve)
     plot_equity_curve(times, equity_curve)
-    generate_report(metrics, STRATEGY_PARAMS, 'equity_curve.png', 'Hover_Breakout_Strategy_Report.pdf')
+
+
     trade_df.to_csv('tradelog_Hover_Breakout_Strategy.csv', index=False)
 
 
