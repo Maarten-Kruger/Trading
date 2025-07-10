@@ -6,11 +6,11 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
 
 # Strategy parameters (all values in pips or bars)
-LOOKBACK = 8              # number of candles to check for tight range
-RANGE_THRESHOLD_PIPS = 10 # maximum high-low range to qualify as hovering
-STOP_LOSS_PIPS = 15       # stop loss distance
-TAKE_PROFIT_PIPS = 30     # take profit distance
-HOLD_PERIOD = 4           # number of candles to hold trade if TP/SL not hit
+LOOKBACK = 6              # number of candles to check for tight range
+RANGE_THRESHOLD_PIPS = 38 # maximum high-low range to qualify as hovering
+STOP_LOSS_PIPS = 9        # stop loss distance
+TAKE_PROFIT_PIPS = 25     # take profit distance
+HOLD_PERIOD = 12          # number of candles to hold trade if TP/SL not hit
 SPREAD_PIPS = 2           # assumed spread cost per trade
 
 # account parameters
