@@ -5,3 +5,4 @@ scripts for testing different strategies
 
 Package list:
 Pandas, NumPy, MatLab and ReportLab
+

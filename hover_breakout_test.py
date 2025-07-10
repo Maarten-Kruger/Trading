@@ -13,12 +13,24 @@ TAKE_PROFIT_PIPS = 30     # take profit distance
 HOLD_PERIOD = 4           # number of candles to hold trade if TP/SL not hit
 SPREAD_PIPS = 2           # assumed spread cost per trade
 
-# account parameters
+# Account parameters
 RISK_PER_TRADE = 0.01     # fraction of equity to risk per trade
 INITIAL_EQUITY = 10000.0  # starting demo account
 
 PIP_SIZE = 0.0001         # EURUSD pip size
 PIP_VALUE_PER_LOT = 10    # USD per pip for 1 standard lot
+
+
+STRATEGY_PARAMS = {
+    'Lookback': LOOKBACK,
+    'Range Threshold (pips)': RANGE_THRESHOLD_PIPS,
+    'Stop Loss (pips)': STOP_LOSS_PIPS,
+    'Take Profit (pips)': TAKE_PROFIT_PIPS,
+    'Hold Period (bars)': HOLD_PERIOD,
+    'Spread (pips)': SPREAD_PIPS,
+    'Risk Per Trade': RISK_PER_TRADE,
+    'Initial Equity': INITIAL_EQUITY
+}
 
 
 def load_data(path):
@@ -44,10 +56,11 @@ def simulate_strategy(df):
             elif current_close < range_low:
                 breakout = 'short'
             if breakout:
-                entry_price = df['Open'].iloc[i+1]
-                entry_time = df['Time'].iloc[i+1]
-                sl = entry_price - STOP_LOSS_PIPS*PIP_SIZE if breakout == 'long' else entry_price + STOP_LOSS_PIPS*PIP_SIZE
-                tp = entry_price + TAKE_PROFIT_PIPS*PIP_SIZE if breakout == 'long' else entry_price - TAKE_PROFIT_PIPS*PIP_SIZE
+
+                entry_price = df['Open'].iloc[i + 1]
+                entry_time = df['Time'].iloc[i + 1]
+                sl = entry_price - STOP_LOSS_PIPS * PIP_SIZE if breakout == 'long' else entry_price + STOP_LOSS_PIPS * PIP_SIZE
+                tp = entry_price + TAKE_PROFIT_PIPS * PIP_SIZE if breakout == 'long' else entry_price - TAKE_PROFIT_PIPS * PIP_SIZE
 
                 risk_amount = equity * RISK_PER_TRADE
                 lot_size = risk_amount / (STOP_LOSS_PIPS * PIP_VALUE_PER_LOT)
@@ -155,12 +168,21 @@ def plot_equity_curve(times, equity_curve, path='equity_curve.png'):
     plt.close()
 
 
-def generate_report(metrics, path_img, output_pdf):
+
+def generate_report(metrics, params, path_img, output_pdf):
+
     styles = getSampleStyleSheet()
     doc = SimpleDocTemplate(output_pdf, pagesize=letter)
     elements = []
     elements.append(Paragraph('Hover Breakout Strategy Report', styles['Title']))
     elements.append(Spacer(1, 12))
+
+    elements.append(Paragraph('Strategy Parameters', styles['Heading2']))
+    for key, value in params.items():
+        elements.append(Paragraph(f"{key}: {value}", styles['Normal']))
+
+    elements.append(Spacer(1, 12))
+    elements.append(Paragraph('Performance Metrics', styles['Heading2']))
 
     for key, value in metrics.items():
         if key == 'Win Rate' or 'Expectancy' in key or 'Drawdown' in key or 'Size' in key:
@@ -179,7 +201,8 @@ def main():
     trade_df, equity_curve, times = simulate_strategy(df)
     metrics = calculate_metrics(trade_df, equity_curve)
     plot_equity_curve(times, equity_curve)
-    generate_report(metrics, 'equity_curve.png', 'Hover_Breakout_Strategy_Report.pdf')
+
+
     trade_df.to_csv('tradelog_Hover_Breakout_Strategy.csv', index=False)
 
 
