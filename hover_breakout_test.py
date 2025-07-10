@@ -20,6 +20,7 @@ INITIAL_EQUITY = 10000.0  # starting demo account
 PIP_SIZE = 0.0001         # EURUSD pip size
 PIP_VALUE_PER_LOT = 10    # USD per pip for 1 standard lot
 
+
 STRATEGY_PARAMS = {
     'Lookback': LOOKBACK,
     'Range Threshold (pips)': RANGE_THRESHOLD_PIPS,
@@ -38,13 +39,16 @@ def load_data(path):
     return df
 
 
+
 def simulate_strategy(df, lookback, range_threshold_pips, stop_loss_pips,
                       take_profit_pips, hold_period, spread_pips,
                       risk_per_trade, initial_equity):
     equity = initial_equity
+
     equity_curve = [equity]
     times = [df['Time'].iloc[0]]
     trades = []
+
 
     half_spread = (spread_pips / 2) * PIP_SIZE
 
@@ -52,6 +56,7 @@ def simulate_strategy(df, lookback, range_threshold_pips, stop_loss_pips,
         range_high = df['High'].iloc[i-lookback:i].max()
         range_low = df['Low'].iloc[i-lookback:i].min()
         if range_high - range_low <= range_threshold_pips * PIP_SIZE:
+
             current_close = df['Close'].iloc[i]
             breakout = None
             if current_close > range_high:
@@ -59,6 +64,7 @@ def simulate_strategy(df, lookback, range_threshold_pips, stop_loss_pips,
             elif current_close < range_low:
                 breakout = 'short'
             if breakout:
+
                 direction = 1 if breakout == 'long' else -1
                 entry_price_raw = df['Open'].iloc[i]
                 entry_price = entry_price_raw + half_spread * direction
@@ -68,12 +74,14 @@ def simulate_strategy(df, lookback, range_threshold_pips, stop_loss_pips,
 
                 risk_amount = equity * risk_per_trade
                 lot_size = risk_amount / (stop_loss_pips * PIP_VALUE_PER_LOT)
+
                 trade_equity_start = equity
                 result_pips = None
                 exit_price = None
                 exit_time = None
 
                 for j in range(i, i + hold_period + 1):
+
                     candle = df.iloc[j]
                     if breakout == 'long':
                         if candle['Low'] <= sl:
@@ -103,7 +111,9 @@ def simulate_strategy(df, lookback, range_threshold_pips, stop_loss_pips,
                             break
 
                 if result_pips is None:
+
                     candle = df.iloc[i + hold_period]
+
                     exit_raw = candle['Close']
                     exit_time = candle['Time']
                     if breakout == 'long':
