@@ -62,8 +62,12 @@ def generate_opt_report(grid, results, defaults, output_pdf):
         eq = res['Final Equity']
         dd = res['Max Drawdown'] * 100
         exp = res['Expectancy'] * 100
+        trades = res['Total Trades']
         param_str = ', '.join(f"{k}: {v}" for k, v in res['Params'].items())
-        text = f"{i}) Final Equity: {eq:.2f}, Max DD: {dd:.2f}%, Expectancy: {exp:.2f}%"
+        text = (
+            f"{i}) Final Equity: {eq:.2f}, Max DD: {dd:.2f}%," 
+            f" Expectancy: {exp:.2f}%, Trades: {trades}"
+        )
         elements.append(Paragraph(text, styles['Normal']))
         elements.append(Paragraph(param_str, styles['Normal']))
         elements.append(Spacer(1, 6))
@@ -102,6 +106,7 @@ def main():
             'Final Equity': eq_curve[-1],
             'Max Drawdown': metrics['Max Drawdown'],
             'Expectancy': metrics['Expectancy'],
+            'Total Trades': metrics['Total Trades'],
             'Params': {
                 'Lookback': lookback,
                 'Range Threshold (pips)': rng,
@@ -114,7 +119,7 @@ def main():
             }
         })
 
-    results.sort(key=lambda x: (-x['Final Equity'], x['Max Drawdown']))
+    results.sort(key=lambda x: (-x['Final Equity'], -x['Total Trades'], x['Max Drawdown']))
     generate_opt_report(PARAM_GRID, results, DEFAULT_PARAMS, 'Hover_Breakout_Optimization.pdf')
 
 
