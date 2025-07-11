@@ -1,8 +1,9 @@
 # Trading
 
-This repository stores a sample dataset of EUR/USD 30 minute bars and Python
-scripts for testing different strategies. The demo strategy now risks a fixed
-amount per trade based on the starting equity so account growth remains
+This repository stores sample datasets of EUR/USD prices and Python scripts for
+testing different strategies.  The main strategy now operates on one minute
+data while checking every 30 candles (30 minutes) for patterns.  Each trade
+risks a fixed amount based on the starting equity so account growth remains
 realistic during long simulations.
 
 Package list:

@@ -16,6 +16,7 @@ from hover_breakout_test import (
     SPREAD_PIPS,
     RISK_PER_TRADE,
     INITIAL_EQUITY,
+    BARS_PER_CHECK,
 )
 
 DEFAULT_PARAMS = {
@@ -71,7 +72,7 @@ def generate_opt_report(grid, results, defaults, output_pdf):
 
 
 def main():
-    df = load_data('EURUSD_M30_Data.csv')
+    df = load_data('EURUSD_M1_Data.csv')
     combos = list(itertools.product(
         PARAM_GRID['Lookback'],
         PARAM_GRID['Range Threshold (pips)'],
@@ -94,6 +95,7 @@ def main():
             SPREAD_PIPS,
             risk,
             INITIAL_EQUITY,
+            BARS_PER_CHECK,
         )
         metrics = calculate_metrics(trade_df, eq_curve)
         results.append({
