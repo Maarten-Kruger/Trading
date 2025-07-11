@@ -31,12 +31,12 @@ DEFAULT_PARAMS = {
 }
 
 PARAM_GRID = {
-    'Lookback':           [4,   8,   12],
-    'Range Threshold':    [20,  60,  100],   # in pips
-    'Stop Loss':          [5,   10,  20],    # in pips
-    'Take Profit':        [20,  40,  80],    # in pips
-    'Hold Period':        [6,   12,  24],    # bars
-    'Risk Per Trade':     [0.005, 0.01, 0.02] # fraction of equity
+    'Lookback': [6, 8, 10],
+    'Range Threshold (pips)': [15, 20, 25],
+    'Stop Loss (pips)': [8, 10, 12],
+    'Take Profit (pips)': [30, 40, 50],
+    'Hold Period (bars)': [8, 12, 16],
+    'Risk Per Trade': [0.005, 0.01, 0.02, 0.03],
 }
 
 
@@ -57,8 +57,8 @@ def generate_opt_report(grid, results, defaults, output_pdf):
         elements.append(Paragraph(f"{k}: {vals}", styles['Normal']))
     elements.append(Spacer(1, 12))
 
-    elements.append(Paragraph('Top 50 Results', styles['Heading2']))
-    for i, res in enumerate(results[:50], 1):
+    elements.append(Paragraph('Top 10 Results', styles['Heading2']))
+    for i, res in enumerate(results[:10], 1):
         eq = res['Final Equity']
         dd = res['Max Drawdown'] * 100
         exp = res['Expectancy'] * 100
