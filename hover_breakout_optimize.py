@@ -4,7 +4,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 
-from hover_breakout_test import (
+from main_optimized import (
     load_data,
     simulate_strategy,
     calculate_metrics,
