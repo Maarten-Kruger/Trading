@@ -6,15 +6,15 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
 
 # Strategy parameters (all values in pips or bars)
-LOOKBACK = 6              # number of 30 minute periods to check for tight range
-RANGE_THRESHOLD_PIPS = 40 # maximum high-low range to qualify as hovering
-STOP_LOSS_PIPS = 9        # stop loss distance
-TAKE_PROFIT_PIPS = 30     # take profit distance
+LOOKBACK = 10             # number of 30 minute periods to check for tight range
+RANGE_THRESHOLD_PIPS = 20 # maximum high-low range to qualify as hovering
+STOP_LOSS_PIPS = 8        # stop loss distance
+TAKE_PROFIT_PIPS = 50     # take profit distance
 HOLD_PERIOD = 12          # number of 30 minute periods to hold trade if TP/SL not hit
 SPREAD_PIPS = 2           # assumed spread cost per trade
 
 # Account parameters
-RISK_PER_TRADE = 0.01     # fraction of equity to risk per trade
+RISK_PER_TRADE = 0.03     # fraction of equity to risk per trade
 INITIAL_EQUITY = 10000.0  # starting demo account
 
 PIP_SIZE = 0.0001         # EURUSD pip size
