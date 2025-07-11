@@ -72,11 +72,10 @@ def simulate_strategy(df, lookback, range_threshold_pips, stop_loss_pips,
                 breakout = 'short'
             if breakout:
 
-                entry_index = i + 1
-                if entry_index >= len(df):
-                    break
+                # Open the trade on the same candle that triggered the breakout
+                entry_index = i
                 direction = 1 if breakout == 'long' else -1
-                entry_price_raw = df['Open'].iloc[entry_index]
+                entry_price_raw = df['Close'].iloc[entry_index]
                 entry_price = entry_price_raw + half_spread * direction
                 entry_time = df['Time'].iloc[entry_index]
                 sl = entry_price - stop_loss_pips * PIP_SIZE if breakout == 'long' else entry_price + stop_loss_pips * PIP_SIZE
