@@ -5,7 +5,6 @@ from reportlab.pdfgen import canvas
 # reuse the backtest implementation
 import hover_breakout_backtest as backtest_mod
 
-
 DEFAULT_PARAMS = {
     'BACK_CANDLES': 5,
     'RANGE_PIPS': 10,
@@ -83,7 +82,14 @@ def optimize():
     results = []
     for values in combos:
         params = dict(zip(keys, values))
-        metrics = run_strategy(**params)
+        metrics = run_strategy(
+            back_candles=params['BACK_CANDLES'],
+            range_pips=params['RANGE_PIPS'],
+            tp_pips=params['TP_PIPS'],
+            sl_pips=params['SL_PIPS'],
+            future_candles=params['FUTURE_CANDLES'],
+        )
+
         metrics['Params'] = params
         results.append(metrics)
 
