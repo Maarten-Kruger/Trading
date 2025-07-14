@@ -1,14 +1,10 @@
 import itertools
-import pandas as pd
-import numpy as np
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
-# Default strategy parameters
-STARTING_EQUITY = 10000
-RISK_PERCENT = 0.01
-SPREAD = 0.0002
-DATA_FILE = 'EURUSD_M30_Data.csv'
+# reuse the backtest implementation
+import hover_breakout_backtest as backtest_mod
+
 
 DEFAULT_PARAMS = {
     'BACK_CANDLES': 5,
@@ -29,88 +25,15 @@ PARAM_GRID = {
 
 
 def run_strategy(back_candles, range_pips, tp_pips, sl_pips, future_candles):
-    """Execute the hover breakout strategy and return performance metrics."""
-    df = pd.read_csv(DATA_FILE, parse_dates=['Time'])
-    df.sort_values('Time', inplace=True)
-
-    equity = STARTING_EQUITY
-    risk_amount = STARTING_EQUITY * RISK_PERCENT
-
-    equity_curve = []
-    trades = []
-
-    for idx in range(back_candles, len(df) - future_candles):
-        window = df.iloc[idx - back_candles:idx]
-        if (window['High'].max() - window['Low'].min()) <= range_pips / 10000:
-            current_close = df['Close'].iloc[idx]
-            range_high = window['High'].max()
-            range_low = window['Low'].min()
-
-            direction = 0
-            if current_close > range_high:
-                direction = 1
-            elif current_close < range_low:
-                direction = -1
-            if direction == 0:
-                continue
-
-            entry_price = current_close + direction * (SPREAD / 2)
-            tp_price = entry_price + direction * tp_pips / 10000
-            sl_price = entry_price - direction * sl_pips / 10000
-            entry_time = df['Time'].iloc[idx]
-            exit_price = df['Close'].iloc[idx + future_candles] - direction * (SPREAD / 2)
-            exit_time = df['Time'].iloc[idx + future_candles]
-
-            for j in range(1, future_candles + 1):
-                high = df['High'].iloc[idx + j]
-                low = df['Low'].iloc[idx + j]
-                if direction == 1:
-                    if high >= tp_price:
-                        exit_price = tp_price
-                        exit_time = df['Time'].iloc[idx + j]
-                        break
-                    if low <= sl_price:
-                        exit_price = sl_price
-                        exit_time = df['Time'].iloc[idx + j]
-                        break
-                else:
-                    if low <= tp_price:
-                        exit_price = tp_price
-                        exit_time = df['Time'].iloc[idx + j]
-                        break
-                    if high >= sl_price:
-                        exit_price = sl_price
-                        exit_time = df['Time'].iloc[idx + j]
-                        break
-
-            pnl_pips = (exit_price - entry_price) * direction * 10000
-            pnl_money = (pnl_pips / sl_pips) * risk_amount
-            equity += pnl_money
-            equity_curve.append(equity)
-            trades.append(pnl_money)
-
-    total_trades = len(trades)
-    win_rate = (sum(1 for p in trades if p > 0) / total_trades * 100) if total_trades else 0
-    expectancy = (np.mean(trades) / STARTING_EQUITY * 100) if trades else 0
-    avg_win = (np.mean([p for p in trades if p > 0]) / STARTING_EQUITY * 100) if any(p > 0 for p in trades) else 0
-    avg_loss = (np.mean([abs(p) for p in trades if p < 0]) / STARTING_EQUITY * 100) if any(p < 0 for p in trades) else 0
-
-    if equity_curve:
-        peaks = np.maximum.accumulate(equity_curve)
-        drawdowns = 100 * (peaks - equity_curve) / STARTING_EQUITY
-        max_drawdown = float(np.max(drawdowns))
-    else:
-        max_drawdown = 0.0
-
-    return {
-        'Final Equity': equity,
-        'Total Trades': total_trades,
-        'Win Rate': win_rate,
-        'Expectancy': expectancy,
-        'Average Win Size': avg_win,
-        'Average Loss Size': avg_loss,
-        'Max Drawdown': max_drawdown,
-    }
+    """Execute the hover breakout strategy using the backtest module."""
+    return backtest_mod.backtest(
+        back_candles=back_candles,
+        range_pips=range_pips,
+        tp_pips=tp_pips,
+        sl_pips=sl_pips,
+        future_candles=future_candles,
+        generate_files=False,
+    )
 
 
 def generate_report(grid, results, defaults, pdf_name):

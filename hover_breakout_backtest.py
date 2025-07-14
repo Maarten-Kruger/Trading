@@ -18,7 +18,16 @@ STARTING_EQUITY = 10000   # account starts with $10,000
 DATA_FILE = 'EURUSD_M30_Data.csv'
 
 
-def backtest():
+
+def backtest(
+    back_candles: int = BACK_CANDLES,
+    range_pips: int = RANGE_PIPS,
+    tp_pips: int = TP_PIPS,
+    sl_pips: int = SL_PIPS,
+    future_candles: int = FUTURE_CANDLES,
+    generate_files: bool = True,
+):
+
     df = pd.read_csv(DATA_FILE, parse_dates=['Time'])
     df.sort_values('Time', inplace=True)
 
@@ -27,9 +36,11 @@ def backtest():
     equity_curve = []
     trade_log = []
 
-    for idx in range(BACK_CANDLES, len(df) - FUTURE_CANDLES):
-        window = df.iloc[idx - BACK_CANDLES:idx]
-        if (window['High'].max() - window['Low'].min()) <= RANGE_PIPS / 10000:
+
+    for idx in range(back_candles, len(df) - future_candles):
+        window = df.iloc[idx - back_candles:idx]
+        if (window['High'].max() - window['Low'].min()) <= range_pips / 10000:
+
             current_close = df['Close'].iloc[idx]
             range_high = window['High'].max()
             range_low = window['Low'].min()
@@ -43,13 +54,14 @@ def backtest():
 
             entry_time = df['Time'].iloc[idx]
             entry_price = current_close + direction * (SPREAD / 2)
-            tp_price = entry_price + direction * TP_PIPS / 10000
-            sl_price = entry_price - direction * SL_PIPS / 10000
-            exit_time = df['Time'].iloc[idx + FUTURE_CANDLES]
-            close_price = df['Close'].iloc[idx + FUTURE_CANDLES] - direction * (SPREAD / 2)
+            tp_price = entry_price + direction * tp_pips / 10000
+            sl_price = entry_price - direction * sl_pips / 10000
+            exit_time = df['Time'].iloc[idx + future_candles]
+            close_price = df['Close'].iloc[idx + future_candles] - direction * (SPREAD / 2)
             outcome = 'partial'
 
-            for j in range(1, FUTURE_CANDLES + 1):
+            for j in range(1, future_candles + 1):
+
                 bar_high = df['High'].iloc[idx + j]
                 bar_low = df['Low'].iloc[idx + j]
                 if direction == 1:
@@ -76,7 +88,8 @@ def backtest():
                         break
 
             pnl_pips = (close_price - entry_price) * direction * 10000
-            pnl_risk_multiple = pnl_pips / SL_PIPS
+            pnl_risk_multiple = pnl_pips / sl_pips
+
             pnl_money = pnl_risk_multiple * risk_amount
             equity += pnl_money
             trade_log.append({
@@ -106,63 +119,76 @@ def backtest():
         max_drawdown = np.max(drawdowns)
     else:
         max_drawdown = 0
+        
+    metrics = {
+        'Final Equity': equity,
+        'Total Trades': total_trades,
+        'Win Rate': win_rate,
+        'Expectancy': expectancy,
+        'Average Win Size': avg_win,
+        'Average Loss Size': avg_loss,
+        'Max Drawdown': max_drawdown,
+    }
 
-    # === Plot equity curve ===
-    if equity_curve:
-        times = [t for t, _ in equity_curve]
-        plt.figure(figsize=(10, 4))
-        plt.plot(times, eq_values)
-        plt.title('Equity Curve')
-        plt.xlabel('Time')
-        plt.ylabel('Equity ($)')
-        plt.tight_layout()
-        plt.savefig('equity_curve.png')
-        plt.close()
-    else:
-        plt.figure()
-        plt.savefig('equity_curve.png')
-        plt.close()
+    if generate_files:
+        # === Plot equity curve ===
+        if equity_curve:
+            times = [t for t, _ in equity_curve]
+            plt.figure(figsize=(10, 4))
+            plt.plot(times, eq_values)
+            plt.title('Equity Curve')
+            plt.xlabel('Time')
+            plt.ylabel('Equity ($)')
+            plt.tight_layout()
+            plt.savefig('equity_curve.png')
+            plt.close()
+        else:
+            plt.figure()
+            plt.savefig('equity_curve.png')
+            plt.close()
 
-    # === PDF report ===
-    c = canvas.Canvas('hover_breakout_results.pdf', pagesize=letter)
-    width, height = letter
-    y = height - 40
-    c.drawString(40, y, 'Hover Breakout Strategy Results')
-    y -= 20
-    c.drawString(40, y, 'Strategy Parameters:')
-    y -= 15
-    c.drawString(60, y, f'BACK_CANDLES = {BACK_CANDLES}')
-    y -= 15
-    c.drawString(60, y, f'RANGE_PIPS = {RANGE_PIPS}')
-    y -= 15
-    c.drawString(60, y, f'TP_PIPS = {TP_PIPS}')
-    y -= 15
-    c.drawString(60, y, f'SL_PIPS = {SL_PIPS}')
-    y -= 15
-    c.drawString(60, y, f'FUTURE_CANDLES = {FUTURE_CANDLES}')
-    y -= 15
-    c.drawString(60, y, f'SPREAD = {SPREAD}')
-    y -= 15
-    c.drawString(60, y, f'RISK_PERCENT = {RISK_PERCENT}')
-    y -= 15
-    c.drawString(60, y, f'STARTING_EQUITY = ${STARTING_EQUITY}')
-    y -= 20
-    c.drawString(40, y, f'Total Trades: {total_trades}')
-    y -= 20
-    c.drawString(40, y, f'Win Rate: {win_rate:.2f}% - percent of trades profitable')
-    y -= 20
-    c.drawString(40, y, f'Max Drawdown: {max_drawdown:.2f}% - worst equity loss')
-    y -= 20
-    c.drawString(40, y, f'Expectancy: {expectancy:.2f}% - average gain per trade')
-    y -= 20
-    c.drawString(40, y, f'Average Win Size: {avg_win:.2f}% - average winning trade')
-    y -= 20
-    c.drawString(40, y, f'Average Loss Size: {avg_loss:.2f}% - average losing trade')
-    y -= 40
-    c.drawImage('equity_curve.png', 40, y - 300, width=500, height=300)
-    c.save()
+        # === PDF report ===
+        c = canvas.Canvas('hover_breakout_results.pdf', pagesize=letter)
+        width, height = letter
+        y = height - 40
+        c.drawString(40, y, 'Hover Breakout Strategy Results')
+        y -= 20
+        c.drawString(40, y, 'Strategy Parameters:')
+        y -= 15
+        c.drawString(60, y, f'BACK_CANDLES = {back_candles}')
+        y -= 15
+        c.drawString(60, y, f'RANGE_PIPS = {range_pips}')
+        y -= 15
+        c.drawString(60, y, f'TP_PIPS = {tp_pips}')
+        y -= 15
+        c.drawString(60, y, f'SL_PIPS = {sl_pips}')
+        y -= 15
+        c.drawString(60, y, f'FUTURE_CANDLES = {future_candles}')
+        y -= 15
+        c.drawString(60, y, f'SPREAD = {SPREAD}')
+        y -= 15
+        c.drawString(60, y, f'RISK_PERCENT = {RISK_PERCENT}')
+        y -= 15
+        c.drawString(60, y, f'STARTING_EQUITY = ${STARTING_EQUITY}')
+        y -= 20
+        c.drawString(40, y, f'Total Trades: {total_trades}')
+        y -= 20
+        c.drawString(40, y, f'Win Rate: {win_rate:.2f}% - percent of trades profitable')
+        y -= 20
+        c.drawString(40, y, f'Max Drawdown: {max_drawdown:.2f}% - worst equity loss')
+        y -= 20
+        c.drawString(40, y, f'Expectancy: {expectancy:.2f}% - average gain per trade')
+        y -= 20
+        c.drawString(40, y, f'Average Win Size: {avg_win:.2f}% - average winning trade')
+        y -= 20
+        c.drawString(40, y, f'Average Loss Size: {avg_loss:.2f}% - average losing trade')
+        y -= 40
+        c.drawImage('equity_curve.png', 40, y - 300, width=500, height=300)
+        c.save()
 
-    pd.DataFrame(trade_log).to_csv('tradelog_HoverBreakout.csv', index=False)
+        pd.DataFrame(trade_log).to_csv('tradelog_HoverBreakout.csv', index=False)
+
+    return metrics
 
 
 if __name__ == '__main__':
