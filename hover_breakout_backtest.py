@@ -6,13 +6,13 @@ from reportlab.pdfgen import canvas
 
 # Strategy Parameters
 BACK_CANDLES = 5          # number of candles to look back for range
-RANGE_PIPS = 10           # tight range maximum size in pips
-TP_PIPS = 20              # distance to take profit in pips
-SL_PIPS = 10              # distance to stop loss in pips
-FUTURE_CANDLES = 3        # how many candles to look forward for TP/SL
-SPREAD = 0.0002           # 2 pips spread
+RANGE_PIPS = 40             # tight range maximum size in pips
+TP_PIPS = 30               # distance to take profit in pips
+SL_PIPS = 9               # distance to stop loss in pips
+FUTURE_CANDLES = 12        # how many candles to look forward for TP/SL
+SPREAD = 0.0002            # 2 pips spread
 
-RISK_PERCENT = 0.01       # risk 1% of starting equity per trade
+RISK_PERCENT = 0.03       # risk 1% of starting equity per trade
 STARTING_EQUITY = 10000   # account starts with $10,000
 
 DATA_FILE = 'EURUSD_M30_Data.csv'

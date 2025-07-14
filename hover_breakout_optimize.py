@@ -15,11 +15,11 @@ DEFAULT_PARAMS = {
 
 # Parameter ranges to test
 PARAM_GRID = {
-    'BACK_CANDLES': [2, 5, 10],
-    'RANGE_PIPS': [5, 10, 20, 40],
-    'TP_PIPS': [10, 20, 40],
-    'SL_PIPS': [5, 10, 20],
-    'FUTURE_CANDLES': [2, 3, 5, 8]
+    'BACK_CANDLES': [8, 10, 12],
+    'RANGE_PIPS': [6, 8, 10],
+    'TP_PIPS': [8, 10, 12],
+    'SL_PIPS': [12, 15, 18],
+    'FUTURE_CANDLES': [6, 8, 10]
 }
 
 
