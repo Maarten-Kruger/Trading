@@ -6,16 +6,17 @@ from reportlab.pdfgen import canvas
 
 # Strategy Parameters
 BACK_CANDLES = 5          # number of candles to look back for range
-RANGE_PIPS = 10           # tight range maximum size in pips
-TP_PIPS = 20              # distance to take profit in pips
-SL_PIPS = 10              # distance to stop loss in pips
-FUTURE_CANDLES = 3        # how many candles to look forward for TP/SL
-SPREAD = 0.0002           # 2 pips spread
+RANGE_PIPS = 40            # tight range maximum size in pips
+TP_PIPS = 50               # distance to take profit in pips
+SL_PIPS = 9                # distance to stop loss in pips
+FUTURE_CANDLES = 12        # how many candles to look forward for TP/SL
+SPREAD = 0.0002            # 2 pips spread
 
-RISK_PERCENT = 0.01       # risk 1% of starting equity per trade
+RISK_PERCENT = 0.03       # risk 1% of starting equity per trade
 STARTING_EQUITY = 10000   # account starts with $10,000
 
 DATA_FILE = 'EURUSD_M30_Data.csv'
+
 
 
 def backtest(
@@ -26,6 +27,7 @@ def backtest(
     future_candles: int = FUTURE_CANDLES,
     generate_files: bool = True,
 ):
+
     df = pd.read_csv(DATA_FILE, parse_dates=['Time'])
     df.sort_values('Time', inplace=True)
 
@@ -34,9 +36,11 @@ def backtest(
     equity_curve = []
     trade_log = []
 
+
     for idx in range(back_candles, len(df) - future_candles):
         window = df.iloc[idx - back_candles:idx]
         if (window['High'].max() - window['Low'].min()) <= range_pips / 10000:
+
             current_close = df['Close'].iloc[idx]
             range_high = window['High'].max()
             range_low = window['Low'].min()
@@ -57,6 +61,7 @@ def backtest(
             outcome = 'partial'
 
             for j in range(1, future_candles + 1):
+
                 bar_high = df['High'].iloc[idx + j]
                 bar_low = df['Low'].iloc[idx + j]
                 if direction == 1:
@@ -84,6 +89,7 @@ def backtest(
 
             pnl_pips = (close_price - entry_price) * direction * 10000
             pnl_risk_multiple = pnl_pips / sl_pips
+
             pnl_money = pnl_risk_multiple * risk_amount
             equity += pnl_money
             trade_log.append({
@@ -113,7 +119,7 @@ def backtest(
         max_drawdown = np.max(drawdowns)
     else:
         max_drawdown = 0
-
+        
     metrics = {
         'Final Equity': equity,
         'Total Trades': total_trades,

@@ -5,6 +5,7 @@ from reportlab.pdfgen import canvas
 # reuse the backtest implementation
 import hover_breakout_backtest as backtest_mod
 
+
 DEFAULT_PARAMS = {
     'BACK_CANDLES': 5,
     'RANGE_PIPS': 10,
