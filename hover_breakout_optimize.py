@@ -89,6 +89,7 @@ def optimize():
             sl_pips=params['SL_PIPS'],
             future_candles=params['FUTURE_CANDLES'],
         )
+
         metrics['Params'] = params
         results.append(metrics)
 

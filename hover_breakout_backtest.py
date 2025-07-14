@@ -18,6 +18,7 @@ STARTING_EQUITY = 10000   # account starts with $10,000
 DATA_FILE = 'EURUSD_M30_Data.csv'
 
 
+
 def backtest(
     back_candles: int = BACK_CANDLES,
     range_pips: int = RANGE_PIPS,
@@ -26,6 +27,7 @@ def backtest(
     future_candles: int = FUTURE_CANDLES,
     generate_files: bool = True,
 ):
+
     df = pd.read_csv(DATA_FILE, parse_dates=['Time'])
     df.sort_values('Time', inplace=True)
 
@@ -34,9 +36,11 @@ def backtest(
     equity_curve = []
     trade_log = []
 
+
     for idx in range(back_candles, len(df) - future_candles):
         window = df.iloc[idx - back_candles:idx]
         if (window['High'].max() - window['Low'].min()) <= range_pips / 10000:
+
             current_close = df['Close'].iloc[idx]
             range_high = window['High'].max()
             range_low = window['Low'].min()
@@ -57,6 +61,7 @@ def backtest(
             outcome = 'partial'
 
             for j in range(1, future_candles + 1):
+
                 bar_high = df['High'].iloc[idx + j]
                 bar_low = df['Low'].iloc[idx + j]
                 if direction == 1:
@@ -84,6 +89,8 @@ def backtest(
 
             pnl_pips = (close_price - entry_price) * direction * 10000
             pnl_risk_multiple = pnl_pips / sl_pips
+
+            
             pnl_money = pnl_risk_multiple * risk_amount
             equity += pnl_money
             trade_log.append({
@@ -114,6 +121,7 @@ def backtest(
     else:
         max_drawdown = 0
 
+        
     metrics = {
         'Final Equity': equity,
         'Total Trades': total_trades,
