@@ -123,7 +123,6 @@ def backtest():
         plt.savefig('equity_curve.png')
         plt.close()
 
-
     # === PDF report ===
     c = canvas.Canvas('hover_breakout_results.pdf', pagesize=letter)
     width, height = letter
