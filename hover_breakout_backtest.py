@@ -117,9 +117,12 @@ def backtest():
         plt.ylabel('Equity ($)')
         plt.tight_layout()
         plt.savefig('equity_curve.png')
+        plt.close()
     else:
         plt.figure()
         plt.savefig('equity_curve.png')
+        plt.close()
+
 
     # === PDF report ===
     c = canvas.Canvas('hover_breakout_results.pdf', pagesize=letter)
@@ -127,7 +130,23 @@ def backtest():
     y = height - 40
     c.drawString(40, y, 'Hover Breakout Strategy Results')
     y -= 20
-    c.drawString(40, y, f'Starting Equity: ${STARTING_EQUITY}')
+    c.drawString(40, y, 'Strategy Parameters:')
+    y -= 15
+    c.drawString(60, y, f'BACK_CANDLES = {BACK_CANDLES}')
+    y -= 15
+    c.drawString(60, y, f'RANGE_PIPS = {RANGE_PIPS}')
+    y -= 15
+    c.drawString(60, y, f'TP_PIPS = {TP_PIPS}')
+    y -= 15
+    c.drawString(60, y, f'SL_PIPS = {SL_PIPS}')
+    y -= 15
+    c.drawString(60, y, f'FUTURE_CANDLES = {FUTURE_CANDLES}')
+    y -= 15
+    c.drawString(60, y, f'SPREAD = {SPREAD}')
+    y -= 15
+    c.drawString(60, y, f'RISK_PERCENT = {RISK_PERCENT}')
+    y -= 15
+    c.drawString(60, y, f'STARTING_EQUITY = ${STARTING_EQUITY}')
     y -= 20
     c.drawString(40, y, f'Total Trades: {total_trades}')
     y -= 20
