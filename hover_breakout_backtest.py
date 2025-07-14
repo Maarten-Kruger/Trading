@@ -5,6 +5,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
 # Strategy Parameters
+
 BACK_CANDLES = 10          # number of candles to look back for range
 RANGE_PIPS = 40            # tight range maximum size in pips
 TP_PIPS = 50               # distance to take profit in pips
@@ -122,7 +123,6 @@ def backtest():
         plt.figure()
         plt.savefig('equity_curve.png')
         plt.close()
-
 
     # === PDF report ===
     c = canvas.Canvas('hover_breakout_results.pdf', pagesize=letter)
