@@ -202,13 +202,13 @@ def main():
     df = load_data(data_path)
 
     params = {
-        'lookback': 10,
-        'range_threshold': 0.0005,
-        'tp_pips': 0.0010,
-        'sl_pips': 0.0005,
-        'hold_candles': 10,
+        'lookback': 6,
+        'range_threshold': 0.004,
+        'tp_pips': 0.0040,
+        'sl_pips': 0.0009,
+        'hold_candles': 12,
         'spread_pips': 0.0002,
-        'risk_percent': 0.01,
+        'risk_percent': 0.03,
         'starting_equity': 10000.0,
     }
 
