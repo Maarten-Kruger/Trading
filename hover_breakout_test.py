@@ -9,12 +9,12 @@ import os
 # Parameters for the strategy
 PARAMS = {
     'lookback_candles': 10,   # number of candles used to check the range
-    'range_pips': 5,          # allowed high-low range in pips during hover
-    'distance_pips': 10,      # stop loss distance in pips
-    'rr': 2.0,                # risk to reward ratio
-    'lookahead_candles': 8,   # how many candles forward to look for TP/SL
+    'range_pips': 40,          # allowed high-low range in pips during hover
+    'distance_pips': 9,      # stop loss distance in pips
+    'rr': 2.7777,                # risk to reward ratio
+    'lookahead_candles': 12,   # how many candles forward to look for TP/SL
     'risk_percent': 0.01,     # percent of starting equity risked per trade
-    'spread_pips': 0.2        # assumed spread in pips
+    'spread_pips': 2        # assumed spread in pips
 }
 
 START_EQUITY = 10000
