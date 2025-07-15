@@ -27,15 +27,32 @@ def load_data(path: str) -> pd.DataFrame:
 
 def hover_breakout_backtest(
     df: pd.DataFrame,
-    lookback: int = 6,
-    range_threshold: float = 0.004,
-    tp_pips: float = 0.0030,
-    sl_pips: float = 0.0009,
-    hold_candles: int = 12,
+
+    lookback: int = 10,
+    range_threshold: float = 0.0005,
+    tp_pips: float = 0.0010,
+    sl_pips: float = 0.0005,
+    hold_candles: int = 10,
     spread_pips: float = 0.0002,
-    risk_percent: float = 0.03,
+    risk_percent: float = 0.01,
     starting_equity: float = 10000.0,
 ):
+    # Support passing a single dictionary of parameters. This mirrors how
+    # the function was invoked in earlier revisions of the script where a
+    # params dict was supplied as the second argument. If `lookback` is a
+    # dictionary we extract the values from it to avoid a type error.
+    if isinstance(lookback, dict):
+        params = lookback
+        lookback = params.get("lookback", lookback)
+        range_threshold = params.get("range_threshold", range_threshold)
+        tp_pips = params.get("tp_pips", tp_pips)
+        sl_pips = params.get("sl_pips", sl_pips)
+        hold_candles = params.get("hold_candles", hold_candles)
+        spread_pips = params.get("spread_pips", spread_pips)
+        risk_percent = params.get("risk_percent", risk_percent)
+        starting_equity = params.get("starting_equity", starting_equity)
+
+
     pip_unit = 0.0001
     risk_per_trade = starting_equity * risk_percent
     equity = starting_equity
