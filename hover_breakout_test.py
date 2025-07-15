@@ -9,6 +9,7 @@ import os
 # Parameters for the strategy
 PARAMS = {
     'lookback_candles': 10,   # number of candles used to check the range
+
     'range_pips': 40,          # allowed high-low range in pips during hover
     'distance_pips': 9,      # stop loss distance in pips
     'rr': 2.7777,                # risk to reward ratio
