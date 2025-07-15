@@ -27,7 +27,6 @@ def load_data(path: str) -> pd.DataFrame:
 
 def hover_breakout_backtest(
     df: pd.DataFrame,
-
     lookback: int = 10,
     range_threshold: float = 0.0005,
     tp_pips: float = 0.0010,
@@ -53,6 +52,7 @@ def hover_breakout_backtest(
         starting_equity = params.get("starting_equity", starting_equity)
 
 
+        
     pip_unit = 0.0001
     risk_per_trade = starting_equity * risk_percent
     equity = starting_equity
@@ -117,7 +117,20 @@ def hover_breakout_backtest(
         })
 
     equity_df = pd.DataFrame(equity_curve, columns=['Time', 'Equity'])
-    trade_df = pd.DataFrame(trades)
+    if trades:
+        trade_df = pd.DataFrame(trades)
+    else:
+        # Ensure all expected columns exist even when no trades were generated
+        trade_df = pd.DataFrame(columns=[
+            'Time Open',
+            'Open Price',
+            'Time Close',
+            'Close Price',
+            'Take Profit Price',
+            'Stop Loss Price',
+            'Profit',
+        ])
+
 
     wins = trade_df[trade_df['Profit'] > 0]
     losses = trade_df[trade_df['Profit'] <= 0]
@@ -218,3 +231,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
