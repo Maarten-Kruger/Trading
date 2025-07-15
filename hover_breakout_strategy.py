@@ -27,13 +27,13 @@ def load_data(path: str) -> pd.DataFrame:
 
 def hover_breakout_backtest(
     df: pd.DataFrame,
-    lookback: int = 10,
-    range_threshold: float = 0.0005,
-    tp_pips: float = 0.0010,
-    sl_pips: float = 0.0005,
-    hold_candles: int = 10,
+    lookback: int = 6,
+    range_threshold: float = 0.004,
+    tp_pips: float = 0.0030,
+    sl_pips: float = 0.0009,
+    hold_candles: int = 12,
     spread_pips: float = 0.0002,
-    risk_percent: float = 0.01,
+    risk_percent: float = 0.03,
     starting_equity: float = 10000.0,
 ):
     pip_unit = 0.0001
