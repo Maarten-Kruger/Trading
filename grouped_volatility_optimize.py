@@ -24,11 +24,11 @@ DEFAULT_PARAMS = {
 
 # Parameter ranges including some extreme values
 PARAM_GRID = {
-    'BACK_CANDLES': [DEFAULT_PARAMS['BACK_CANDLES'], 2, 3],
-    'CANDLE_SIZE_PIPS': [12, DEFAULT_PARAMS['CANDLE_SIZE_PIPS'], 15],
-    'TP_PIPS': [8, DEFAULT_PARAMS['TP_PIPS'], 12],
-    'SL_PIPS': [3, DEFAULT_PARAMS['SL_PIPS'], 7],
-    'FUTURE_CANDLES': [8, DEFAULT_PARAMS['FUTURE_CANDLES'], 12],
+    'BACK_CANDLES': [1, DEFAULT_PARAMS['BACK_CANDLES'], 3],
+    'CANDLE_SIZE_PIPS': [14, DEFAULT_PARAMS['CANDLE_SIZE_PIPS'], 16],
+    'TP_PIPS': [7, DEFAULT_PARAMS['TP_PIPS'], 9],
+    'SL_PIPS': [2, DEFAULT_PARAMS['SL_PIPS'], 4],
+    'FUTURE_CANDLES': [10, DEFAULT_PARAMS['FUTURE_CANDLES'], 14],
     'FOLLOW_DIRECTION': [True, False],
 }
 
@@ -44,7 +44,7 @@ def run_strategy(back_candles, candle_size_pips, tp_pips, sl_pips, future_candle
         generate_files=False,
     )
 
-def generate_report(grid, results, defaults, pdf_name)
+def generate_report(grid, results, defaults, pdf_name):
     """Create a neat PDF summarizing the optimization run."""
     doc = SimpleDocTemplate(pdf_name, pagesize=letter, leftMargin=40, rightMargin=40, topMargin=40, bottomMargin=40)
     styles = getSampleStyleSheet()
