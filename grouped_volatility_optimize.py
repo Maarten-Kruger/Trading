@@ -10,6 +10,7 @@ from reportlab.platypus import (
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 
+
 import grouped_volatility_backtest as backtest_mod
 
 DEFAULT_PARAMS = {
@@ -43,7 +44,7 @@ def run_strategy(back_candles, candle_size_pips, tp_pips, sl_pips, future_candle
         generate_files=False,
     )
 
-def generate_report(grid, results, defaults, pdf_name):
+def generate_report(grid, results, defaults, pdf_name)
     """Create a neat PDF summarizing the optimization run."""
     doc = SimpleDocTemplate(pdf_name, pagesize=letter, leftMargin=40, rightMargin=40, topMargin=40, bottomMargin=40)
     styles = getSampleStyleSheet()
