@@ -1,6 +1,15 @@
 import itertools
 from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+)
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
+
 
 import grouped_volatility_backtest as backtest_mod
 
@@ -35,46 +44,62 @@ def run_strategy(back_candles, candle_size_pips, tp_pips, sl_pips, future_candle
         generate_files=False,
     )
 
-def generate_report(grid, results, defaults, pdf_name):
-    """Create a summary PDF of the optimization run."""
-    c = canvas.Canvas(pdf_name, pagesize=letter)
-    width, height = letter
-    y = height - 40
-    c.drawString(40, y, 'Grouped Volatility Optimization Results')
-    y -= 20
+def generate_report(grid, results, defaults, pdf_name)
+    """Create a neat PDF summarizing the optimization run."""
+    doc = SimpleDocTemplate(pdf_name, pagesize=letter, leftMargin=40, rightMargin=40, topMargin=40, bottomMargin=40)
+    styles = getSampleStyleSheet()
+    elements = []
 
-    c.drawString(40, y, 'Default Parameters:')
-    y -= 15
-    for k, v in defaults.items():
-        c.drawString(60, y, f'{k} = {v}')
-        y -= 15
+    elements.append(Paragraph('Grouped Volatility Optimization Results', styles['Title']))
+    elements.append(Spacer(1, 12))
 
-    y -= 10
-    c.drawString(40, y, 'Parameter Grid Tested:')
-    y -= 15
-    for k, vals in grid.items():
-        c.drawString(60, y, f'{k}: {vals}')
-        y -= 15
+    # Defaults section
+    elements.append(Paragraph('Default Parameters', styles['Heading2']))
+    defaults_table = [['Parameter', 'Value']] + [[k, v] for k, v in defaults.items()]
+    t = Table(defaults_table, hAlign='LEFT')
+    t.setStyle(TableStyle([
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+    ]))
+    elements.append(t)
+    elements.append(Spacer(1, 12))
 
-    y -= 10
-    c.drawString(40, y, 'Top 10 Results:')
-    y -= 15
+    # Grid section
+    elements.append(Paragraph('Parameter Grid Tested', styles['Heading2']))
+    grid_table = [['Parameter', 'Values']] + [[k, ', '.join(map(str, v))] for k, v in grid.items()]
+    t = Table(grid_table, hAlign='LEFT', colWidths=[120, 360])
+    t.setStyle(TableStyle([
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+    ]))
+    elements.append(t)
+    elements.append(Spacer(1, 12))
+
+    # Results section
+    elements.append(Paragraph('Top 10 Results', styles['Heading2']))
+    results_table = [['#', 'Final Equity', 'Max DD', 'Trades', 'Parameters']]
     for i, res in enumerate(results[:10], 1):
-        text = (
-            f"{i}) Final Equity: {res['Final Equity']:.2f}, "
-            f"Max DD: {res['Max Drawdown']:.2f}%, "
-            f"Trades: {res['Total Trades']}"
-        )
-        c.drawString(60, y, text)
-        y -= 15
-        param_str = ', '.join(f'{k}={v}' for k, v in res['Params'].items())
-        c.drawString(80, y, param_str)
-        y -= 15
-        if y < 60:
-            c.showPage()
-            y = height - 40
+        params_str = ', '.join(f'{k}={v}' for k, v in res['Params'].items())
+        results_table.append([
+            i,
+            f"{res['Final Equity']:.2f}",
+            f"{res['Max Drawdown']:.2f}%",
+            res['Total Trades'],
+            params_str,
+        ])
 
-    c.save()
+    t = Table(results_table, hAlign='LEFT', colWidths=[30, 80, 80, 60, 230])
+    t.setStyle(TableStyle([
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('ALIGN', (1, 1), (3, -1), 'RIGHT'),
+    ]))
+    elements.append(t)
+
+    doc.build(elements)
 
 def optimize():
     keys = list(PARAM_GRID.keys())
