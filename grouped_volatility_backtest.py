@@ -5,10 +5,10 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
 # Strategy Parameters
-BACK_CANDLES = 5           # look back this many candles for previous big candle
+BACK_CANDLES = 1           # look back this many candles for previous big candle
 CANDLE_SIZE_PIPS = 15      # minimum size for a "large" candle
-TP_PIPS = 20               # take profit distance
-SL_PIPS = 15               # stop loss distance
+TP_PIPS = 10               # take profit distance
+SL_PIPS = 5               # stop loss distance
 FUTURE_CANDLES = 10        # how many candles ahead to check for TP/SL
 SPREAD = 0.0002            # 2 pips spread
 FOLLOW_DIRECTION = True    # follow candle direction, False for opposite
