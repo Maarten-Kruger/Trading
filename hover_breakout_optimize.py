@@ -65,11 +65,11 @@ def create_pdf(grid, defaults, top_df, filename):
 def main():
     df = pd.read_csv('EURUSD_M30_Data.csv')
     grid = {
-        'lookback_candles': [5, 10, 20, 50],
-        'range_pips': [2, 5, 10, 20],
-        'distance_pips': [5, 10, 20, 50],
-        'rr': [1, 2, 3, 5],
-        'lookahead_candles': [5, 8, 15, 30]
+        'lookback_candles': [10],
+        'range_pips': [12, 14, 16],
+        'distance_pips': [20, 30, 40],
+        'rr': [3],
+        'lookahead_candles': [30]
     }
     results = optimize(df, grid)
     results.to_csv('hover_breakout_optimization_results.csv', index=False)
