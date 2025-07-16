@@ -10,7 +10,6 @@ from reportlab.platypus import (
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
 
-
 import grouped_volatility_backtest as backtest_mod
 
 DEFAULT_PARAMS = {
@@ -82,12 +81,13 @@ def generate_report(grid, results, defaults, pdf_name):
     results_table = [['#', 'Final Equity', 'Max DD', 'Trades', 'Parameters']]
     for i, res in enumerate(results[:10], 1):
         params_str = ', '.join(f'{k}={v}' for k, v in res['Params'].items())
+        params_para = Paragraph(params_str, styles['Normal'])
         results_table.append([
             i,
             f"{res['Final Equity']:.2f}",
             f"{res['Max Drawdown']:.2f}%",
             res['Total Trades'],
-            params_str,
+            params_para,
         ])
 
     t = Table(results_table, hAlign='LEFT', colWidths=[30, 80, 80, 60, 230])
