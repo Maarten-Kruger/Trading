@@ -23,12 +23,12 @@ DEFAULT_PARAMS = {
 
 # Parameter ranges including some extreme values
 PARAM_GRID = {
-    'BACK_CANDLES': [DEFAULT_PARAMS['BACK_CANDLES'], 5, 10, 20, 50],
-    'CANDLE_SIZE_PIPS': [DEFAULT_PARAMS['CANDLE_SIZE_PIPS'], 10, 20, 30, 50],
-    'TP_PIPS': [DEFAULT_PARAMS['TP_PIPS'], 10, 20, 30, 50],
-    'SL_PIPS': [DEFAULT_PARAMS['SL_PIPS'], 10, 20, 30, 50],
-    'FUTURE_CANDLES': [DEFAULT_PARAMS['FUTURE_CANDLES'], 5, 10, 20, 50],
-    'FOLLOW_DIRECTION': [True, False],
+    'BACK_CANDLES': [3, 4, DEFAULT_PARAMS['BACK_CANDLES'], 6, 7],
+    'CANDLE_SIZE_PIPS': [16, 18, DEFAULT_PARAMS['CANDLE_SIZE_PIPS'], 22, 24],
+    'TP_PIPS': [3, 4, DEFAULT_PARAMS['TP_PIPS'], 6, 7],
+    'SL_PIPS': [3, 4, DEFAULT_PARAMS['SL_PIPS'], 6, 7],
+    'FUTURE_CANDLES': [40, 45, DEFAULT_PARAMS['FUTURE_CANDLES'], 55, 60],
+    'FOLLOW_DIRECTION': [False],
 }
 
 def run_strategy(back_candles, candle_size_pips, tp_pips, sl_pips, future_candles, follow_direction):
