@@ -5,15 +5,15 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
 # Strategy Parameters
-BACK_CANDLES = 2           # look back this many candles for previous big candle
+BACK_CANDLES = 5           # look back this many candles for previous big candle
 CANDLE_SIZE_PIPS = 15      # minimum size for a "large" candle
-TP_PIPS = 8               # take profit distance
-SL_PIPS = 3               # stop loss distance
-FUTURE_CANDLES = 12        # how many candles ahead to check for TP/SL
+TP_PIPS = 20               # take profit distance
+SL_PIPS = 15               # stop loss distance
+FUTURE_CANDLES = 10        # how many candles ahead to check for TP/SL
 SPREAD = 0.0002            # 2 pips spread
-FOLLOW_DIRECTION = False    # follow candle direction, False for opposite
+FOLLOW_DIRECTION = True    # follow candle direction, False for opposite
 
-RISK_PERCENT = 0.01        # percent of starting equity risked per trade
+RISK_PERCENT = 0.02        # percent of starting equity risked per trade
 STARTING_EQUITY = 10000
 
 DATA_FILE = 'EURUSD_M30_Data.csv'
@@ -64,27 +64,39 @@ def backtest(
         for j in range(0, future_candles + 1):
             high = df['High'].iloc[idx + j]
             low = df['Low'].iloc[idx + j]
+
+            # check for both TP and SL in same bar and assume SL hit first
             if direction == 1:
-                if high >= tp_price:
-                    close_price = tp_price
+                if high >= tp_price and low <= sl_price:
+                    close_price = sl_price
                     exit_time = df['Time'].iloc[idx + j]
-                    outcome = 'tp'
+                    outcome = 'sl'
                     break
                 if low <= sl_price:
                     close_price = sl_price
                     exit_time = df['Time'].iloc[idx + j]
                     outcome = 'sl'
                     break
-            else:
-                if low <= tp_price:
+                if high >= tp_price:
                     close_price = tp_price
                     exit_time = df['Time'].iloc[idx + j]
                     outcome = 'tp'
+                    break
+            else:
+                if low <= tp_price and high >= sl_price:
+                    close_price = sl_price
+                    exit_time = df['Time'].iloc[idx + j]
+                    outcome = 'sl'
                     break
                 if high >= sl_price:
                     close_price = sl_price
                     exit_time = df['Time'].iloc[idx + j]
                     outcome = 'sl'
+                    break
+                if low <= tp_price:
+                    close_price = tp_price
+                    exit_time = df['Time'].iloc[idx + j]
+                    outcome = 'tp'
                     break
 
         pnl_pips = (close_price - entry_price) * direction * 10000
