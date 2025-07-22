@@ -42,7 +42,7 @@ def backtest(
         window = df.iloc[idx - back_candles:idx]
         # look for most recent large candle within lookback window
         large_candles = [i for i in range(len(window))
-                         if window['High'].iloc[i] - window['Low'].iloc[i] >= size_threshold]
+                         if abs(window['Close'].iloc[i] - window['Open'].iloc[i]) >= size_threshold]
         if not large_candles:
             continue
         last_large_index = large_candles[-1]
