@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
@@ -58,7 +59,7 @@ def calculate_stats(
     curve = np.array(equity_curve)
     if len(curve) > 1:
         peaks = np.maximum.accumulate(curve)
-        drawdowns = (peaks - curve) / starting_equity * 100
+        drawdowns = (peaks - curve) / peaks * 100
         max_drawdown = drawdowns.max()
     else:
         max_drawdown = 0.0
@@ -68,29 +69,63 @@ def calculate_stats(
         'Partial Hits': partial_hits,
         'TP Hits': tp_hits,
         'SL Hits': sl_hits,
-        'Win Rate': win_rate,
-        'Average Win Size': avg_win,
-        'Average Loss Size': avg_loss,
-        'Max Drawdown': max_drawdown,
-        'Final Equity': equity_curve[-1],
+        'Win Rate': round(win_rate, 2),
+        'Average Win Size': round(avg_win, 2),
+        'Average Loss Size': round(avg_loss, 2),
+        'Max Drawdown': round(max_drawdown, 2),
+        'Final Equity': round(equity_curve[-1], 2),
     }
     return stats, list(zip(trades['Time Close'].tolist(), equity_curve[1:]))
 
 
-def create_pdf_report(stats: dict, filename: str = 'report.pdf') -> None:
-    """Generate a simple PDF report."""
+def create_pdf_report(
+    stats: dict,
+    equity_curve: list,
+    params: dict,
+    filename: str = 'report.pdf',
+) -> None:
+    """Generate a simple PDF report with equity graph."""
+    # Save equity curve plot
+    if equity_curve:
+        times, values = zip(*equity_curve)
+        plt.figure(figsize=(6, 3))
+        plt.plot(times, values, label='Equity')
+        plt.xlabel('Time')
+        plt.ylabel('Equity')
+        plt.title('Equity Curve')
+        plt.tight_layout()
+        plt.savefig('equity_curve.png')
+        plt.close()
+
     c = canvas.Canvas(filename, pagesize=letter)
     width, height = letter
     y = height - 40
     c.drawString(40, y, 'Backtest Results')
     y -= 20
+    for key, val in params.items():
+        c.drawString(40, y, f'{key}: {val}')
+        y -= 15
+    y -= 10
     for key, val in stats.items():
         c.drawString(40, y, f'{key}: {val}')
         y -= 15
+    if equity_curve:
+        y -= 20
+        c.drawImage('equity_curve.png', 40, y - 200, width=500, height=200)
     c.save()
 
 
 if __name__ == '__main__':
     trades = load_trades()
-    s, _ = calculate_stats(trades)
-    create_pdf_report(s)
+    params = {
+        'Starting Equity': 10000.0,
+        'Risk Factor': 0.01,
+        'Leverage': 1.0,
+    }
+    stats, curve = calculate_stats(
+        trades,
+        starting_equity=params['Starting Equity'],
+        risk_factor=params['Risk Factor'],
+        leverage=params['Leverage'],
+    )
+    create_pdf_report(stats, curve, params)
