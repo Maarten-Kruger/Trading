@@ -1,7 +1,7 @@
 import pandas as pd
 
 
-def load_market_data(filename: str = 'data.csv') -> pd.DataFrame:
+def load_market_data(filename: str = 'EURUSD_M30_Data.csv') -> pd.DataFrame:
     """Read price data and return a sorted DataFrame."""
     df = pd.read_csv(filename, parse_dates=['Time'])
     df.sort_values('Time', inplace=True)
