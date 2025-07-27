@@ -1,3 +1,4 @@
+import json
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,6 +14,15 @@ def load_trades(filename: str = 'tradelog.csv') -> pd.DataFrame:
     df = pd.read_csv(filename, parse_dates=['Time Open', 'Time Close'])
     df.sort_values('Time Close', inplace=True)
     return df
+
+
+def load_params(filename: str = 'strategy_params.json') -> dict:
+    """Load strategy parameters from a JSON file if it exists."""
+    try:
+        with open(filename, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
 
 
 def calculate_stats(
@@ -32,7 +42,7 @@ def calculate_stats(
     losses = []
 
     for _, row in trades.iterrows():
-        pip_diff = row['Pip Difference']
+        pip_diff = row['Pip PnL']
         status = row['Status']
         if status == 'tp':
             tp_hits += 1
@@ -122,6 +132,7 @@ if __name__ == '__main__':
         'Risk Factor': 0.01,
         'Leverage': 1.0,
     }
+    params.update(load_params())
     stats, curve = calculate_stats(
         trades,
         starting_equity=params['Starting Equity'],

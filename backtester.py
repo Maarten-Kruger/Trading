@@ -1,7 +1,9 @@
+import json
 import pandas as pd
 
 
-def load_market_data(filename: str = 'EURUSD_M30_Data.csv') -> pd.DataFrame:
+def load_market_data(filename: str = 'data.csv') -> pd.DataFrame:
+
     """Read price data and return a sorted DataFrame."""
     df = pd.read_csv(filename, parse_dates=['Time'])
     df.sort_values('Time', inplace=True)
@@ -36,7 +38,7 @@ def example_strategy(
             'Open Price': open_price,
             'Time Close': close_time,
             'Close Price': close_price,
-            'Pip Difference': pip_diff,
+            'Pip PnL': pip_diff,
             'Status': status,
             'SL': open_price - sl_pips / 10000 * direction,
             'TP': open_price + tp_pips / 10000 * direction,
@@ -47,4 +49,7 @@ def example_strategy(
 
 if __name__ == '__main__':
     df = load_market_data()
-    example_strategy(df)
+    params = {'SL Pips': 20, 'TP Pips': 20}
+    example_strategy(df, sl_pips=params['SL Pips'], tp_pips=params['TP Pips'])
+    with open('strategy_params.json', 'w') as f:
+        json.dump(params, f)
