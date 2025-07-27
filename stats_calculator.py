@@ -126,7 +126,7 @@ def create_pdf_report(
         c.drawImage('equity_curve.png', 40, y - 200, width=500, height=200)
     c.save()
 
-
+"""These are the real parameters"""
 if __name__ == '__main__':
     trades = load_trades()
     params = {

@@ -47,7 +47,7 @@ def example_strategy(
     pd.DataFrame(trades).to_csv('tradelog.csv', index=False)
     return trades
 
-
+"""This is the real parameters"""
 if __name__ == '__main__':
     df = load_market_data()
     params = {'SL Pips': 30, 'TP Pips': 20}
