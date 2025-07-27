@@ -18,8 +18,10 @@ def hover_breakout_strategy(
     sl_pips: int = 20,
     future_candles: int = 12,
     spread: float = 0.0002,
-) -> list:
-    """Execute the Hover Breakout strategy and return list of trades."""
+    save_log: bool = True,
+    log_filename: str = "tradelog_HoverBreakout.csv",
+) -> pd.DataFrame:
+    """Execute the Hover Breakout strategy and return trades as DataFrame."""
     trades = []
     pip = 0.0001
 
@@ -85,8 +87,10 @@ def hover_breakout_strategy(
                 'TP': tp_price,
             })
 
-    pd.DataFrame(trades).to_csv('tradelog_HoverBreakout.csv', index=False)
-    return trades
+    df_trades = pd.DataFrame(trades)
+    if save_log:
+        df_trades.to_csv(log_filename, index=False)
+    return df_trades
 
 
 if __name__ == '__main__':
@@ -107,6 +111,8 @@ if __name__ == '__main__':
         sl_pips=params['SL Pips'],
         future_candles=params['Future Candles'],
         spread=params['Spread'],
+        save_log=True,
+        log_filename='tradelog_HoverBreakout.csv',
     )
     with open('strategy_params.json', 'w') as f:
         json.dump(params, f)
