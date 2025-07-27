@@ -10,6 +10,7 @@ def load_market_data(filename: str = 'EURUSD_M30_Data.csv') -> pd.DataFrame:
     return df
 
 
+"""The below values are all just defualts. The real parameters are set in main"""
 def example_strategy(
     df: pd.DataFrame,
     sl_pips: int = 20,
@@ -49,7 +50,7 @@ def example_strategy(
 
 if __name__ == '__main__':
     df = load_market_data()
-    params = {'SL Pips': 20, 'TP Pips': 20}
+    params = {'SL Pips': 30, 'TP Pips': 20}
     example_strategy(df, sl_pips=params['SL Pips'], tp_pips=params['TP Pips'])
     with open('strategy_params.json', 'w') as f:
         json.dump(params, f)

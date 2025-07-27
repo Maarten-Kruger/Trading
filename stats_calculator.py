@@ -25,10 +25,11 @@ def load_params(filename: str = 'strategy_params.json') -> dict:
         return {}
 
 
+"""The below values are all just defualts. The real parameters are set in main"""
 def calculate_stats(
     trades: pd.DataFrame,
-    *,
-    starting_equity: float = 10000.0,
+    *, 
+    starting_equity: float = 10000.0, 
     risk_factor: float = 0.01,
     leverage: float = 100,
 ):
@@ -55,6 +56,7 @@ def calculate_stats(
         lot_size = (trade_size * leverage) / 100000
         pnl = PIP_VALUE * lot_size * pip_diff
         equity += pnl
+        print(equity)
         equity_curve.append(equity)
         if pnl >= 0:
             wins.append(pnl)
