@@ -30,7 +30,7 @@ def calculate_stats(
     *,
     starting_equity: float = 10000.0,
     risk_factor: float = 0.01,
-    leverage: float = 1.0,
+    leverage: float = 100,
 ):
     """Calculate metrics and simulate account equity."""
     equity = starting_equity
