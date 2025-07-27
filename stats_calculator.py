@@ -65,7 +65,6 @@ def calculate_stats(
         lot_size = (trade_size * leverage) / 100000
         pnl = PIP_VALUE * lot_size * pip_diff
         equity += pnl
-        print(equity)
         equity_curve.append(equity)
         if pnl >= 0:
             wins.append(pnl)
