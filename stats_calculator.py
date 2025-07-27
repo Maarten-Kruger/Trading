@@ -3,7 +3,16 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Table,
+    TableStyle,
+    Paragraph,
+    Spacer,
+    Image,
+)
 
 
 PIP_VALUE = 10  # $10 per pip per standard lot
@@ -96,8 +105,9 @@ def create_pdf_report(
     params: dict,
     filename: str = 'report.pdf',
 ) -> None:
-    """Generate a simple PDF report with equity graph."""
-    # Save equity curve plot
+    """Generate a PDF report with results and parameters formatted as tables."""
+
+    # Save equity curve plot if we have data
     if equity_curve:
         times, values = zip(*equity_curve)
         plt.figure(figsize=(6, 3))
@@ -109,22 +119,50 @@ def create_pdf_report(
         plt.savefig('equity_curve.png')
         plt.close()
 
-    c = canvas.Canvas(filename, pagesize=A4)
-    width, height = A4
-    y = height - 40
-    c.drawString(40, y, 'Backtest Results')
-    y -= 20
-    for key, val in params.items():
-        c.drawString(40, y, f'{key}: {val}')
-        y -= 15
-    y -= 10
-    for key, val in stats.items():
-        c.drawString(40, y, f'{key}: {val}')
-        y -= 15
+    doc = SimpleDocTemplate(filename, pagesize=A4)
+    styles = getSampleStyleSheet()
+    elements = []
+
+    elements.append(Paragraph('Backtest Results', styles['Title']))
+    elements.append(Spacer(1, 12))
+
+    # Parameters table
+    param_data = [['Parameter', 'Value']] + [[k, v] for k, v in params.items()]
+    param_table = Table(param_data, hAlign='LEFT')
+    param_table.setStyle(
+        TableStyle(
+            [
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ]
+        )
+    )
+    elements.append(Paragraph('Parameters', styles['Heading2']))
+    elements.append(param_table)
+    elements.append(Spacer(1, 12))
+
+    # Statistics table
+    stats_data = [['Metric', 'Value']] + [[k, v] for k, v in stats.items()]
+    stats_table = Table(stats_data, hAlign='LEFT')
+    stats_table.setStyle(
+        TableStyle(
+            [
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.lightgrey),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ]
+        )
+    )
+    elements.append(Paragraph('Results', styles['Heading2']))
+    elements.append(stats_table)
+    elements.append(Spacer(1, 12))
+
+    # Equity curve image
     if equity_curve:
-        y -= 20
-        c.drawImage('equity_curve.png', 40, y - 200, width=500, height=200)
-    c.save()
+        elements.append(Image('equity_curve.png', width=500, height=200))
+
+    doc.build(elements)
 
 
 if __name__ == '__main__':
