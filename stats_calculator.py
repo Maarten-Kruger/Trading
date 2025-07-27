@@ -2,7 +2,7 @@ import json
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
 
@@ -107,8 +107,8 @@ def create_pdf_report(
         plt.savefig('equity_curve.png')
         plt.close()
 
-    c = canvas.Canvas(filename, pagesize=letter)
-    width, height = letter
+    c = canvas.Canvas(filename, pagesize=A4)
+    width, height = A4
     y = height - 40
     c.drawString(40, y, 'Backtest Results')
     y -= 20
@@ -130,7 +130,7 @@ if __name__ == '__main__':
     params = {
         'Starting Equity': 10000.0,
         'Risk Factor': 0.01,
-        'Leverage': 1.0,
+        'Leverage': 100,
     }
     params.update(load_params())
     stats, curve = calculate_stats(
