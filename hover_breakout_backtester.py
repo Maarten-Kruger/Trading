@@ -98,6 +98,7 @@ def hover_breakout_strategy(
         'TP',
     ]
     df_trades = pd.DataFrame(trades, columns=columns)
+
     if save_log:
         df_trades.to_csv(log_filename, index=False)
     return df_trades

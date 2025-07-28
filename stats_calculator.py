@@ -18,7 +18,7 @@ from reportlab.platypus import (
 PIP_VALUE = 10  # $10 per pip per standard lot
 
 
-def load_trades(filename: str = 'tradelog.csv') -> pd.DataFrame:
+def load_trades(filename: str = 'tradelog_HoverBreakout.csv') -> pd.DataFrame:
     """Load trade log from CSV."""
     df = pd.read_csv(filename, parse_dates=['Time Open', 'Time Close'])
     df.sort_values('Time Close', inplace=True)
@@ -65,7 +65,6 @@ def calculate_stats(
         lot_size = (trade_size * leverage) / 100000
         pnl = PIP_VALUE * lot_size * pip_diff
         equity += pnl
-        print(equity)
         equity_curve.append(equity)
         if pnl >= 0:
             wins.append(pnl)
@@ -103,7 +102,7 @@ def create_pdf_report(
     stats: dict,
     equity_curve: list,
     params: dict,
-    filename: str = 'report.pdf',
+    filename: str = 'report_HoverBreakout.pdf',
 ) -> None:
     """Generate a PDF report with results and parameters formatted as tables."""
 
