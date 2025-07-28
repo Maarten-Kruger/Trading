@@ -52,26 +52,26 @@ def hover_breakout_strategy(
                 high = df['High'].iloc[idx + j]
                 low = df['Low'].iloc[idx + j]
                 if direction == 1:
-                    if high >= tp_price:
-                        close_price = tp_price
-                        close_time = df['Time'].iloc[idx + j]
-                        status = 'tp'
-                        break
                     if low <= sl_price:
                         close_price = sl_price
                         close_time = df['Time'].iloc[idx + j]
                         status = 'sl'
                         break
-                else:
-                    if low <= tp_price:
+                    if high >= tp_price:
                         close_price = tp_price
                         close_time = df['Time'].iloc[idx + j]
                         status = 'tp'
                         break
+                else:
                     if high >= sl_price:
                         close_price = sl_price
                         close_time = df['Time'].iloc[idx + j]
                         status = 'sl'
+                        break
+                    if low <= tp_price:
+                        close_price = tp_price
+                        close_time = df['Time'].iloc[idx + j]
+                        status = 'tp'
                         break
 
             pip_diff = (close_price - entry_price) * direction / pip
@@ -108,10 +108,10 @@ if __name__ == '__main__':
     df = load_market_data()
     params = {
         'Back Candles': 10,
-        'Range Pips': 8,
-        'TP Pips': 12,
-        'SL Pips': 20,
-        'Future Candles': 12,
+        'Range Pips': 12,
+        'TP Pips': 40,
+        'SL Pips': 80,
+        'Future Candles': 24,
         'Spread': 0.0002,
     }
     hover_breakout_strategy(
