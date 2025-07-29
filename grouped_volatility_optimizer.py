@@ -22,12 +22,12 @@ DEFAULT_PARAMS = {
 
 # Parameter grid mixes sensible and extreme values
 PARAM_GRID = {
-    "Back Candles": [10, DEFAULT_PARAMS["Back Candles"], 50],
-    "Candle Size Pips": [20, DEFAULT_PARAMS["Candle Size Pips"], 80],
-    "TP Pips": [20, DEFAULT_PARAMS["TP Pips"], 80],
-    "SL Pips": [20, DEFAULT_PARAMS["SL Pips"], 80],
-    "Future Candles": [10, DEFAULT_PARAMS["Future Candles"], 50],
-    "Follow Direction": [True, False],
+    "Back Candles": [15, 20, 25],             # centered on 20
+    "Candle Size Pips": [25, 30, 35],         # centered on 30
+    "TP Pips": [35, 40, 45],                  # centered on 40
+    "SL Pips": [20, 25, 30],                  # centered on 25
+    "Future Candles": [25, 30, 35],           # centered on 30
+    "Follow Direction": [False]               # keep fixed to the optimal value
 }
 
 

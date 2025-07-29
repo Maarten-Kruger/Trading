@@ -21,11 +21,11 @@ DEFAULT_PARAMS = {
 
 # Wider parameter grid for thorough search
 PARAM_GRID = {
-    "Back Candles": [5, 10, 20, 50, 100],
-    "Range Pips": [2, 4, 8, 12, 20],
-    "TP Pips": [8, 12, 20, 40, 80],
-    "SL Pips": [10, 20, 40, 80, 160],
-    "Future Candles": [6, 12, 24, 48, 96],
+    "Back Candles": [8, 9, 10, 11, 12],
+    "Range Pips": [10, 11, 12, 13, 14],
+    "TP Pips": [30, 35, 40, 45, 50],
+    "SL Pips": [60, 70, 80, 90, 100],
+    "Future Candles": [20, 22, 24, 26, 28],
 }
 
 

@@ -123,10 +123,10 @@ if __name__ == '__main__':
     params = {
         'Back Candles': 20,
         'Candle Size Pips': 30,
-        'TP Pips': 30,
-        'SL Pips': 30,
-        'Future Candles': 20,
-        'Follow Direction': True,
+        'TP Pips': 40,
+        'SL Pips': 25,
+        'Future Candles': 30,
+        'Follow Direction': False,
         'Spread': 0.0002,
     }
     grouped_volatility_strategy(
