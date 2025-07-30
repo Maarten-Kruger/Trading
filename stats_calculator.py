@@ -168,7 +168,7 @@ if __name__ == '__main__':
     trades = load_trades()
     params = {
         'Starting Equity': 10000.0,
-        'Risk Factor': 0.01,
+        'Risk Factor': 0.005,
         'Leverage': 100,
     }
     params.update(load_params())

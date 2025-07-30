@@ -121,11 +121,11 @@ def grouped_volatility_strategy(
 if __name__ == '__main__':
     df = load_market_data()
     params = {
-        'Back Candles': 20,
-        'Candle Size Pips': 30,
-        'TP Pips': 40,
+        'Back Candles': 25,
+        'Candle Size Pips': 25,
+        'TP Pips': 45,
         'SL Pips': 25,
-        'Future Candles': 30,
+        'Future Candles': 35,
         'Follow Direction': False,
         'Spread': 0.0002,
     }

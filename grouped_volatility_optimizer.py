@@ -22,14 +22,13 @@ DEFAULT_PARAMS = {
 
 # Parameter grid mixes sensible and extreme values
 PARAM_GRID = {
-    "Back Candles": [15, 20, 25],             # centered on 20
-    "Candle Size Pips": [25, 30, 35],         # centered on 30
-    "TP Pips": [35, 40, 45],                  # centered on 40
-    "SL Pips": [20, 25, 30],                  # centered on 25
-    "Future Candles": [25, 30, 35],           # centered on 30
-    "Follow Direction": [False]               # keep fixed to the optimal value
+    "Back Candles": [25, 30],             # centered on 20
+    "Candle Size Pips": [20, 25],         # centered on 30
+    "TP Pips": [45, 50],                  # centered on 40
+    "SL Pips": [25],                      # centered on 25
+    "Future Candles": [35, 40],           # centered on 30
+    "Follow Direction": [False]           # keep fixed to the optimal value
 }
-
 
 def run_test(df: pd.DataFrame, params: dict) -> dict:
     """Run backtest for a single parameter combination and return metrics."""
