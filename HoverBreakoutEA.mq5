@@ -4,7 +4,7 @@
 #include <Trade/Trade.mqh>
 
 input int    BackCandles    = 10;   // number of candles to define range
-input int    RangePips      = 8;    // maximum range size in pips
+input int    RangePips      = 50;    // maximum range size in pips
 input int    TPPips         = 12;   // take profit in pips
 input int    SLPips         = 20;   // stop loss in pips
 input int    FutureCandles  = 12;   // bars to hold the position
@@ -53,6 +53,7 @@ void OpenPosition(ENUM_ORDER_TYPE type)
       tp = price + TPPips * _Point;
       trade.SetDeviationInPoints(Slippage);
       trade.Buy(LotSize, _Symbol, price, sl, tp, "HoverBreakout");
+      Print("this is a buy");
    }
    else
    {
@@ -60,6 +61,7 @@ void OpenPosition(ENUM_ORDER_TYPE type)
       tp = price - TPPips * _Point;
       trade.SetDeviationInPoints(Slippage);
       trade.Sell(LotSize, _Symbol, price, sl, tp, "HoverBreakout");
+      Print("this is a sell");
    }
 }
 
