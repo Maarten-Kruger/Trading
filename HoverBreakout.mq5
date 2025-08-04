@@ -68,6 +68,7 @@ void CheckForEntry()
    if(!CalcRange(InpRangeBars, high, low))
       return; // Range condition not met
 
+
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
@@ -112,20 +113,3 @@ void OnTick()
    CheckForExit();   // manage existing position
    CheckForEntry();  // look for new opportunity
 }
-
-//+------------------------------------------------------------------+
-//+------------------------------------------------------------------+
-//| Custom optimization criterion for Strategy Tester                |
-//| Gives equal weight to trade count, profit and drawdown           |
-//+------------------------------------------------------------------+
-double OnTester()
-{
-   double trades   = TesterStatistics(STAT_TRADES);          // total closed deals
-   double profit   = TesterStatistics(STAT_PROFIT);          // net profit in currency
-   double drawdown = TesterStatistics(STAT_MAX_DD);          // maximal drawdown in currency
-
-   // maximize trades and profit while minimizing drawdown
-   return (trades/3.0) + (profit/3.0) - (drawdown/3.0);
-}
-
-//+------------------------------------------------------------------+
