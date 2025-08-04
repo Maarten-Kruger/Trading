@@ -142,7 +142,7 @@ double OnTester()
 {
    double trades   = TesterStatistics(STAT_TRADES);          // total closed deals
    double profit   = TesterStatistics(STAT_PROFIT);          // net profit in currency
-   double drawdown = TesterStatistics(STAT_MAX_DD);          // maximal drawdown in currency
+   double drawdown = TesterStatistics(STAT_MAX_DDREL);       // max relative drawdown in %
 
    // maximize trades and profit while minimizing drawdown
    return (trades/3.0) + (profit/3.0) - (drawdown/3.0);
