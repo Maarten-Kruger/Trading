@@ -62,15 +62,24 @@ bool CalcRange(int bars_back, double &range_high, double &range_low)
 //+------------------------------------------------------------------+
 void CheckForExit()
   {
-   if(!PositionSelect(_Symbol))
-      return;
+// Iterate through all open positions and close those that exceed the
+// maximum number of bars specified in InpMaxBarsOpen.
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket))
+         continue;
 
-   datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
-   int bars_open = iBarShift(_Symbol, _Period, open_time);
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      if(symbol != _Symbol)
+         continue;
 
-// Close the position if it has been open for too many bars
-   if(bars_open >= InpMaxBarsOpen)
-      trade.PositionClose(_Symbol);
+      datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
+      int bars_open = iBarShift(_Symbol, _Period, open_time);
+
+      if(bars_open >= InpMaxBarsOpen)
+         trade.PositionClose(ticket);
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -78,9 +87,6 @@ void CheckForExit()
 //+------------------------------------------------------------------+
 void CheckForEntry()
   {
-   if(PositionSelect(_Symbol))
-      return; // Only one position at a time
-
    double high, low;
    if(!CalcRange(InpRangeBars, high, low))
       return; // Range condition not met
