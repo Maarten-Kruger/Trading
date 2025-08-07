@@ -66,7 +66,8 @@ void CheckForExit()
 // maximum number of bars specified in InpMaxBarsOpen.
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
-      if(!PositionSelectByIndex(i))
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket))
          continue;
 
       string symbol = PositionGetString(POSITION_SYMBOL);
@@ -77,10 +78,7 @@ void CheckForExit()
       int bars_open = iBarShift(_Symbol, _Period, open_time);
 
       if(bars_open >= InpMaxBarsOpen)
-        {
-         ulong ticket = (ulong)PositionGetInteger(POSITION_TICKET);
          trade.PositionClose(ticket);
-        }
      }
   }
 
