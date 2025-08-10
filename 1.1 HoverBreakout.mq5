@@ -1,6 +1,6 @@
 #property copyright "MJ Kruger"
 #property link      "https://github.com/Maarten-Kruger/Trading"
-#property version   "1.1"
+#property version   "1.3"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -10,7 +10,7 @@ input int    InpRangeBars      = 10;     // Number of bars to define range (excl
 input double InpRangePoints    = 200;    // Maximum range size in points
 input double InpTPPoints       = 400;    // Take profit distance in points
 input double InpSLPoints       = 200;    // Stop loss distance in points
-input double InpLots           = 0.10;   // Lot size
+input double InpRiskPercent    = 1.0;    // Risk percentage of equity per trade
 input int    InpMaxBarsOpen    = 5;      // Maximum bars to keep position open
 input uint   InpSlippage       = 5;      // Slippage in points
 
@@ -54,7 +54,35 @@ bool CalcRange(int bars_back, double &range_high, double &range_low)
       if(l < range_low)
          range_low  = l;
      }
-   return((range_high - range_low) <= InpRangePoints * _Point);
+  return((range_high - range_low) <= InpRangePoints * _Point);
+ }
+
+//+------------------------------------------------------------------+
+//| Calculate trade volume based on equity risk                     |
+//+------------------------------------------------------------------+
+double CalcLotSize(double risk_percent)
+  {
+   double equity   = AccountInfoDouble(ACCOUNT_EQUITY);
+   double tick_val = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tick_size= SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double step     = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double min_vol  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double max_vol  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+
+// prevent division by zero
+   if(tick_val <= 0 || tick_size <= 0 || InpSLPoints <= 0)
+      return(min_vol);
+
+   double risk_amount   = equity * risk_percent / 100.0;
+   double stop_distance = InpSLPoints * _Point;
+   double ticks         = stop_distance / tick_size;
+   double lot           = risk_amount / (ticks * tick_val);
+
+// adjust to broker limits
+   lot = MathFloor(lot / step) * step;
+   lot = MathMax(min_vol, MathMin(max_vol, lot));
+
+   return(lot);
   }
 
 //+------------------------------------------------------------------+
@@ -95,13 +123,15 @@ void CheckForEntry()
 
    trade.SetDeviationInPoints(InpSlippage);
 
+   double lots = CalcLotSize(InpRiskPercent);
+
 // Breakout above the range -> buy
    if(last_close > high)
      {
       double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       double sl = price - InpSLPoints * _Point;
       double tp = price + InpTPPoints * _Point;
-      trade.Buy(InpLots, _Symbol, price, sl, tp, "HoverBreakout");
+      trade.Buy(lots, _Symbol, price, sl, tp, "HoverBreakout");
      }
 // Breakout below the range -> sell
    else
@@ -110,7 +140,7 @@ void CheckForEntry()
          double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
          double sl = price + InpSLPoints * _Point;
          double tp = price - InpTPPoints * _Point;
-         trade.Sell(InpLots, _Symbol, price, sl, tp, "HoverBreakout");
+         trade.Sell(lots, _Symbol, price, sl, tp, "HoverBreakout");
         }
   }
 
