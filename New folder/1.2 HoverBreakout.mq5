@@ -10,7 +10,7 @@ input int    InpRangeBars      = 10;     // Number of bars to define range (excl
 input double InpRangePoints    = 200;    // Maximum range size in points
 input double InpTPPoints       = 400;    // Take profit distance in points
 input double InpSLPoints       = 200;    // Stop loss distance in points
-input double InpRiskPercent    = 1.0;    // Risk percentage of equity per trade
+input double InpRiskPercent    = 10.0;    // Risk percentage of equity per trade
 input int    InpMaxBarsOpen    = 5;      // Maximum bars to keep position open
 input uint   InpSlippage       = 5;      // Slippage in points
 
