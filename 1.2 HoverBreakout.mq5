@@ -10,7 +10,7 @@ input int    InpRangeBars      = 10;     // Number of bars to define range (excl
 input double InpRangePoints    = 200;    // Maximum range size in points
 input double InpTPPoints       = 400;    // Take profit distance in points
 input double InpSLPoints       = 200;    // Stop loss distance in points
-input double InpRiskPercent    = 10.0;    // Risk percentage of equity per trade
+input double InpRiskPercent    = 1.0;    // Risk percentage of equity per trade
 input int    InpMaxBarsOpen    = 5;      // Maximum bars to keep position open
 input uint   InpSlippage       = 5;      // Slippage in points
 
@@ -73,8 +73,10 @@ double CalcLotSize(double risk_percent)
    if(tick_val <= 0 || tick_size <= 0 || InpSLPoints <= 0)
       return(min_vol);
 
-   double risk_amount = equity * risk_percent / 100.0;
-   double lot = risk_amount / (InpSLPoints * tick_val / tick_size);
+   double risk_amount   = equity * risk_percent / 100.0;
+   double stop_distance = InpSLPoints * _Point;
+   double ticks         = stop_distance / tick_size;
+   double lot           = risk_amount / (ticks * tick_val);
 
 // adjust to broker limits
    lot = MathFloor(lot / step) * step;
