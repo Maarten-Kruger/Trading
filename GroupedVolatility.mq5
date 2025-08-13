@@ -6,7 +6,7 @@
 #include <Trade/Trade.mqh>
 
 //--- input parameters
-input double InpLots            = 0.10;   // Lot size
+input double InpRiskPercent     = 1.0;    // Percent of equity to risk
 input uint   InpSlippage        = 5;      // Slippage in points
 input int    InpLookback        = 2;      // Number of candles to group
 input double InpMinPipSize      = 10;     // Minimum candle size in pips
@@ -59,6 +59,33 @@ bool AreGroupedCandlesLarge(int lookback, double minPips)
   }
 
 //+------------------------------------------------------------------+
+//| Helper: calculate trade volume based on equity risk               |
+//+------------------------------------------------------------------+
+double VolumeForRisk(double stopLossPips, double riskPercent)
+  {
+   double equity      = AccountInfoDouble(ACCOUNT_EQUITY);
+   double risk_money  = equity * riskPercent / 100.0;
+
+   double tick_value  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tick_size   = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double pip_value   = tick_value * PipsToPrice(1.0) / tick_size; // value of one pip per lot
+   double risk_per_lot = stopLossPips * pip_value;
+   if(risk_per_lot <= 0.0)
+      return(0.0);
+
+   double volume = risk_money / risk_per_lot;
+
+   double minVol  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxVol  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double stepVol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+
+   volume = MathFloor(volume / stepVol) * stepVol; // align with volume step
+   volume = MathMax(minVol, MathMin(maxVol, volume));
+
+   return(volume);
+  }
+
+//+------------------------------------------------------------------+
 //| Expert initialization                                            |
 //+------------------------------------------------------------------+
 int OnInit()
@@ -97,11 +124,15 @@ void OnTick()
    double tp_dist  = sl_dist * InpRiskReward;
    double sl       = isBull ? price - sl_dist : price + sl_dist;
    double tp       = isBull ? price + tp_dist : price - tp_dist;
+   double volume   = VolumeForRisk(InpStopLossPips, InpRiskPercent);
+
+   if(volume <= 0.0)
+      return;                          // volume could not be calculated
 
    trade.SetDeviationInPoints(InpSlippage);
 
    if(isBull)
-      trade.Buy(InpLots, _Symbol, price, sl, tp);
+      trade.Buy(volume, _Symbol, price, sl, tp);
    else
-      trade.Sell(InpLots, _Symbol, price, sl, tp);
+      trade.Sell(volume, _Symbol, price, sl, tp);
   }
