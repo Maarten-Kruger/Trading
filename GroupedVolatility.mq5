@@ -106,13 +106,19 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
-   // If a position exists, ensure it doesn't exceed maximum hold time
-   if(PositionSelect(_Symbol))
+   // Close any positions that have exceeded the maximum hold time
+   for(int i=PositionsTotal()-1; i>=0; i--)
      {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;  // only manage positions for this symbol
+
       datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
       if(InpMaxHoldMinutes > 0 && (TimeCurrent() - open_time) >= InpMaxHoldMinutes*60)
-         trade.PositionClose(_Symbol); // close trade if held too long
-      return;                          // only one position at a time
+         trade.PositionClose(ticket); // close trade if held too long
      }
 
    if(!IsNewBar())
