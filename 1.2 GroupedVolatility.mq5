@@ -31,17 +31,11 @@ double PipsToPrice(const double pips)
 //+------------------------------------------------------------------+
 //| Helper: detect new bar                                           |
 //+------------------------------------------------------------------+
-bool IsNewBar()
-  {
-   static datetime last_bar_time = 0;
-   datetime current_bar_time = iTime(_Symbol, _Period, 0);
-   if(current_bar_time != last_bar_time)
-     {
-      last_bar_time = current_bar_time;
-      return(true);
-     }
-   return(false);
-  }
+// Previously a helper existed to guard against running the strategy more than
+// once per bar.  To support running multiple trades concurrently the expert
+// now tracks the last bar it acted on inside `OnTick()` directly.
+// The old `IsNewBar()` helper has been removed to avoid accidentally skipping
+// pattern checks when positions are already open.
 
 //+------------------------------------------------------------------+
 //| Helper: check if recent candles are large                        |
@@ -121,8 +115,14 @@ void OnTick()
          trade.PositionClose(ticket); // close trade if held too long
      }
 
-   if(!IsNewBar())
-      return;                          // work only on new bar
+   static datetime last_trade_bar = 0;
+   datetime current_bar_time = iTime(_Symbol, _Period, 0);
+
+   // Only take one trade per bar but continue to monitor patterns even when
+   // positions are open.  This allows stacking positions across bars when the
+   // setup reappears.
+   if(current_bar_time == last_trade_bar)
+      return;
 
    if(!AreGroupedCandlesLarge(InpLookback, InpMinPipSize))
       return;                          // recent candles not large enough
@@ -148,4 +148,6 @@ void OnTick()
       trade.Buy(volume, _Symbol, price, sl, tp);
    else
       trade.Sell(volume, _Symbol, price, sl, tp);
+
+   last_trade_bar = current_bar_time;  // remember when the last trade was placed
   }
