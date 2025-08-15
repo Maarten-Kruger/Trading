@@ -13,6 +13,7 @@ input double InpMinPipSize      = 10;     // Minimum candle size in pips
 input bool   InpReverse         = false;  // Trade opposite direction
 input double InpStopLossPips    = 15;     // Stop loss distance in pips
 input double InpRiskReward      = 2.0;    // Risk to reward ratio
+input int    InpMaxHoldMinutes  = 60;     // Maximum time to hold a trade (minutes)
 
 CTrade trade;                         // trading object
 
@@ -105,11 +106,23 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
+   // Close any positions that have exceeded the maximum hold time
+   for(int i=PositionsTotal()-1; i>=0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;  // only manage positions for this symbol
+
+      datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
+      if(InpMaxHoldMinutes > 0 && (TimeCurrent() - open_time) >= InpMaxHoldMinutes*60)
+         trade.PositionClose(ticket); // close trade if held too long
+     }
+
    if(!IsNewBar())
       return;                          // work only on new bar
-
-   if(PositionSelect(_Symbol))
-      return;                          // only one position at a time
 
    if(!AreGroupedCandlesLarge(InpLookback, InpMinPipSize))
       return;                          // recent candles not large enough
