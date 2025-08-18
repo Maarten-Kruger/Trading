@@ -7,7 +7,6 @@ Usage:
 If no path is supplied, the script prompts for one on startup. Scroll up to
 move forward through candles and scroll down to go backward. The CSV file must
 contain columns: ``Open``, ``High``, ``Low`` and ``Close`` (case-sensitive).
-"""
 
 from __future__ import annotations
 

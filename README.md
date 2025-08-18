@@ -15,6 +15,7 @@ Scroll up to move forward through candles and scroll down to go backward.
 
 Run it with a path to the data file:
 
+
 ```bash
 python visualize_ohlc.py path/to/data.csv
 ```
