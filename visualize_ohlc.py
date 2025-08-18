@@ -83,7 +83,7 @@ def load_csv(path: str) -> pd.DataFrame:
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: python visualize_ohlc.py <data.csv>")
+        print("Usage: python visualize_ohlc.py <EURUSD30.csv>")
         sys.exit(1)
 
     df = load_csv(sys.argv[1])
