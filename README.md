@@ -13,8 +13,16 @@ setup reappears on new bars.
 `visualize_ohlc.py` provides a small matplotlib-based viewer for OHLC CSV data.
 Scroll up to move forward through candles and scroll down to go backward.
 
-Run it with:
+Run it with a path to the data file:
+
 
 ```bash
 python visualize_ohlc.py path/to/data.csv
+```
+
+Or simply execute the script and enter the path when prompted:
+
+```bash
+python visualize_ohlc.py
+Path to OHLC CSV file: path/to/data.csv
 ```
