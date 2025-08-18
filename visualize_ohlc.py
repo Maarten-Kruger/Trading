@@ -2,15 +2,15 @@
 """Simple OHLC candlestick viewer with scroll navigation.
 
 Usage:
-    python visualize_ohlc.py path/to/data.csv
+    python visualize_ohlc.py [path/to/data.csv]
 
-Scroll up to move forward through candles and scroll down to go backward.
-The CSV file must contain columns: Open, High, Low, Close (case-sensitive).
-"""
+If no path is supplied, the script prompts for one on startup. Scroll up to
+move forward through candles and scroll down to go backward. The CSV file must
+contain columns: ``Open``, ``High``, ``Low`` and ``Close`` (case-sensitive).
 
 from __future__ import annotations
 
-import sys
+import argparse
 from typing import Set
 
 import pandas as pd
@@ -82,12 +82,16 @@ def load_csv(path: str) -> pd.DataFrame:
 
 
 def main() -> None:
-    if len(sys.argv) < 2:
-        print("Usage: python visualize_ohlc.py <EURUSD30.csv>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Interactive OHLC viewer")
+    parser.add_argument("csv", nargs="?", help="Path to OHLC CSV file")
+    parser.add_argument(
+        "--window", type=int, default=50, help="Number of candles to display"
+    )
+    args = parser.parse_args()
 
-    df = load_csv(sys.argv[1])
-    viewer = OHLCViewer(df)
+    csv_path = args.csv or input("Path to OHLC CSV file: ").strip()
+    df = load_csv(csv_path)
+    viewer = OHLCViewer(df, window=args.window)
     viewer.show()
 
 
