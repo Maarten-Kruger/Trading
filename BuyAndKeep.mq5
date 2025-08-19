@@ -8,7 +8,7 @@
 //--- input parameters
 input int    InpCandlesBack      = 20;      // Number of candles to average
 input int    InpEntryDeviation   = 100;     // Entry threshold below average (points)
-input int    InpTakeProfitFactor = 5;       // TP distance in multiples of average candle size
+input int    InpTakeProfitPips   = 50;      // Take profit distance in pips
 input double InpRiskPercent      = 1.0;     // Percent of equity to risk per trade
 input double InpMaxDrawdown      = 30.0;    // Max equity drawdown percentage before closing all
 
@@ -44,6 +44,16 @@ double CalculateLotSize()
    double volume      = equity * InpRiskPercent / 100.0 / 100000.0; // basic approximation
    volume             = MathMax(min_lot, MathMin(max_lot, MathFloor(volume/lot_step)*lot_step));
    return(volume);
+  }
+
+//+------------------------------------------------------------------+
+//| Get pip size for current symbol                                  |
+//+------------------------------------------------------------------+
+double GetPipSize()
+  {
+   if(_Digits == 3 || _Digits == 5)
+      return(_Point * 10.0);
+   return(_Point);
   }
 
 //+------------------------------------------------------------------+
@@ -97,22 +107,19 @@ void OnTick()
    if(!IsNewBar())
       return;
 
-   //--- calculate average price and range of the past candles
+   //--- calculate average price of the past candles
    double avg_price = 0.0;
-   double avg_range = 0.0;
    for(int i=1; i<=InpCandlesBack; i++)
      {
       avg_price += iClose(_Symbol, _Period, i);
-      avg_range += (iHigh(_Symbol, _Period, i) - iLow(_Symbol, _Period, i));
      }
    avg_price /= InpCandlesBack;
-   avg_range /= InpCandlesBack;
 
    //--- entry condition
    double open_price = iOpen(_Symbol, _Period, 0);
    if(open_price <= avg_price - InpEntryDeviation * _Point)
      {
-      double tp_price = open_price + avg_range * InpTakeProfitFactor;
+      double tp_price = open_price + GetPipSize() * InpTakeProfitPips;
       double volume   = CalculateLotSize();
 
       trade.Buy(volume, _Symbol, open_price, 0.0, tp_price);
