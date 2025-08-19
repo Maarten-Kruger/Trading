@@ -6,7 +6,7 @@ Usage:
 
 If no path is supplied, the script prompts for one on startup. Scroll up to
 move forward through candles and scroll down to go backward. The CSV file must
-contain columns: ``Open``, ``High``, ``Low`` and ``Close`` (case-sensitive).
+contain columns: ``Open``, ``High``, ``Low`` and ``Close`` (case-sensitive)."""
 
 from __future__ import annotations
 
@@ -61,7 +61,6 @@ class OHLCViewer:
         self.fig.canvas.draw_idle()
 
     def on_scroll(self, event) -> None:
-        """Handle scroll events to navigate data."""
         if event.button == "up":
             self.start = min(len(self.df) - self.window, self.start + 1)
         elif event.button == "down":
