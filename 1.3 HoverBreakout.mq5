@@ -1,6 +1,6 @@
 #property copyright "MJ Kruger"
 #property link      "https://github.com/Maarten-Kruger/Trading"
-#property version   "1.2"
+#property version   "1.3"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -13,6 +13,9 @@ input double InpSLPoints       = 200;    // Stop loss distance in points
 input double InpRiskPercent    = 1.0;    // Risk percentage of equity per trade
 input int    InpMaxBarsOpen    = 5;      // Maximum bars to keep position open
 input uint   InpSlippage       = 5;      // Slippage in points
+input double InpWt             = 40.0;   // Weight % for trade density
+input double InpWp             = 40.0;   // Weight % for monthly consistency
+input double InpWd             = 20.0;   // Weight % for drawdown
 
 //--- global objects
 CTrade  trade;               // trading object
@@ -170,4 +173,103 @@ void OnTick()
 
    CheckForExit();   // manage existing position
    CheckForEntry();  // look for new opportunity
+  }
+
+//+------------------------------------------------------------------+
+//| Calculate average monthly profit consistency                     |
+//+------------------------------------------------------------------+
+double CalcMonthlyConsistency()
+  {
+   // Select entire trading history of the test
+   if(!HistorySelect(0, TimeCurrent()))
+      return(0.0);
+
+   int    deals_total    = HistoryDealsTotal();
+   if(deals_total == 0)
+      return(0.0);
+
+   double initial_equity = TesterStatistics(STAT_INITIAL_DEPOSIT);
+   double month_start_eq = initial_equity;
+   double month_profit   = 0.0;
+   int    current_month  = -1;
+   int    current_year   = -1;
+   double sum_ratios     = 0.0;
+   int    months         = 0;
+
+   for(int i = 0; i < deals_total; i++)
+     {
+      ulong     ticket = HistoryDealGetTicket(i);
+      datetime  time   = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+      double    profit = HistoryDealGetDouble(ticket, DEAL_PROFIT)
+                      + HistoryDealGetDouble(ticket, DEAL_SWAP)
+                      + HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+
+      MqlDateTime dt;
+      TimeToStruct(time, dt);
+      int year  = dt.year;
+      int month = dt.mon;
+
+      // initialize tracking on first iteration
+      if(current_month == -1)
+        {
+         current_month = month;
+         current_year  = year;
+        }
+
+      // if month changed, finalise previous month's calculation
+      if(month != current_month || year != current_year)
+        {
+         if(month_start_eq > 0.0)
+           {
+            sum_ratios += month_profit / month_start_eq;
+            months++;
+            month_start_eq += month_profit; // update equity for next month
+           }
+         month_profit  = 0.0;
+         current_month = month;
+         current_year  = year;
+        }
+
+      month_profit += profit;
+     }
+
+   // final month
+   if(month_start_eq > 0.0)
+     {
+      sum_ratios += month_profit / month_start_eq;
+      months++;
+     }
+
+   if(months == 0)
+      return(0.0);
+
+   return(sum_ratios / months);
+  }
+
+//+------------------------------------------------------------------+
+//| Custom optimization criterion                                    |
+//+------------------------------------------------------------------+
+double OnTester()
+  {
+   // Trade density: total trades divided by total bars
+   double profit_trades = TesterStatistics(STAT_PROFIT_TRADES);
+   double loss_trades   = TesterStatistics(STAT_LOSS_TRADES);
+   double total_trades  = profit_trades + loss_trades;
+   double total_bars    = (double)Bars(_Symbol, _Period);
+   double trade_density = (total_bars > 0.0) ? total_trades / total_bars : 0.0;
+
+   // Monthly profit consistency
+   double consistency   = CalcMonthlyConsistency();
+
+   // Relative drawdown calculated from absolute drawdown and initial equity
+   double dd_abs        = TesterStatistics(STAT_MAXIMAL_DD);
+   double initial       = TesterStatistics(STAT_INITIAL_DEPOSIT);
+   double drawdown      = (initial > 0.0) ? dd_abs / initial : 0.0;
+
+   // Weighted objective value (weights sum to 100%)
+   double result = trade_density * InpWt +
+                   consistency   * InpWp -
+                   drawdown      * InpWd;
+
+   return(result);
   }
