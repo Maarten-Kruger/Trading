@@ -186,9 +186,9 @@ double OnTester()
   {
    // Retrieve base statistics from the strategy tester
    double trades      = TesterStatistics(STAT_TRADES);                 // total number of trades
-   double bars        = TesterStatistics(STAT_BARS);                   // total number of bars in test
+   double bars        = (double)Bars(_Symbol, PERIOD_CURRENT);         // total number of bars in test
    double profit      = TesterStatistics(STAT_PROFIT);                 // total net profit
-   double months      = TesterStatistics(STAT_MONTHS);                 // test length in months
+   double months      = (double)Bars(_Symbol, PERIOD_MN1);             // test length in months
    double drawdownPct = TesterStatistics(STAT_EQUITY_DDREL_PERCENT);   // relative drawdown
 
    double tradeDensity = 0.0;
