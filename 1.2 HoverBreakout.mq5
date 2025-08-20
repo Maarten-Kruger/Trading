@@ -162,7 +162,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 //| Expert tick function                                            |
 //+------------------------------------------------------------------+
-void OnTick()
+void OnTick() 
   {
 // Only run logic once per new bar, loops otherwise
    if(!IsNewBar())
