@@ -248,12 +248,7 @@ double OnTester()
 
 
    // Objective value to maximise during optimisation
-   double score = tradeDensity * wt + monthlyProfit * wp - drawdownPct * wd;
-   printf("Trades percentage number thingy = " + tradeDensity);
-   printf("Monthly Profit percentage number thingy = " + monthlyProfit);
-   printf("Drawdown percentage number thingy = " + drawdownPct);
-   printf("Bars percentage number thingy = " + bars);
-   printf("Months percentage number thingy = " + months);
+   double score = (tradeDensity * wt + monthlyProfit * wp - drawdownPct * wd)*100;
    
    
    return(score);
