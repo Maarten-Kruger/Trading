@@ -20,6 +20,46 @@ input double InpWd             = 20.0;   // Weight % for drawdown
 //--- global objects
 CTrade  trade;               // trading object
 
+//--- variables to track tester period
+datetime g_test_start = 0;
+datetime g_test_end   = 0;
+int      g_bars_in_test = 0;
+
+//+------------------------------------------------------------------+
+//| Update test counters on each new bar                             |
+//+------------------------------------------------------------------+
+void UpdateTestCounters()
+  {
+   datetime bar_time = iTime(_Symbol,_Period,0);
+   if(g_test_start==0)
+      g_test_start = bar_time;
+   g_test_end = bar_time;
+   g_bars_in_test++;
+  }
+
+//+------------------------------------------------------------------+
+//| Return number of bars processed in tester                        |
+//+------------------------------------------------------------------+
+int BarsInTest()
+  {
+   return(g_bars_in_test);
+  }
+
+//+------------------------------------------------------------------+
+//| Return number of months spanned by tester                        |
+//+------------------------------------------------------------------+
+int MonthsInTest()
+  {
+   if(g_test_start==0 || g_test_end==0)
+      return(0);
+
+   MqlDateTime st,en;
+   TimeToStruct(g_test_start,st);
+   TimeToStruct(g_test_end,en);
+
+   return((en.year - st.year) * 12 + (en.month - st.month) + 1);
+  }
+
 //+------------------------------------------------------------------+
 //| Helper: detect new bar                                          |
 //+------------------------------------------------------------------+
@@ -171,6 +211,8 @@ void OnTick()
    if(!IsNewBar())
       return;
 
+   UpdateTestCounters();
+
    CheckForExit();   // manage existing position
    CheckForEntry();  // look for new opportunity
   }
@@ -186,10 +228,10 @@ double OnTester()
   {
    // Retrieve base statistics from the strategy tester
    double trades        = TesterStatistics(STAT_TRADES);                 // total number of trades
-   double bars          = (double)Bars(_Symbol, PERIOD_CURRENT);         // total number of bars in test
+   double bars          = (double)BarsInTest();                          // total number of bars in test
    double profit        = TesterStatistics(STAT_PROFIT);                 // total net profit
    double startEquity   = TesterStatistics(STAT_INITIAL_DEPOSIT);        // starting equity
-   double months        = (double)Bars(_Symbol, PERIOD_MN1);             // test length in months
+   double months        = (double)MonthsInTest();                        // test length in months
    double drawdownPct   = TesterStatistics(STAT_EQUITY_DDREL_PERCENT)/100;   // relative drawdown
 
    double tradeDensity = 0.0;
