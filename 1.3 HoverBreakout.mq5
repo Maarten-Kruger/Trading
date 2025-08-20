@@ -20,6 +20,40 @@ input double InpWd             = 20.0;   // Weight % for drawdown
 //--- global objects
 CTrade  trade;               // trading object
 
+//--- test tracking variables
+datetime g_test_start = 0;   // first bar time in test
+datetime g_test_end   = 0;   // last bar time in test
+int      g_total_bars = 0;   // number of processed bars
+
+//+------------------------------------------------------------------+
+//| Update test time and bar counters                                |
+//+------------------------------------------------------------------+
+void UpdateTestStats()
+  {
+   datetime now = TimeCurrent();
+   if(g_test_start == 0)
+      g_test_start = now;
+   g_test_end = now;
+   g_total_bars++;
+  }
+
+//+------------------------------------------------------------------+
+//| Calculate number of months between two datetimes                 |
+//+------------------------------------------------------------------+
+double CalcMonths(datetime start_time, datetime end_time)
+  {
+   if(start_time == 0 || end_time == 0)
+      return(0.0);
+
+   MqlDateTime start_struct, end_struct;
+   TimeToStruct(start_time, start_struct);
+   TimeToStruct(end_time,   end_struct);
+
+   int months = (end_struct.year - start_struct.year) * 12 +
+                (end_struct.mon  - start_struct.mon)  + 1;
+   return((double)months);
+  }
+
 //+------------------------------------------------------------------+
 //| Helper: detect new bar                                          |
 //+------------------------------------------------------------------+
@@ -160,6 +194,7 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
+   g_test_end = TimeCurrent();
   }
 
 //+------------------------------------------------------------------+
@@ -168,8 +203,11 @@ void OnDeinit(const int reason)
 void OnTick()
   {
 // Only run logic once per new bar, loops otherwise
-   if(!IsNewBar())
+   bool new_bar = IsNewBar();
+   if(!new_bar)
       return;
+
+   UpdateTestStats();
 
    CheckForExit();   // manage existing position
    CheckForEntry();  // look for new opportunity
@@ -186,10 +224,10 @@ double OnTester()
   {
    // Retrieve base statistics from the strategy tester
    double trades        = TesterStatistics(STAT_TRADES);                 // total number of trades
-   double bars          = (double)Bars(_Symbol, PERIOD_CURRENT);         // total number of bars in test
+   double bars          = (double)g_total_bars;                          // total number of bars processed
    double profit        = TesterStatistics(STAT_PROFIT);                 // total net profit
    double startEquity   = TesterStatistics(STAT_INITIAL_DEPOSIT);        // starting equity
-   double months        = (double)Bars(_Symbol, PERIOD_MN1);             // test length in months
+   double months        = CalcMonths(g_test_start, g_test_end);          // test length in months
    double drawdownPct   = TesterStatistics(STAT_EQUITY_DDREL_PERCENT)/100;   // relative drawdown
 
    double tradeDensity = 0.0;
