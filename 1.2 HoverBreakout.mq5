@@ -1,6 +1,6 @@
 #property copyright "MJ Kruger"
 #property link      "https://github.com/Maarten-Kruger/Trading"
-#property version   "1.2"
+#property version   "1.3"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -165,7 +165,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 //| Expert tick function                                            |
 //+------------------------------------------------------------------+
-void OnTick() 
+void OnTick()
   {
 // Only run logic once per new bar, loops otherwise
    if(!IsNewBar())
@@ -204,8 +204,10 @@ double CalcMonthlyConsistency()
                       + HistoryDealGetDouble(ticket, DEAL_SWAP)
                       + HistoryDealGetDouble(ticket, DEAL_COMMISSION);
 
-      int year  = TimeYear(time);
-      int month = TimeMonth(time);
+      MqlDateTime dt;
+      TimeToStruct(time, dt);
+      int year  = dt.year;
+      int month = dt.mon;
 
       // initialize tracking on first iteration
       if(current_month == -1)
@@ -253,14 +255,14 @@ double OnTester()
    double profit_trades = TesterStatistics(STAT_PROFIT_TRADES);
    double loss_trades   = TesterStatistics(STAT_LOSS_TRADES);
    double total_trades  = profit_trades + loss_trades;
-   double total_bars    = TesterStatistics(STAT_BARS);
+   double total_bars    = (double)Bars(_Symbol, _Period);
    double trade_density = (total_bars > 0.0) ? total_trades / total_bars : 0.0;
 
    // Monthly profit consistency
    double consistency   = CalcMonthlyConsistency();
 
    // Relative drawdown calculated from absolute drawdown and initial equity
-   double dd_abs        = TesterStatistics(STAT_MAX_DD);
+   double dd_abs        = TesterStatistics(STAT_MAXIMAL_DD);
    double initial       = TesterStatistics(STAT_INITIAL_DEPOSIT);
    double drawdown      = (initial > 0.0) ? dd_abs / initial : 0.0;
 
