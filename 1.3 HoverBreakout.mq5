@@ -175,3 +175,40 @@ void OnTick()
    CheckForEntry();  // look for new opportunity
   }
 
+//+------------------------------------------------------------------+
+//| Custom optimization criterion                                    |
+//| y = T*Wt + P*Wp - D*Wd                                           |
+//|   T : trade density = total trades / total bars                  |
+//|   P : monthly profit = total profit / months                     |
+//|   D : relative drawdown percent from tester statistics           |
+//+------------------------------------------------------------------+
+double OnTester()
+  {
+   // Retrieve base statistics from the strategy tester
+   double trades      = TesterStatistics(STAT_TRADES);                 // total number of trades
+   double bars        = TesterStatistics(STAT_BARS);                   // total number of bars in test
+   double profit      = TesterStatistics(STAT_PROFIT);                 // total net profit
+   double months      = TesterStatistics(STAT_MONTHS);                 // test length in months
+   double drawdownPct = TesterStatistics(STAT_EQUITY_DDREL_PERCENT);   // relative drawdown
+
+   double tradeDensity = 0.0;
+   if(bars > 0.0)
+      tradeDensity = trades / bars;
+
+   double monthlyProfit = 0.0;
+   if(months > 0.0)
+      monthlyProfit = profit / months;
+
+   // Normalise weights so they sum to 1.0 even if inputs don't add to 100
+   double weightSum = InpWt + InpWp + InpWd;
+   if(weightSum <= 0.0)
+      weightSum = 1.0;
+   double wt = InpWt / weightSum;
+   double wp = InpWp / weightSum;
+   double wd = InpWd / weightSum;
+
+   // Objective value to maximise during optimisation
+   double score = tradeDensity * wt + monthlyProfit * wp - drawdownPct * wd;
+   return(score);
+  }
+
