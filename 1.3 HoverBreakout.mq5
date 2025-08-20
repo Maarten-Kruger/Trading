@@ -190,7 +190,7 @@ double OnTester()
    double profit        = TesterStatistics(STAT_PROFIT);                 // total net profit
    double startEquity   = TesterStatistics(STAT_INITIAL_DEPOSIT);        // starting equity
    double months        = (double)Bars(_Symbol, PERIOD_MN1);             // test length in months
-   double drawdownPct   = TesterStatistics(STAT_EQUITY_DDREL_PERCENT);   // relative drawdown
+   double drawdownPct   = TesterStatistics(STAT_EQUITY_DDREL_PERCENT)/100;   // relative drawdown
 
    double tradeDensity = 0.0;
    if(bars > 0.0)
@@ -208,8 +208,16 @@ double OnTester()
    double wp = InpWp / weightSum;
    double wd = InpWd / weightSum;
 
+
    // Objective value to maximise during optimisation
    double score = tradeDensity * wt + monthlyProfit * wp - drawdownPct * wd;
+   printf("Trades percentage number thingy = " + tradeDensity);
+   printf("Monthly Profit percentage number thingy = " + monthlyProfit);
+   printf("Drawdown percentage number thingy = " + drawdownPct);
+   printf("Bars percentage number thingy = " + bars);
+   printf("Months percentage number thingy = " + months);
+   
+   
    return(score);
   }
 
