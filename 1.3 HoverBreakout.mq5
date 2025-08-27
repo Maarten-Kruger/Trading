@@ -249,8 +249,6 @@ double OnTester()
 
    // Objective value to maximise during optimisation
    double score = (tradeDensity * wt + monthlyProfit * wp - drawdownPct * wd)*100;
-   
-   
    return(score);
   }
 
