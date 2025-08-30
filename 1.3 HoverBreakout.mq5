@@ -112,6 +112,7 @@ bool CalcRange(int points_back, double &range_high, double &range_low)
    range_high = g_prices[start];
    range_low  = g_prices[start];
 
+
    for(int i = start + 1; i <= size - 3; i++)
      {
       double p = g_prices[i];
