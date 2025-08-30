@@ -6,27 +6,32 @@
 #include <Trade/Trade.mqh>
 
 //--- input parameters
-input int    InpRangeBars      = 10;     // Number of bars to define range (excluding breakout bar)
-input double InpRangePoints    = 200;    // Maximum range size in points
-input double InpTPPoints       = 400;    // Take profit distance in points
-input double InpSLPoints       = 200;    // Stop loss distance in points
-input double InpRiskPercent    = 1.0;    // Risk percentage of equity per trade
-input int    InpMaxBarsOpen    = 5;      // Maximum bars to keep position open
-input uint   InpSlippage       = 5;      // Slippage in points
-input double InpWt             = 40.0;   // Weight % for trade density
-input double InpWp             = 40.0;   // Weight % for monthly consistency
-input double InpWd             = 20.0;   // Weight % for drawdown
+input int    InpRangeDataPoints = 10;    // Number of data points to define range (excluding breakout point)
+input double InpRangePoints     = 200;   // Maximum range size in points
+input double InpTPPoints        = 400;   // Take profit distance in points
+input double InpSLPoints        = 200;   // Stop loss distance in points
+input double InpRiskPercent     = 1.0;   // Risk percentage of equity per trade
+input int    InpMaxPointsOpen   = 5;     // Maximum data points to keep position open
+input int    InpBEPoints        = 3;     // Data points before moving SL to breakeven
+input uint   InpIntervalSeconds = 60;    // Seconds between price measurements
+input uint   InpSlippage        = 5;     // Slippage in points
+input double InpWt              = 40.0;  // Weight % for trade density
+input double InpWp              = 40.0;  // Weight % for monthly consistency
+input double InpWd              = 20.0;  // Weight % for drawdown
 
 //--- global objects
 CTrade  trade;               // trading object
 
+//--- collected price data
+double  g_prices[];          // recorded prices at custom intervals
+
 //--- test tracking variables
-datetime g_test_start = 0;   // first bar time in test
-datetime g_test_end   = 0;   // last bar time in test
-int      g_total_bars = 0;   // number of processed bars
+datetime g_test_start = 0;   // first data point time in test
+datetime g_test_end   = 0;   // last data point time in test
+int      g_total_points = 0; // number of processed data points
 
 //+------------------------------------------------------------------+
-//| Update test time and bar counters                                |
+//| Update test time and data point counters                         |
 //+------------------------------------------------------------------+
 void UpdateTestStats()
   {
@@ -34,7 +39,7 @@ void UpdateTestStats()
    if(g_test_start == 0)
       g_test_start = now;
    g_test_end = now;
-   g_total_bars++;
+   g_total_points++;
   }
 
 //+------------------------------------------------------------------+
@@ -55,44 +60,68 @@ double CalcMonths(datetime start_time, datetime end_time)
   }
 
 //+------------------------------------------------------------------+
-//| Helper: detect new bar                                          |
+//| Helper: detect new custom interval                               |
 //+------------------------------------------------------------------+
-bool IsNewBar()
+bool IsNewInterval()
   {
-   static datetime last_bar_time = 0;
-   datetime current_bar_time = iTime(_Symbol, _Period, 0);
-   if(current_bar_time != last_bar_time)
+   static datetime last_time = 0;
+   datetime now = TimeCurrent();
+   if(now - last_time >= (int)InpIntervalSeconds)
      {
-      last_bar_time = current_bar_time;
+      last_time = now;
       return(true);
      }
    return(false);
   }
 
 //+------------------------------------------------------------------+
-//| Calculate hover range from past bars                            |
-//| Returns true if bars stayed within specified range               |
+//| Record current price at the custom interval                      |
 //+------------------------------------------------------------------+
-bool CalcRange(int bars_back, double &range_high, double &range_low)
+void RecordPrice()
   {
-   if(bars_back < 2)
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   int size = ArraySize(g_prices);
+   ArrayResize(g_prices, size + 1);
+   g_prices[size] = price;
+
+   int max_size = InpRangeDataPoints + 2;
+   if(ArraySize(g_prices) > max_size)
+     {
+      // keep only the most recent elements
+      int start = ArraySize(g_prices) - max_size;
+      for(int i = 0; i < max_size; i++)
+         g_prices[i] = g_prices[start + i];
+      ArrayResize(g_prices, max_size);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Calculate hover range from past data points                     |
+//| Returns true if points stayed within specified range            |
+//+------------------------------------------------------------------+
+bool CalcRange(int points_back, double &range_high, double &range_low)
+  {
+   int size = ArraySize(g_prices);
+   if(points_back < 1 || size < points_back + 2)
       return(false);
 
-// initialise with second previous bar because bar1 is the breakout bar
-   range_high = iHigh(_Symbol, _Period, 2);
-   range_low  = iLow(_Symbol,  _Period, 2);
+   int start = size - 2 - points_back;
+   if(start < 0)
+      return(false);
 
-   for(int i = 3; i <= bars_back + 1; i++)
+   range_high = g_prices[start];
+   range_low  = g_prices[start];
+
+   for(int i = start + 1; i <= size - 3; i++)
      {
-      double h = iHigh(_Symbol, _Period, i);
-      double l = iLow(_Symbol,  _Period, i);
-      if(h > range_high)
-         range_high = h;
-      if(l < range_low)
-         range_low  = l;
+      double p = g_prices[i];
+      if(p > range_high)
+         range_high = p;
+      if(p < range_low)
+         range_low  = p;
      }
-  return((range_high - range_low) <= InpRangePoints * _Point);
- }
+   return((range_high - range_low) <= InpRangePoints * _Point);
+  }
 
 //+------------------------------------------------------------------+
 //| Calculate trade volume based on equity risk                     |
@@ -123,26 +152,41 @@ double CalcLotSize(double risk_percent)
   }
 
 //+------------------------------------------------------------------+
-//| Close open position after a number of bars                       |
+//| Manage open positions: move SL to breakeven and time exit        |
 //+------------------------------------------------------------------+
-void CheckForExit()
+void ManageOpenPositions()
   {
-// Iterate through all open positions and close those that exceed the
-// maximum number of bars specified in InpMaxBarsOpen.
+// Move the stop loss to breakeven after InpBEPoints data points and
+// close positions that exceed InpMaxPointsOpen intervals.
+   if(InpIntervalSeconds == 0)
+      return;
+
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
       ulong ticket = PositionGetTicket(i);
       if(!PositionSelectByTicket(ticket))
          continue;
 
-      string symbol = PositionGetString(POSITION_SYMBOL);
-      if(symbol != _Symbol)
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
          continue;
 
       datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
-      int bars_open = iBarShift(_Symbol, _Period, open_time);
+      int points_open = (int)((TimeCurrent() - open_time) / (int)InpIntervalSeconds);
 
-      if(bars_open >= InpMaxBarsOpen)
+      double open_price  = PositionGetDouble(POSITION_PRICE_OPEN);
+      double stop_loss   = PositionGetDouble(POSITION_SL);
+      double take_profit = PositionGetDouble(POSITION_TP);
+      long   type        = PositionGetInteger(POSITION_TYPE);
+
+      if(InpBEPoints > 0 && points_open >= InpBEPoints)
+        {
+         double breakeven = NormalizeDouble(open_price, _Digits);
+         if((type == POSITION_TYPE_BUY  && (stop_loss == 0.0 || stop_loss < breakeven)) ||
+            (type == POSITION_TYPE_SELL && (stop_loss == 0.0 || stop_loss > breakeven)))
+            trade.PositionModify(ticket, breakeven, take_profit);
+        }
+
+      if(InpMaxPointsOpen > 0 && points_open >= InpMaxPointsOpen)
          trade.PositionClose(ticket);
      }
   }
@@ -153,10 +197,14 @@ void CheckForExit()
 void CheckForEntry()
   {
    double high, low;
-   if(!CalcRange(InpRangeBars, high, low))
+   if(!CalcRange(InpRangeDataPoints, high, low))
       return; // Range condition not met
 
-   double last_close = iClose(_Symbol, _Period, 1);
+   int size = ArraySize(g_prices);
+   if(size < 2)
+      return;
+
+   double last_close = g_prices[size - 2];
 
    trade.SetDeviationInPoints(InpSlippage);
 
@@ -186,6 +234,10 @@ void CheckForEntry()
 //+------------------------------------------------------------------+
 int OnInit()
   {
+   ArrayResize(g_prices, 0);
+   g_test_start = 0;
+   g_test_end = 0;
+   g_total_points = 0;
    return(INIT_SUCCEEDED);
   }
 
@@ -202,21 +254,20 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
-// Only run logic once per new bar, loops otherwise
-   bool new_bar = IsNewBar();
-   if(!new_bar)
+   if(!IsNewInterval())
       return;
 
+   RecordPrice();
    UpdateTestStats();
 
-   CheckForExit();   // manage existing position
+   ManageOpenPositions(); // manage existing position
    CheckForEntry();  // look for new opportunity
   }
 
 //+------------------------------------------------------------------+
 //| Custom optimization criterion                                    |
 //| y = T*Wt + P*Wp - D*Wd                                           |
-//|   T : trade density = total trades / total bars                  |
+//|   T : trade density = total trades / total data points           |
 //|   P : monthly profit ratio = (total profit / starting equity) / months |
 //|   D : relative drawdown percent from tester statistics           |
 //+------------------------------------------------------------------+
@@ -224,15 +275,15 @@ double OnTester()
   {
    // Retrieve base statistics from the strategy tester
    double trades        = TesterStatistics(STAT_TRADES);                 // total number of trades
-   double bars          = (double)g_total_bars;                          // total number of bars processed
+   double points        = (double)g_total_points;                        // total number of data points processed
    double profit        = TesterStatistics(STAT_PROFIT);                 // total net profit
    double startEquity   = TesterStatistics(STAT_INITIAL_DEPOSIT);        // starting equity
    double months        = CalcMonths(g_test_start, g_test_end);          // test length in months
    double drawdownPct   = TesterStatistics(STAT_EQUITY_DDREL_PERCENT)/100;   // relative drawdown
 
    double tradeDensity = 0.0;
-   if(bars > 0.0)
-      tradeDensity = trades / bars;
+   if(points > 0.0)
+      tradeDensity = trades / points;
 
    double monthlyProfit = 0.0;
    if(months > 0.0 && startEquity > 0.0)
