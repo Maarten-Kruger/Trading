@@ -12,6 +12,7 @@ input double InpTPPoints        = 400;   // Take profit distance in points
 input double InpSLPoints        = 200;   // Stop loss distance in points
 input double InpRiskPercent     = 1.0;   // Risk percentage of equity per trade
 input int    InpMaxPointsOpen   = 5;     // Maximum data points to keep position open
+input int    InpBEPoints        = 3;     // Data points before moving SL to breakeven
 input uint   InpIntervalSeconds = 60;    // Seconds between price measurements
 input uint   InpSlippage        = 5;     // Slippage in points
 input double InpWt              = 40.0;  // Weight % for trade density
@@ -111,6 +112,7 @@ bool CalcRange(int points_back, double &range_high, double &range_low)
    range_high = g_prices[start];
    range_low  = g_prices[start];
 
+
    for(int i = start + 1; i <= size - 3; i++)
      {
       double p = g_prices[i];
@@ -151,12 +153,12 @@ double CalcLotSize(double risk_percent)
   }
 
 //+------------------------------------------------------------------+
-//| Close open position after a number of data points                |
+//| Manage open positions: move SL to breakeven and time exit        |
 //+------------------------------------------------------------------+
-void CheckForExit()
+void ManageOpenPositions()
   {
-// Iterate through all open positions and close those that exceed the
-// maximum number of data points specified in InpMaxPointsOpen.
+// Move the stop loss to breakeven after InpBEPoints data points and
+// close positions that exceed InpMaxPointsOpen intervals.
    if(InpIntervalSeconds == 0)
       return;
 
@@ -172,7 +174,20 @@ void CheckForExit()
       datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
       int points_open = (int)((TimeCurrent() - open_time) / (int)InpIntervalSeconds);
 
-      if(points_open >= InpMaxPointsOpen)
+      double open_price  = PositionGetDouble(POSITION_PRICE_OPEN);
+      double stop_loss   = PositionGetDouble(POSITION_SL);
+      double take_profit = PositionGetDouble(POSITION_TP);
+      long   type        = PositionGetInteger(POSITION_TYPE);
+
+      if(InpBEPoints > 0 && points_open >= InpBEPoints)
+        {
+         double breakeven = NormalizeDouble(open_price, _Digits);
+         if((type == POSITION_TYPE_BUY  && (stop_loss == 0.0 || stop_loss < breakeven)) ||
+            (type == POSITION_TYPE_SELL && (stop_loss == 0.0 || stop_loss > breakeven)))
+            trade.PositionModify(ticket, breakeven, take_profit);
+        }
+
+      if(InpMaxPointsOpen > 0 && points_open >= InpMaxPointsOpen)
          trade.PositionClose(ticket);
      }
   }
@@ -246,7 +261,7 @@ void OnTick()
    RecordPrice();
    UpdateTestStats();
 
-   CheckForExit();   // manage existing position
+   ManageOpenPositions(); // manage existing position
    CheckForEntry();  // look for new opportunity
   }
 
