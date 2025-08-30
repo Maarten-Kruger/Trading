@@ -1,6 +1,6 @@
 #property copyright "MJ Kruger"
 #property link      "https://github.com/Maarten-Kruger/Trading"
-#property version   "1.3"
+#property version   "1.4"
 #property strict
 
 #include <Trade/Trade.mqh>
