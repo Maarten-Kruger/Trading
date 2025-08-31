@@ -8,6 +8,10 @@ Collection of MetaTrader 5 Expert Advisors.
 positions remain open, allowing multiple trades to run concurrently when the
 setup reappears on new bars.
 
+## Three Wise Men
+
+`ThreeWiseMen.mq5` implements a wave-based strategy using wave detection and a staged "Wise Men" entry sequence.
+
 ## Candlestick Simulator
 
 `visualize_ohlc.py` provides a small matplotlib-based viewer for OHLC CSV data.
