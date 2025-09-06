@@ -10,6 +10,7 @@
 
 #include <Trade\Trade.mqh>
 
+
 //--- input parameters
 input int      AVGPERIOD      = 5;     // averaging period for median price
 input int      NRANGE         = 3;     // range for peak/valley detection
