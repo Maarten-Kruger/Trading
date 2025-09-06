@@ -39,6 +39,7 @@ bool     wave_active = false;
 bool     wave_up = false;
 int      trade_bars_left = 0;
 double   wave_p[9];          // store points 1..8 values (index 0..8)
+int      atr_handle=INVALID_HANDLE; // handle for ATR indicator
 
 //--- structure to track open trades
 struct TradeInfo
@@ -52,6 +53,16 @@ struct TradeInfo
   };
 
 TradeInfo trades[];
+
+// helper to remove element from trades array
+void RemoveTrade(int index)
+  {
+   int sz=ArraySize(trades);
+   if(index<0 || index>=sz) return;
+   for(int j=index;j<sz-1;j++)
+      trades[j]=trades[j+1];
+   ArrayResize(trades,sz-1);
+  }
 
 //--- testing period info
 datetime test_start=0;
@@ -80,6 +91,8 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
+   if(atr_handle!=INVALID_HANDLE)
+      IndicatorRelease(atr_handle);
   }
 
 //+------------------------------------------------------------------+
@@ -87,7 +100,12 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 double GetATR()
   {
-   return(iATR(_Symbol, _Period, InpATRPeriod, 1)); // previous completed bar
+   if(atr_handle==INVALID_HANDLE)
+      atr_handle=iATR(_Symbol,_Period,InpATRPeriod);
+   double atr_buf[];
+   if(CopyBuffer(atr_handle,0,1,1,atr_buf)<=0)
+      return(0.0);
+   return(atr_buf[0]);
   }
 
 //+------------------------------------------------------------------+
@@ -235,15 +253,15 @@ void CheckTrades()
   {
    if(!wave_active) return;
    double atr=GetATR();
+   double high1=iHigh(_Symbol,_Period,1);
+   double low1=iLow(_Symbol,_Period,1);
+   double close1=iClose(_Symbol,_Period,1);
 
-   // update point5
    if(wave_up)
      {
-      if(High[1]>wave_p[4]) wave_p[4]=High[1];
-      // point6 level
+      if(high1>wave_p[4]) wave_p[4]=high1;
       wave_p[5]=wave_p[2] + InpPercent*(wave_p[4]-wave_p[2]);
-      // Wise Man 1
-      if(wave_p[4]>0 && Close[1]<=wave_p[5] && wave_p[6]==0)
+      if(wave_p[4]>0 && close1<=wave_p[5] && wave_p[6]==0)
         {
          double sl=wave_p[2] - InpStopATR1*atr;
          double risk=wave_p[5]-sl;
@@ -256,10 +274,9 @@ void CheckTrades()
             wave_p[6]=wave_p[5];
            }
         }
-      // Wise Man 2
-      if(wave_p[6]>0 && High[1]>wave_p[6] && wave_p[7]==0)
+      if(wave_p[6]>0 && high1>wave_p[6] && wave_p[7]==0)
         {
-         double entry=High[1];
+         double entry=high1;
          double sl=wave_p[2]-InpStopATR2*atr;
          double risk=entry-sl;
          double tp=entry+risk*InpRR2;
@@ -271,10 +288,9 @@ void CheckTrades()
             wave_p[7]=entry;
            }
         }
-      // Wise Man 3
-      if(wave_p[7]>0 && High[1]>=wave_p[4] && wave_p[8]==0)
+      if(wave_p[7]>0 && high1>=wave_p[4] && wave_p[8]==0)
         {
-         double entry=High[1];
+         double entry=high1;
          double sl=wave_p[2]-InpStopATR3*atr;
          double risk=entry-sl;
          double tp=entry+risk*InpRR3;
@@ -287,11 +303,11 @@ void CheckTrades()
            }
         }
      }
-   else // down wave
+   else
      {
-      if(Low[1]<wave_p[4] || wave_p[4]==0) wave_p[4]=Low[1];
+      if(low1<wave_p[4] || wave_p[4]==0) wave_p[4]=low1;
       wave_p[5]=wave_p[2] + InpPercent*(wave_p[4]-wave_p[2]);
-      if(wave_p[4]>0 && Close[1]>=wave_p[5] && wave_p[6]==0)
+      if(wave_p[4]>0 && close1>=wave_p[5] && wave_p[6]==0)
         {
          double sl=wave_p[2]+InpStopATR1*atr;
          double risk=sl-wave_p[5];
@@ -304,9 +320,9 @@ void CheckTrades()
             wave_p[6]=wave_p[5];
            }
         }
-      if(wave_p[6]>0 && Low[1]<wave_p[6] && wave_p[7]==0)
+      if(wave_p[6]>0 && low1<wave_p[6] && wave_p[7]==0)
         {
-         double entry=Low[1];
+         double entry=low1;
          double sl=wave_p[2]+InpStopATR2*atr;
          double risk=sl-entry;
          double tp=entry-risk*InpRR2;
@@ -318,9 +334,9 @@ void CheckTrades()
             wave_p[7]=entry;
            }
         }
-      if(wave_p[7]>0 && Low[1]<=wave_p[4] && wave_p[8]==0)
+      if(wave_p[7]>0 && low1<=wave_p[4] && wave_p[8]==0)
         {
-         double entry=Low[1];
+         double entry=low1;
          double sl=wave_p[2]+InpStopATR3*atr;
          double risk=sl-entry;
          double tp=entry-risk*InpRR3;
@@ -349,10 +365,10 @@ void ManageTrades()
   {
    for(int i=ArraySize(trades)-1;i>=0;i--)
      {
-      TradeInfo &ti=trades[i];
+      TradeInfo ti=trades[i];
       if(!pos_info.SelectByTicket(ti.ticket))
         {
-         ArrayRemove(trades,i);
+         RemoveTrade(i);
          continue;
         }
       int bars_elapsed=BarsSince(ti.open_time);
@@ -384,16 +400,17 @@ void ManageTrades()
       else if(bars_elapsed>=InpTCloseBars)
         {
          trade.PositionClose(ti.ticket);
-         ArrayRemove(trades,i);
+         RemoveTrade(i);
          continue;
         }
       if(new_sl>0.0)
         {
          if(pos_info.PositionType()==POSITION_TYPE_BUY && new_sl>pos_info.StopLoss())
             trade.PositionModify(ti.ticket,new_sl,pos_info.TakeProfit());
-         else if(pos_info.PositionType()==POSITION_TYPE_SELL && new_sl<pos_info.StopLoss())
+        else if(pos_info.PositionType()==POSITION_TYPE_SELL && new_sl<pos_info.StopLoss())
             trade.PositionModify(ti.ticket,new_sl,pos_info.TakeProfit());
-        }
+       }
+      trades[i]=ti;
      }
   }
 
