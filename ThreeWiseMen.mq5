@@ -10,7 +10,6 @@
 
 #include <Trade\Trade.mqh>
 
-
 //--- input parameters
 input int      AVGPERIOD      = 5;     // averaging period for median price
 input int      NRANGE         = 3;     // range for peak/valley detection
@@ -94,7 +93,13 @@ double GetAvgPrice(int shift)
   {
    double total=0.0;
    for(int i=0;i<AVGPERIOD;i++)
-      total+= (High[shift+i]+Low[shift+i])*0.5;
+     {
+      // Access price data using iHigh/iLow since global arrays are
+      // not directly available in Expert Advisors
+      double hi=iHigh(_Symbol,_Period,shift+i);
+      double lo=iLow(_Symbol,_Period,shift+i);
+      total += (hi+lo)*0.5;
+     }
    return(total/AVGPERIOD);
   }
 
@@ -235,19 +240,6 @@ void AddTrade(ulong ticket,double sl)
   }
 
 //+------------------------------------------------------------------+
-//| Find trade info by ticket                                        |
-//+------------------------------------------------------------------+
-TradeInfo* FindTrade(ulong ticket)
-  {
-   for(int i=0;i<ArraySize(g_trades);i++)
-     {
-      if(g_trades[i].ticket==ticket)
-         return(&g_trades[i]);
-     }
-   return(NULL);
-  }
-
-//+------------------------------------------------------------------+
 //| Remove trade info by index                                       |
 //+------------------------------------------------------------------+
 void RemoveTrade(int index)
@@ -267,7 +259,7 @@ void ManageTrades()
    int currentBars=Bars(_Symbol,_Period);
    for(int i=ArraySize(g_trades)-1;i>=0;i--)
      {
-      TradeInfo *info=&g_trades[i];
+      TradeInfo &info=g_trades[i];
       if(!PositionSelectByTicket(info.ticket))
         {
          RemoveTrade(i);
