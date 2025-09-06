@@ -12,6 +12,7 @@ input double InpTPPoints       = 400;    // Take profit distance in points
 input double InpSLPoints       = 200;    // Stop loss distance in points
 input double InpRiskPercent    = 1.0;    // Risk percentage of equity per trade
 input int    InpMaxBarsOpen    = 5;      // Maximum bars to keep position open
+input int    InpBEBars         = 3;      // Bars after which to move SL to breakeven
 input uint   InpSlippage       = 5;      // Slippage in points
 input double InpWt             = 40.0;   // Weight % for trade density
 input double InpWp             = 40.0;   // Weight % for monthly consistency
@@ -123,12 +124,12 @@ double CalcLotSize(double risk_percent)
   }
 
 //+------------------------------------------------------------------+
-//| Close open position after a number of bars                       |
+//| Manage open positions: break-even + time-based exit              |
 //+------------------------------------------------------------------+
 void CheckForExit()
   {
-// Iterate through all open positions and close those that exceed the
-// maximum number of bars specified in InpMaxBarsOpen.
+// Iterate through all open positions, move stops to breakeven after
+// InpBEBars and close positions that exceed InpMaxBarsOpen.
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
       ulong ticket = PositionGetTicket(i);
@@ -142,6 +143,21 @@ void CheckForExit()
       datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
       int bars_open = iBarShift(_Symbol, _Period, open_time);
 
+      double open_price = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl         = PositionGetDouble(POSITION_SL);
+      double tp         = PositionGetDouble(POSITION_TP);
+      ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+
+// Move stop loss to breakeven after specified bars
+      if(bars_open >= InpBEBars)
+        {
+         if(type == POSITION_TYPE_BUY  && sl < open_price)
+            trade.PositionModify(ticket, open_price, tp);
+         if(type == POSITION_TYPE_SELL && sl > open_price)
+            trade.PositionModify(ticket, open_price, tp);
+        }
+
+// Close position after exceeding maximum bars open
       if(bars_open >= InpMaxBarsOpen)
          trade.PositionClose(ticket);
      }
@@ -215,9 +231,9 @@ void OnTick()
 
 //+------------------------------------------------------------------+
 //| Custom optimization criterion                                    |
-//| y = T*Wt + P*Wp - D*Wd                                           |
+//| y = T*Wt + C*Wp - D*Wd                                           |
 //|   T : trade density = total trades / total bars                  |
-//|   P : monthly profit ratio = (total profit / starting equity) / months |
+//|   C : consistency-weighted monthly profit                        |
 //|   D : relative drawdown percent from tester statistics           |
 //+------------------------------------------------------------------+
 double OnTester()
@@ -238,6 +254,49 @@ double OnTester()
    if(months > 0.0 && startEquity > 0.0)
       monthlyProfit = (profit / startEquity) / months;
 
+   // Consistency: percentage of profitable months
+   double consistency = 0.0;
+   if(months > 0.0 && HistorySelect(g_test_start, g_test_end))
+     {
+      MqlDateTime start_struct;
+      TimeToStruct(g_test_start, start_struct);
+
+      int m = (int)months;
+      double monthProfits[];
+      ArrayResize(monthProfits, m);
+      ArrayInitialize(monthProfits, 0.0);
+
+      uint totalDeals = HistoryDealsTotal();
+      for(uint i = 0; i < totalDeals; i++)
+        {
+         ulong deal_ticket = HistoryDealGetTicket(i);
+         if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal_ticket, DEAL_ENTRY) != DEAL_ENTRY_OUT)
+            continue;
+
+         datetime deal_time = (datetime)HistoryDealGetInteger(deal_ticket, DEAL_TIME);
+         MqlDateTime deal_struct;
+         TimeToStruct(deal_time, deal_struct);
+         int index = (deal_struct.year - start_struct.year) * 12 + (deal_struct.mon - start_struct.mon);
+         if(index < 0 || index >= m)
+            continue;
+
+         double deal_profit = HistoryDealGetDouble(deal_ticket, DEAL_PROFIT) +
+                              HistoryDealGetDouble(deal_ticket, DEAL_SWAP) +
+                              HistoryDealGetDouble(deal_ticket, DEAL_COMMISSION);
+         monthProfits[index] += deal_profit;
+        }
+
+      int profitableMonths = 0;
+      for(int j = 0; j < m; j++)
+         if(monthProfits[j] > 0.0)
+            profitableMonths++;
+
+      if(m > 0)
+         consistency = (double)profitableMonths / (double)m;
+     }
+
+   double monthlyConsistency = monthlyProfit * consistency;
+
    // Normalise weights so they sum to 1.0 even if inputs don't add to 100
    double weightSum = InpWt + InpWp + InpWd;
    if(weightSum <= 0.0)
@@ -248,7 +307,7 @@ double OnTester()
 
 
    // Objective value to maximise during optimisation
-   double score = (tradeDensity * wt + monthlyProfit * wp - drawdownPct * wd)*100;
+   double score = (tradeDensity * wt + monthlyConsistency * wp - drawdownPct * wd) * 100;
    
    
    return(score);
