@@ -259,7 +259,7 @@ void ManageTrades()
    int currentBars=Bars(_Symbol,_Period);
    for(int i=ArraySize(g_trades)-1;i>=0;i--)
      {
-      TradeInfo &info=g_trades[i];
+      TradeInfo info=g_trades[i];
       if(!PositionSelectByTicket(info.ticket))
         {
          RemoveTrade(i);
@@ -306,7 +306,10 @@ void ManageTrades()
         {
          trade.PositionClose(info.ticket);
          RemoveTrade(i);
+         continue;
         }
+
+      g_trades[i]=info;
      }
   }
 
