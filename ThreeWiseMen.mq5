@@ -187,6 +187,7 @@ bool DetectWave(WaveInfo &wave)
       if(!IsPeak(idx2) || !IsValley(idx3)) return(false);
       double target = p1 + PERCENT*(best2-p1);
       if(MathAbs(best3 - target) > (best2-p1)*0.05) return(false); // 5% tolerance
+      printf("I detected a up wave");
      }
    else
      {
@@ -194,6 +195,7 @@ bool DetectWave(WaveInfo &wave)
       if(!IsValley(idx2) || !IsPeak(idx3)) return(false);
       double target = p1 - PERCENT*(p1-best2);
       if(MathAbs(best3 - target) > (p1-best2)*0.05) return(false);
+      printf("I detected a down wave");
      }
 
    wave.active=true;
