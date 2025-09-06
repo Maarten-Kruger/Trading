@@ -12,6 +12,7 @@ input double InpTPPoints       = 400;    // Take profit distance in points
 input double InpSLPoints       = 200;    // Stop loss distance in points
 input double InpRiskPercent    = 1.0;    // Risk percentage of equity per trade
 input int    InpMaxBarsOpen    = 5;      // Maximum bars to keep position open
+input int    InpBEBars         = 3;      // Bars after which to move SL to breakeven
 input uint   InpSlippage       = 5;      // Slippage in points
 input double InpWt             = 40.0;   // Weight % for trade density
 input double InpWp             = 40.0;   // Weight % for monthly consistency
