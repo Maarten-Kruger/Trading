@@ -124,12 +124,11 @@ double CalcLotSize(double risk_percent)
   }
 
 //+------------------------------------------------------------------+
-//| Manage open positions: break-even + time-based exit              |
+//| Manage open positions: time-based exit                           |
 //+------------------------------------------------------------------+
 void CheckForExit()
   {
-// Iterate through all open positions, move stops to breakeven after
-// InpBEBars and close positions that exceed InpMaxBarsOpen.
+  // Iterate through all open positions and close those exceeding InpMaxBarsOpen.
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
       ulong ticket = PositionGetTicket(i);
@@ -140,26 +139,12 @@ void CheckForExit()
       if(symbol != _Symbol)
          continue;
 
-      datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
-      int bars_open = iBarShift(_Symbol, _Period, open_time);
+       datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
+       int      bars_open = iBarShift(_Symbol, _Period, open_time);
 
-      double open_price = PositionGetDouble(POSITION_PRICE_OPEN);
-      double sl         = PositionGetDouble(POSITION_SL);
-      double tp         = PositionGetDouble(POSITION_TP);
-      ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-
-// Move stop loss to breakeven after specified bars
-      if(bars_open >= InpBEBars)
-        {
-         if(type == POSITION_TYPE_BUY  && sl < open_price)
-            trade.PositionModify(ticket, open_price, tp);
-         if(type == POSITION_TYPE_SELL && sl > open_price)
-            trade.PositionModify(ticket, open_price, tp);
-        }
-
-// Close position after exceeding maximum bars open
-      if(bars_open >= InpMaxBarsOpen)
-         trade.PositionClose(ticket);
+  // Close position after exceeding maximum bars open
+       if(bars_open >= InpMaxBarsOpen)
+          trade.PositionClose(ticket);
      }
   }
 
