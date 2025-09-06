@@ -259,6 +259,7 @@ void CheckTrades()
 
    if(wave_up)
      {
+
       // track highest high after point 4 without requiring a confirmed peak
       if(wave_p[4]==0.0 || high1>wave_p[4])
          wave_p[4]=high1;
