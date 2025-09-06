@@ -437,10 +437,13 @@ void OnTick()
 
    ManageTrades();
 
-   // always check for new wave
-   WaveInfo wtmp;
-   if(DetectWave(wtmp))
-      g_wave=wtmp;
+   // detect new wave only if no wave is being processed and no trades are active
+   if(!g_wave.active && ArraySize(g_trades)==0)
+     {
+      WaveInfo wtmp;
+      if(DetectWave(wtmp))
+         g_wave=wtmp;
+     }
 
    if(g_wave.active)
       CheckTrades(g_wave);
