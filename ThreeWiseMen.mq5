@@ -9,7 +9,7 @@
 #property strict
 
 #include <Trade\Trade.mqh>
-#include <Arrays\ArrayObj.mqh>
+
 
 //--- input parameters
 input int      AVGPERIOD      = 5;     // averaging period for median price
@@ -42,12 +42,12 @@ input ulong    Magic          = 12345;
 //--- structure to track open trades for management
 struct TradeInfo
   {
-   ulong   ticket;
-   double  originalSL;
-   int     openBar;
-   int     stage;
+   ulong   ticket;       // position ticket
+   double  originalSL;   // initial stop level
+   int     openBar;      // bar index when opened
+   int     stage;        // trailing stage
   };
-CArrayObj g_trades;
+TradeInfo g_trades[];    // dynamic array of active trades
 
 //--- structure for wave state
 struct WaveInfo
@@ -62,6 +62,7 @@ WaveInfo g_wave;
 
 //--- start time for optimization statistics
 datetime test_start;
+int atr_handle;
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -71,7 +72,8 @@ int OnInit()
    trade.SetExpertMagicNumber(Magic);
    test_start = TimeCurrent();
    g_wave.active=false;
-   g_trades.Clear();
+   ArrayResize(g_trades,0);
+   atr_handle=iATR(_Symbol,_Period,ATRPeriod); // prepare ATR handle
    return(INIT_SUCCEEDED);
   }
 
@@ -80,7 +82,9 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
-   g_trades.Clear();
+   ArrayResize(g_trades,0);
+   if(atr_handle!=INVALID_HANDLE)
+      IndicatorRelease(atr_handle);
   }
 
 //+------------------------------------------------------------------+
@@ -88,7 +92,10 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 double GetAvgPrice(int shift)
   {
-   return(iMA(_Symbol,_Period,AVGPERIOD,0,MODE_SMA,PRICE_MEDIAN,shift));
+   double total=0.0;
+   for(int i=0;i<AVGPERIOD;i++)
+      total+= (High[shift+i]+Low[shift+i])*0.5;
+   return(total/AVGPERIOD);
   }
 
 //+------------------------------------------------------------------+
@@ -198,7 +205,7 @@ bool DetectWave(WaveInfo &wave)
 //+------------------------------------------------------------------+
 double CalcLot(double entry,double stop)
   {
-   double riskMoney=AccountEquity()*RiskPercent/100.0;
+   double riskMoney=AccountInfoDouble(ACCOUNT_EQUITY)*RiskPercent/100.0;
    double tickValue=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE);
    double tickSize =SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
    double stopPoints = MathAbs(entry-stop)/tickSize;
@@ -217,12 +224,14 @@ double CalcLot(double entry,double stop)
 //+------------------------------------------------------------------+
 void AddTrade(ulong ticket,double sl)
   {
-   TradeInfo *info = new TradeInfo;
+   TradeInfo info;
    info.ticket=ticket;
    info.originalSL=sl;
    info.openBar=Bars(_Symbol,_Period);
    info.stage=0;
-   g_trades.Add(info);
+   int n=ArraySize(g_trades);
+   ArrayResize(g_trades,n+1);
+   g_trades[n]=info;
   }
 
 //+------------------------------------------------------------------+
@@ -230,11 +239,10 @@ void AddTrade(ulong ticket,double sl)
 //+------------------------------------------------------------------+
 TradeInfo* FindTrade(ulong ticket)
   {
-   for(int i=0;i<g_trades.Total();i++)
+   for(int i=0;i<ArraySize(g_trades);i++)
      {
-      TradeInfo *info = (TradeInfo*)g_trades.At(i);
-      if(info.ticket==ticket)
-         return(info);
+      if(g_trades[i].ticket==ticket)
+         return(&g_trades[i]);
      }
    return(NULL);
   }
@@ -244,9 +252,11 @@ TradeInfo* FindTrade(ulong ticket)
 //+------------------------------------------------------------------+
 void RemoveTrade(int index)
   {
-   TradeInfo *info = (TradeInfo*)g_trades.At(index);
-   delete info;
-   g_trades.Delete(index);
+   int total=ArraySize(g_trades);
+   if(index<0 || index>=total) return;
+   for(int i=index;i<total-1;i++)
+      g_trades[i]=g_trades[i+1];
+   ArrayResize(g_trades,total-1);
   }
 
 //+------------------------------------------------------------------+
@@ -255,9 +265,9 @@ void RemoveTrade(int index)
 void ManageTrades()
   {
    int currentBars=Bars(_Symbol,_Period);
-   for(int i=g_trades.Total()-1;i>=0;i--)
+   for(int i=ArraySize(g_trades)-1;i>=0;i--)
      {
-      TradeInfo *info=(TradeInfo*)g_trades.At(i);
+      TradeInfo *info=&g_trades[i];
       if(!PositionSelectByTicket(info.ticket))
         {
          RemoveTrade(i);
@@ -321,7 +331,10 @@ void CheckTrades(WaveInfo &wave)
      }
 
    double price = GetAvgPrice(0);
-   double atr = iATR(_Symbol,_Period,ATRPeriod,1);
+   double atrBuf[];
+   double atr=0.0;
+   if(CopyBuffer(atr_handle,0,1,1,atrBuf)>0)
+      atr=atrBuf[0];
    if(wave.p5==0.0)
      {
       // search for next peak or valley after wave.p4
