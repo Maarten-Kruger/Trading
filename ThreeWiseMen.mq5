@@ -11,6 +11,7 @@ input int      InpAvgPeriod        = 5;      // AVGPERIOD for rolling median ave
 input int      InpBacklog          = 20;     // BACKLOG size
 input int      InpNRange           = 2;      // NRANGE for peak/valley detection
 input double   InpPercent          = 0.5;    // PERCENT between points
+input double   InpWaveTolPips      = 5.0;    // Tolerance for wave points (pips)
 input int      InpTradesChecking   = 10;     // TRADESCHECKING bars
 input int      InpATRPeriod        = 14;     // ATR period
 input double   InpStopATR1         = 2.0;    // STOPATR1 multiplier
@@ -166,15 +167,16 @@ bool DetectWave()
    int last=ArraySize(backlog)-1;
    if(last<3) return(false);
 
-   double p4=backlog[last];
-   double maxv=p4,minv=p4;
-   for(int i=0;i<last;i++)
-     {
-      if(backlog[i]>maxv) maxv=backlog[i];
-      if(backlog[i]<minv) minv=backlog[i];
-     }
+  double p4=backlog[last];
+  double maxv=p4,minv=p4;
+  for(int i=0;i<last;i++)
+    {
+     if(backlog[i]>maxv) maxv=backlog[i];
+     if(backlog[i]<minv) minv=backlog[i];
+    }
+   double tol = InpWaveTolPips*_Point*10; // allow tolerance around levels
 
-   if(p4>maxv) // potential up wave
+   if(p4>=maxv - tol) // potential up wave
      {
       for(int p2=1;p2<last-1;p2++)
         {
@@ -195,7 +197,7 @@ bool DetectWave()
            {
             if(!IsValley(p3)) continue;
             double expected=p1val + InpPercent*(backlog[p2]-p1val);
-            if(MathAbs(backlog[p3]-expected) <= _Point*10)
+            if(MathAbs(backlog[p3]-expected) <= tol)
               {
                // valid wave found
                wave_p[0]=backlog[p1];
@@ -210,7 +212,7 @@ bool DetectWave()
            }
         }
      }
-   else if(p4<minv) // potential down wave
+   else if(p4<=minv + tol) // potential down wave
      {
       for(int p2=1;p2<last-1;p2++)
         {
@@ -229,7 +231,7 @@ bool DetectWave()
            {
             if(!IsPeak(p3)) continue;
             double expected=p1val + InpPercent*(backlog[p2]-p1val);
-            if(MathAbs(backlog[p3]-expected) <= _Point*10)
+            if(MathAbs(backlog[p3]-expected) <= tol)
               {
                wave_p[0]=backlog[p1];
                wave_p[1]=backlog[p2];
@@ -270,13 +272,18 @@ void CheckTrades()
         {
          double sl=wave_p[2] - InpStopATR1*atr;
          double risk=wave_p[5]-sl;
-         double tp=wave_p[5]+risk*InpRR1;
-         double vol=CalcVolumeByRisk(InpRiskPercent,(int)(risk/_Point));
-         if(vol>0 && trade.Buy(vol,_Symbol,wave_p[5],sl,tp,"WM1"))
+         if(risk>0)
            {
-            TradeInfo ti; ti.ticket=trade.ResultOrder(); ti.entry=wave_p[5]; ti.initial_sl=sl; ti.risk=risk; ti.stage=0; ti.open_time=TimeCurrent();
-            int sz=ArraySize(trades); ArrayResize(trades,sz+1); trades[sz]=ti;
-            wave_p[6]=wave_p[5];
+            double tp=wave_p[5]+risk*InpRR1;
+            int sl_points=(int)MathRound(risk/_Point);
+            if(sl_points<1) sl_points=1;
+            double vol=CalcVolumeByRisk(InpRiskPercent,sl_points);
+            if(vol>0 && trade.Buy(vol,_Symbol,wave_p[5],sl,tp,"WM1"))
+              {
+               TradeInfo ti; ti.ticket=trade.ResultOrder(); ti.entry=wave_p[5]; ti.initial_sl=sl; ti.risk=risk; ti.stage=0; ti.open_time=TimeCurrent();
+               int sz=ArraySize(trades); ArrayResize(trades,sz+1); trades[sz]=ti;
+               wave_p[6]=wave_p[5];
+              }
            }
         }
       if(wave_p[6]>0.0 && high1>wave_p[6] && wave_p[7]==0.0)
@@ -284,13 +291,18 @@ void CheckTrades()
          double entry=high1;
          double sl=wave_p[2]-InpStopATR2*atr;
          double risk=entry-sl;
-         double tp=entry+risk*InpRR2;
-         double vol=CalcVolumeByRisk(InpRiskPercent,(int)(risk/_Point));
-         if(vol>0 && trade.Buy(vol,_Symbol,entry,sl,tp,"WM2"))
+         if(risk>0)
            {
-            TradeInfo ti; ti.ticket=trade.ResultOrder(); ti.entry=entry; ti.initial_sl=sl; ti.risk=risk; ti.stage=0; ti.open_time=TimeCurrent();
-            int sz=ArraySize(trades); ArrayResize(trades,sz+1); trades[sz]=ti;
-            wave_p[7]=entry;
+            double tp=entry+risk*InpRR2;
+            int sl_points=(int)MathRound(risk/_Point);
+            if(sl_points<1) sl_points=1;
+            double vol=CalcVolumeByRisk(InpRiskPercent,sl_points);
+            if(vol>0 && trade.Buy(vol,_Symbol,entry,sl,tp,"WM2"))
+              {
+               TradeInfo ti; ti.ticket=trade.ResultOrder(); ti.entry=entry; ti.initial_sl=sl; ti.risk=risk; ti.stage=0; ti.open_time=TimeCurrent();
+               int sz=ArraySize(trades); ArrayResize(trades,sz+1); trades[sz]=ti;
+               wave_p[7]=entry;
+              }
            }
         }
       if(wave_p[7]>0.0 && high1>=wave_p[4] && wave_p[8]==0.0)
@@ -298,13 +310,18 @@ void CheckTrades()
          double entry=high1;
          double sl=wave_p[2]-InpStopATR3*atr;
          double risk=entry-sl;
-         double tp=entry+risk*InpRR3;
-         double vol=CalcVolumeByRisk(InpRiskPercent,(int)(risk/_Point));
-         if(vol>0 && trade.Buy(vol,_Symbol,entry,sl,tp,"WM3"))
+         if(risk>0)
            {
-            TradeInfo ti; ti.ticket=trade.ResultOrder(); ti.entry=entry; ti.initial_sl=sl; ti.risk=risk; ti.stage=0; ti.open_time=TimeCurrent();
-            int sz=ArraySize(trades); ArrayResize(trades,sz+1); trades[sz]=ti;
-            wave_p[8]=entry;
+            double tp=entry+risk*InpRR3;
+            int sl_points=(int)MathRound(risk/_Point);
+            if(sl_points<1) sl_points=1;
+            double vol=CalcVolumeByRisk(InpRiskPercent,sl_points);
+            if(vol>0 && trade.Buy(vol,_Symbol,entry,sl,tp,"WM3"))
+              {
+               TradeInfo ti; ti.ticket=trade.ResultOrder(); ti.entry=entry; ti.initial_sl=sl; ti.risk=risk; ti.stage=0; ti.open_time=TimeCurrent();
+               int sz=ArraySize(trades); ArrayResize(trades,sz+1); trades[sz]=ti;
+               wave_p[8]=entry;
+              }
            }
         }
      }
@@ -319,13 +336,18 @@ void CheckTrades()
         {
          double sl=wave_p[2]+InpStopATR1*atr;
          double risk=sl-wave_p[5];
-         double tp=wave_p[5]-risk*InpRR1;
-         double vol=CalcVolumeByRisk(InpRiskPercent,(int)(risk/_Point));
-         if(vol>0 && trade.Sell(vol,_Symbol,wave_p[5],sl,tp,"WM1"))
+         if(risk>0)
            {
-            TradeInfo ti; ti.ticket=trade.ResultOrder(); ti.entry=wave_p[5]; ti.initial_sl=sl; ti.risk=risk; ti.stage=0; ti.open_time=TimeCurrent();
-            int sz=ArraySize(trades); ArrayResize(trades,sz+1); trades[sz]=ti;
-            wave_p[6]=wave_p[5];
+            double tp=wave_p[5]-risk*InpRR1;
+            int sl_points=(int)MathRound(risk/_Point);
+            if(sl_points<1) sl_points=1;
+            double vol=CalcVolumeByRisk(InpRiskPercent,sl_points);
+            if(vol>0 && trade.Sell(vol,_Symbol,wave_p[5],sl,tp,"WM1"))
+              {
+               TradeInfo ti; ti.ticket=trade.ResultOrder(); ti.entry=wave_p[5]; ti.initial_sl=sl; ti.risk=risk; ti.stage=0; ti.open_time=TimeCurrent();
+               int sz=ArraySize(trades); ArrayResize(trades,sz+1); trades[sz]=ti;
+               wave_p[6]=wave_p[5];
+              }
            }
         }
       if(wave_p[6]>0.0 && low1<wave_p[6] && wave_p[7]==0.0)
@@ -333,13 +355,18 @@ void CheckTrades()
          double entry=low1;
          double sl=wave_p[2]+InpStopATR2*atr;
          double risk=sl-entry;
-         double tp=entry-risk*InpRR2;
-         double vol=CalcVolumeByRisk(InpRiskPercent,(int)(risk/_Point));
-         if(vol>0 && trade.Sell(vol,_Symbol,entry,sl,tp,"WM2"))
+         if(risk>0)
            {
-            TradeInfo ti; ti.ticket=trade.ResultOrder(); ti.entry=entry; ti.initial_sl=sl; ti.risk=risk; ti.stage=0; ti.open_time=TimeCurrent();
-            int sz=ArraySize(trades); ArrayResize(trades,sz+1); trades[sz]=ti;
-            wave_p[7]=entry;
+            double tp=entry-risk*InpRR2;
+            int sl_points=(int)MathRound(risk/_Point);
+            if(sl_points<1) sl_points=1;
+            double vol=CalcVolumeByRisk(InpRiskPercent,sl_points);
+            if(vol>0 && trade.Sell(vol,_Symbol,entry,sl,tp,"WM2"))
+              {
+               TradeInfo ti; ti.ticket=trade.ResultOrder(); ti.entry=entry; ti.initial_sl=sl; ti.risk=risk; ti.stage=0; ti.open_time=TimeCurrent();
+               int sz=ArraySize(trades); ArrayResize(trades,sz+1); trades[sz]=ti;
+               wave_p[7]=entry;
+              }
            }
         }
       if(wave_p[7]>0.0 && low1<=wave_p[4] && wave_p[8]==0.0)
@@ -347,13 +374,18 @@ void CheckTrades()
          double entry=low1;
          double sl=wave_p[2]+InpStopATR3*atr;
          double risk=sl-entry;
-         double tp=entry-risk*InpRR3;
-         double vol=CalcVolumeByRisk(InpRiskPercent,(int)(risk/_Point));
-         if(vol>0 && trade.Sell(vol,_Symbol,entry,sl,tp,"WM3"))
+         if(risk>0)
            {
-            TradeInfo ti; ti.ticket=trade.ResultOrder(); ti.entry=entry; ti.initial_sl=sl; ti.risk=risk; ti.stage=0; ti.open_time=TimeCurrent();
-            int sz=ArraySize(trades); ArrayResize(trades,sz+1); trades[sz]=ti;
-            wave_p[8]=entry;
+            double tp=entry-risk*InpRR3;
+            int sl_points=(int)MathRound(risk/_Point);
+            if(sl_points<1) sl_points=1;
+            double vol=CalcVolumeByRisk(InpRiskPercent,sl_points);
+            if(vol>0 && trade.Sell(vol,_Symbol,entry,sl,tp,"WM3"))
+              {
+               TradeInfo ti; ti.ticket=trade.ResultOrder(); ti.entry=entry; ti.initial_sl=sl; ti.risk=risk; ti.stage=0; ti.open_time=TimeCurrent();
+               int sz=ArraySize(trades); ArrayResize(trades,sz+1); trades[sz]=ti;
+               wave_p[8]=entry;
+              }
            }
         }
      }
@@ -437,7 +469,8 @@ int BarsSince(datetime t)
 //+------------------------------------------------------------------+
 double CalcVolumeByRisk(double risk_percent,int sl_points)
   {
-   if(risk_percent<=0.0 || sl_points<=0) return(0.0);
+   if(risk_percent<=0.0) return(0.0);
+   if(sl_points<=0) sl_points=1;
    double equity=AccountInfoDouble(ACCOUNT_EQUITY);
    double risk_money=equity*(risk_percent/100.0);
    double tick_value=0.0,tick_size=0.0;
