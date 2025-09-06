@@ -259,9 +259,14 @@ void CheckTrades()
 
    if(wave_up)
      {
-      if(high1>wave_p[4]) wave_p[4]=high1;
+
+      // track highest high after point 4 without requiring a confirmed peak
+      if(wave_p[4]==0.0 || high1>wave_p[4])
+         wave_p[4]=high1;
+
+      // point 6 is a retrace level between point 3 and the running point 5
       wave_p[5]=wave_p[2] + InpPercent*(wave_p[4]-wave_p[2]);
-      if(wave_p[4]>0 && close1<=wave_p[5] && wave_p[6]==0)
+      if(close1<=wave_p[5] && wave_p[6]==0.0)
         {
          double sl=wave_p[2] - InpStopATR1*atr;
          double risk=wave_p[5]-sl;
@@ -274,7 +279,7 @@ void CheckTrades()
             wave_p[6]=wave_p[5];
            }
         }
-      if(wave_p[6]>0 && high1>wave_p[6] && wave_p[7]==0)
+      if(wave_p[6]>0.0 && high1>wave_p[6] && wave_p[7]==0.0)
         {
          double entry=high1;
          double sl=wave_p[2]-InpStopATR2*atr;
@@ -288,7 +293,7 @@ void CheckTrades()
             wave_p[7]=entry;
            }
         }
-      if(wave_p[7]>0 && high1>=wave_p[4] && wave_p[8]==0)
+      if(wave_p[7]>0.0 && high1>=wave_p[4] && wave_p[8]==0.0)
         {
          double entry=high1;
          double sl=wave_p[2]-InpStopATR3*atr;
@@ -305,9 +310,12 @@ void CheckTrades()
      }
    else
      {
-      if(low1<wave_p[4] || wave_p[4]==0) wave_p[4]=low1;
+      // track lowest low after point 4 without requiring a confirmed valley
+      if(wave_p[4]==0.0 || low1<wave_p[4])
+         wave_p[4]=low1;
+
       wave_p[5]=wave_p[2] + InpPercent*(wave_p[4]-wave_p[2]);
-      if(wave_p[4]>0 && close1>=wave_p[5] && wave_p[6]==0)
+      if(close1>=wave_p[5] && wave_p[6]==0.0)
         {
          double sl=wave_p[2]+InpStopATR1*atr;
          double risk=sl-wave_p[5];
@@ -320,7 +328,7 @@ void CheckTrades()
             wave_p[6]=wave_p[5];
            }
         }
-      if(wave_p[6]>0 && low1<wave_p[6] && wave_p[7]==0)
+      if(wave_p[6]>0.0 && low1<wave_p[6] && wave_p[7]==0.0)
         {
          double entry=low1;
          double sl=wave_p[2]+InpStopATR2*atr;
@@ -334,7 +342,7 @@ void CheckTrades()
             wave_p[7]=entry;
            }
         }
-      if(wave_p[7]>0 && low1<=wave_p[4] && wave_p[8]==0)
+      if(wave_p[7]>0.0 && low1<=wave_p[4] && wave_p[8]==0.0)
         {
          double entry=low1;
          double sl=wave_p[2]+InpStopATR3*atr;
