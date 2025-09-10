@@ -23,10 +23,10 @@ def generate_wave(A, B, S, N, B1, B2, BACKTIME0):
 # --- Example usage ---
 if __name__ == "__main__":
     A = 1           # upwave (+1) or downwave (-1)
-    B = 20          # extremity parameter
-    S = 0.0001     # scale to "pips-like" magnitudes
-    N = 10         # length of array
-    B1, B2 = -7.0, 7.0
+    B = 15          # extremity parameter
+    S = 0.00009     # scale to "pips-like" magnitudes
+    N = 20         # length of array
+    B1, B2 = -6.0, 1.0
     BACKTIME0 = 1.0000  # starting price level you want to match
 
     x, EXAMPLE = generate_wave(A, B, S, N, B1, B2, BACKTIME0)
