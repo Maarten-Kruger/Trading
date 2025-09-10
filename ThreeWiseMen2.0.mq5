@@ -49,6 +49,7 @@ double   backlog[];            // rolling median prices
 bool     wave_active=false;    // currently in trade checking window
 bool     wave_up=false;        // direction of detected wave
 int      trade_bars_left=0;    // remaining bars to search for trades
+int      backlog_filled=0;     // number of valid entries in backlog
 
 double   point3=0.0, point5=0.0;   // points from strategy description
 bool     wm1=false, wm2=false, wm3=false; // trades placed flags
@@ -81,6 +82,7 @@ int OnInit()
   {
    ArrayResize(backlog,InpBacklog);
    ArrayInitialize(backlog,0.0);
+   backlog_filled=0;
 
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
@@ -135,6 +137,8 @@ void AppendBacklog(double v)
    for(int i=0;i<InpBacklog-1;i++)
       backlog[i]=backlog[i+1];
    backlog[InpBacklog-1]=v;
+   if(backlog_filled<InpBacklog)
+      backlog_filled++;
   }
 
 //+------------------------------------------------------------------+
@@ -156,15 +160,18 @@ void GenerateExample(double &example[])
 //+------------------------------------------------------------------+
 bool DetectWave()
   {
-   if(ArraySize(backlog)<InpWaveLen)
+   // ensure backlog holds enough valid data and can supply wave length
+   if(backlog_filled<InpWaveLen || InpWaveLen>ArraySize(backlog))
       return(false);
 
-   // build arrays B and E
+   // build arrays B and E of identical size
    double B[]; ArrayResize(B,InpWaveLen);
    for(int i=0;i<InpWaveLen;i++)
       B[i]=backlog[ArraySize(backlog)-InpWaveLen+i];
 
    double E[]; GenerateExample(E);
+   if(ArraySize(E)!=ArraySize(B))
+      return(false);
    for(int i=0;i<InpWaveLen;i++)
       E[i]+=B[0]; // align start levels
 
@@ -193,7 +200,8 @@ bool DetectWave()
      }
    double d=sum/(InpWaveLen-1);
 
-   if(MathAbs(p)>=InpPearson && d<=InpMAE)
+   // thresholds: PEARSON < |p| and MAE > |d|
+   if(MathAbs(p) > InpPearson && d < InpMAE)
      {
       wave_up=(p>0);
       // find point3 in example (local min or max)
