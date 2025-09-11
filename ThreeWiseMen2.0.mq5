@@ -157,6 +157,12 @@ void GenerateExample(double &example[])
       double x=InpB1+dx*i;
       example[i]=InpScale*(x*x*x-InpB*x);
      }
+         string examp = "Example Array: ";
+         for(int i=0; i<ArraySize(example); i++)
+         {
+             examp += DoubleToString(example[i], 6) + " ";
+         }
+     
   }
 
 //+------------------------------------------------------------------+
@@ -183,12 +189,7 @@ bool DetectWave()
          
          
          
-         
-         string examp = "Example Array: ";
-         for(int i=0; i<ArraySize(E); i++)
-         {
-             examp += DoubleToString(E[i], 6) + " ";
-         }
+
          
          string backt = "BackLog Array: ";
          for(int i=0; i<ArraySize(B); i++)
@@ -196,7 +197,6 @@ bool DetectWave()
              backt += DoubleToString(B[i], 6) + " ";
          }
          
-         printf(examp);
          printf(backt);
       
 
@@ -481,8 +481,8 @@ void OnTick()
    
    
    
-   datetime candleTime = iTime(_Symbol, _Period, 1);   // time of current candle
-   double candleHigh   = iHigh(_Symbol, _Period, 1);   // high of current candle
+   datetime candleTime = iTime(_Symbol, _Period, 0);   // time of current candle
+   double candleHigh   = iHigh(_Symbol, _Period, 0);   // high of current candle
 
    // Print both in a readable format
    PrintFormat("High of candle at %s = %f", TimeToString(candleTime, TIME_DATE|TIME_SECONDS), candleHigh);
