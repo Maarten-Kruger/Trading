@@ -173,11 +173,33 @@ bool DetectWave()
    for(int i=0;i<InpWaveLen;i++)
       B[i]=backlog[ArraySize(backlog)-InpWaveLen+i];
 
-  double E[]; ArrayCopy(E,example_wave); // use precomputed example
-  if(ArraySize(E)!=ArraySize(B))
-     return(false);
-  for(int i=0;i<InpWaveLen;i++)
-     E[i]+=B[0]; // align start levels to backlog
+   double E[]; GenerateExample(E);
+   if(ArraySize(E)!=ArraySize(B))
+      return(false);
+   for(int i=0;i<InpWaveLen;i++)
+      E[i]+=B[0]; // align start levels
+      
+      
+         
+         
+         
+         
+         string examp = "Example Array: ";
+         for(int i=0; i<ArraySize(E); i++)
+         {
+             examp += DoubleToString(E[i], 6) + " ";
+         }
+         
+         string backt = "BackLog Array: ";
+         for(int i=0; i<ArraySize(B); i++)
+         {
+             backt += DoubleToString(B[i], 6) + " ";
+         }
+         
+         printf(examp);
+         printf(backt);
+      
+
 
    // Pearson correlation
    double meanB=0.0,meanE=0.0;
@@ -193,6 +215,9 @@ bool DetectWave()
    double denom=MathSqrt(denB*denE);
    if(denom==0.0) return(false);
    double p=num/denom;
+   
+   printf("Value of P is: %lf", p);
+
 
    // MAE of first differences
    double sum=0.0;
@@ -203,6 +228,8 @@ bool DetectWave()
       sum+=MathAbs(dE-dB)/_Point; // in points
      }
    double d=sum/(InpWaveLen-1);
+   
+   printf("Value of D is: %lf", d);
 
    // thresholds: PEARSON < |p| and MAE > |d|
    if(MathAbs(p) > InpPearson && d < InpMAE)
@@ -449,13 +476,24 @@ void OnTick()
   {
    if(!IsNewBar()) return;
 
-   // update backlog with median price average of last closed candles
+   // update backlog with median price average over InpAvgPeriod
    double med_sum=0.0;
-   for(int i=1;i<=InpAvgPeriod;i++)
+   
+   
+   
+   datetime candleTime = iTime(_Symbol, _Period, 1);   // time of current candle
+   double candleHigh   = iHigh(_Symbol, _Period, 1);   // high of current candle
+
+   // Print both in a readable format
+   PrintFormat("High of candle at %s = %f", TimeToString(candleTime, TIME_DATE|TIME_SECONDS), candleHigh);
+
+   
+   
+   for(int i=0;i<InpAvgPeriod;i++)
       med_sum += (iHigh(_Symbol,_Period,i)+iLow(_Symbol,_Period,i))/2.0;
    double avg=med_sum/InpAvgPeriod;
    AppendBacklog(avg);
-   test_end=iTime(_Symbol,_Period,1); // time of closed candle
+   test_end=iTime(_Symbol,_Period,0);
 
    if(!wave_active)
       DetectWave();
