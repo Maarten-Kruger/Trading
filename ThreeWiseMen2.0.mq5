@@ -473,6 +473,17 @@ void OnTick()
 
    // update backlog with median price average over InpAvgPeriod
    double med_sum=0.0;
+   
+   
+   
+   datetime candleTime = iTime(_Symbol, _Period, 1);   // time of current candle
+   double candleHigh   = iHigh(_Symbol, _Period, 1);   // high of current candle
+
+   // Print both in a readable format
+   PrintFormat("High of candle at %s = %f", TimeToString(candleTime, TIME_DATE|TIME_SECONDS), candleHigh);
+
+   
+   
    for(int i=0;i<InpAvgPeriod;i++)
       med_sum += (iHigh(_Symbol,_Period,i)+iLow(_Symbol,_Period,i))/2.0;
    double avg=med_sum/InpAvgPeriod;
