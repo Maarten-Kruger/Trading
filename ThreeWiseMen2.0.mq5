@@ -153,12 +153,6 @@ void GenerateExample(double &example[])
       double x=InpB1+dx*i;
       example[i]=InpScale*(x*x*x-InpB*x);
      }
-      string out = "Array: ";
-      for(int i=0; i<ArraySize(example); i++)
-      {
-      out += DoubleToString(example[i], 6) + " "; // 4 = number of decimals
-      }
-      printf(out);
   }
 
 //+------------------------------------------------------------------+
@@ -180,6 +174,28 @@ bool DetectWave()
       return(false);
    for(int i=0;i<InpWaveLen;i++)
       E[i]+=B[0]; // align start levels
+      
+      
+         
+         
+         
+         
+         string examp = "Example Array: ";
+         for(int i=0; i<ArraySize(E); i++)
+         {
+             examp += DoubleToString(E[i], 6) + " ";
+         }
+         
+         string backt = "BackLog Array: ";
+         for(int i=0; i<ArraySize(B); i++)
+         {
+             backt += DoubleToString(B[i], 6) + " ";
+         }
+         
+         printf(examp);
+         printf(backt);
+      
+      
 
    // Pearson correlation
    double meanB=0.0,meanE=0.0;
@@ -195,6 +211,8 @@ bool DetectWave()
    double denom=MathSqrt(denB*denE);
    if(denom==0.0) return(false);
    double p=num/denom;
+   
+   printf("Value of P is: %lf", p);
 
    // MAE of first differences
    double sum=0.0;
@@ -205,6 +223,8 @@ bool DetectWave()
       sum+=MathAbs(dE-dB)/_Point; // in points
      }
    double d=sum/(InpWaveLen-1);
+   
+   printf("Value of D is: %lf", d);
 
    // thresholds: PEARSON < |p| and MAE > |d|
    if(MathAbs(p) > InpPearson && d < InpMAE)
