@@ -46,6 +46,7 @@ CPositionInfo pos_info;
 
 //--- data arrays and state
 double   backlog[];            // rolling median prices
+double   example_wave[];       // precomputed example wave
 bool     wave_active=false;    // currently in trade checking window
 bool     wave_up=false;        // direction of detected wave
 int      trade_bars_left=0;    // remaining bars to search for trades
@@ -83,6 +84,9 @@ int OnInit()
    ArrayResize(backlog,InpBacklog);
    ArrayInitialize(backlog,0.0);
    backlog_filled=0;
+
+   // pre-generate example wave once at start
+   GenerateExample(example_wave);
 
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
@@ -195,7 +199,7 @@ bool DetectWave()
          printf(examp);
          printf(backt);
       
-      
+
 
    // Pearson correlation
    double meanB=0.0,meanE=0.0;
@@ -213,6 +217,7 @@ bool DetectWave()
    double p=num/denom;
    
    printf("Value of P is: %lf", p);
+
 
    // MAE of first differences
    double sum=0.0;
