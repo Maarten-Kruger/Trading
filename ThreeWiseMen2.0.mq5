@@ -153,6 +153,12 @@ void GenerateExample(double &example[])
       double x=InpB1+dx*i;
       example[i]=InpScale*(x*x*x-InpB*x);
      }
+      string out = "Array: ";
+      for(int i=0; i<ArraySize(example); i++)
+      {
+      out += DoubleToString(example[i], 6) + " "; // 4 = number of decimals
+      }
+      printf(out);
   }
 
 //+------------------------------------------------------------------+
