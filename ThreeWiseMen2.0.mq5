@@ -88,6 +88,14 @@ int OnInit()
    // pre-generate example wave once at start
    GenerateExample(example_wave);
 
+   // print the example wave once at initialization
+   string examp="Example Array: ";
+   for(int i=0;i<ArraySize(example_wave);i++)
+     {
+      examp+=DoubleToString(example_wave[i],6)+" ";
+     }
+   Print(examp);
+
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
 
@@ -176,29 +184,18 @@ bool DetectWave()
    double E[]; GenerateExample(E);
    if(ArraySize(E)!=ArraySize(B))
       return(false);
+   double offset=B[0]-E[0];
    for(int i=0;i<InpWaveLen;i++)
-      E[i]+=B[0]; // align start levels
-      
-      
-         
-         
-         
-         string examp = "Example Array: ";
-         for(int i=0; i<ArraySize(E); i++)
-         {
-             examp += DoubleToString(E[i], 6) + " ";
-         }
-         
-         string backt = "BackLog Array: ";
-         for(int i=0; i<ArraySize(B); i++)
-         {
-             backt += DoubleToString(B[i], 6) + " ";
-         }
-         printf(examp);
-         printf(backt);
-         
-      
+      E[i]+=offset; // align start levels precisely
+   E[0]=B[0]; // enforce exact match
+   PrintFormat("Aligned starts E[0]=%f B[0]=%f",E[0],B[0]);
 
+   string backt="BackLog Array: ";
+   for(int i=0;i<ArraySize(B);i++)
+     {
+      backt+=DoubleToString(B[i],6)+" ";
+     }
+   Print(backt);
 
    // Pearson correlation
    double meanB=0.0,meanE=0.0;
@@ -215,20 +212,17 @@ bool DetectWave()
    if(denom==0.0) return(false);
    double p=num/denom;
    
-   printf("Value of P is: %lf", p);
+   PrintFormat("Value of P is: %f", p);
 
-
-   // MAE of first differences
+   // MAE
    double sum=0.0;
    for(int i=1;i<InpWaveLen;i++)
      {
-      double dE=E[i]-E[i-1];
-      double dB=B[i]-B[i-1];
-      sum+=MathAbs(dE-dB)/_Point; // in points
+      sum+=MathAbs(E[i]-B[i])/_Point; // in points
      }
    double d=sum/(InpWaveLen-1);
-   
-   printf("Value of D is: %lf", d);
+
+   PrintFormat("Value of D is: %f", d);
 
    // thresholds: PEARSON < |p| and MAE > |d|
    if(MathAbs(p) > InpPearson && d < InpMAE)
@@ -477,19 +471,8 @@ void OnTick()
 
    // update backlog with median price average over InpAvgPeriod
    double med_sum=0.0;
-   
-   
-   
-   datetime candleTime = iTime(_Symbol, _Period, 0);   // time of current candle
-   double candleHigh   = iHigh(_Symbol, _Period, 0);   // high of current candle
-
-   // Print both in a readable format
-   PrintFormat("High of candle at %s = %f", TimeToString(candleTime, TIME_DATE|TIME_SECONDS), candleHigh);
-
-   
-   
-   for(int i=0;i<InpAvgPeriod;i++)
-      med_sum += (iHigh(_Symbol,_Period,i)+iLow(_Symbol,_Period,i))/2.0;
+   for(int i=1;i<=InpAvgPeriod;i++)
+      med_sum+=(iHigh(_Symbol,_Period,i)+iLow(_Symbol,_Period,i))/2.0;
    double avg=med_sum/InpAvgPeriod;
    AppendBacklog(avg);
    test_end=iTime(_Symbol,_Period,0);
