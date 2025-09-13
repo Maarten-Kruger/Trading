@@ -157,12 +157,6 @@ void GenerateExample(double &example[])
       double x=InpB1+dx*i;
       example[i]=InpScale*(x*x*x-InpB*x);
      }
-         string examp = "Example Array: ";
-         for(int i=0; i<ArraySize(example); i++)
-         {
-             examp += DoubleToString(example[i], 6) + " ";
-         }
-     
   }
 
 //+------------------------------------------------------------------+
@@ -189,15 +183,20 @@ bool DetectWave()
          
          
          
-
+         string examp = "Example Array: ";
+         for(int i=0; i<ArraySize(E); i++)
+         {
+             examp += DoubleToString(E[i], 6) + " ";
+         }
          
          string backt = "BackLog Array: ";
          for(int i=0; i<ArraySize(B); i++)
          {
              backt += DoubleToString(B[i], 6) + " ";
          }
-         
+         printf(examp);
          printf(backt);
+         
       
 
 
