@@ -106,7 +106,9 @@ double CalculateVolume()
    double min_lot   = SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
    double volume    = risk_money / (tick_value * TakeProfitPips / _Point);
    volume           = MathMax(min_lot, MathFloor(volume/lot_step)*lot_step);
-   int    digits    = (int)SymbolInfoInteger(_Symbol,SYMBOL_VOLUME_DIGITS);
+
+   //--- derive volume precision from step size
+   int digits = (int)MathRound(-MathLog10(lot_step));
    return NormalizeDouble(volume,digits);
   }
 
@@ -150,9 +152,17 @@ void ManageDrawdown()
 //+------------------------------------------------------------------+
 void CalculateBarsAndMonths()
   {
-   datetime first = (datetime)SeriesInfoInteger(_Symbol,_Period,SERIES_FIRSTDATE);
-   datetime last  = (datetime)SeriesInfoInteger(_Symbol,_Period,SERIES_LASTDATE);
-   total_bars   = Bars(_Symbol,_Period,first,last);
+   //--- total number of bars in history
+   total_bars = Bars(_Symbol,_Period);
+   if(total_bars<=0)
+     {
+      total_months = 0;
+      return;
+     }
+
+   //--- times of first and last bar for month calculation
+   datetime first = iTime(_Symbol,_Period,total_bars-1);
+   datetime last  = iTime(_Symbol,_Period,0);
 
    MqlDateTime s1,s2;
    TimeToStruct(first,s1);
