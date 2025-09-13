@@ -193,6 +193,13 @@ bool DetectWave()
       backt+=DoubleToString(B[i],6)+" ";
      }
    Print(backt);
+   
+   string examp="Example Array: ";
+   for(int i=0;i<ArraySize(E);i++)
+     {
+      examp+=DoubleToString(E[i],6)+" ";
+     }
+   Print(examp);
 
    // Pearson correlation
    double meanB=0.0,meanE=0.0;
