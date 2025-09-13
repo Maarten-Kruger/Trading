@@ -187,8 +187,6 @@ bool DetectWave()
    double offset=B[0]-E[0];
    for(int i=0;i<InpWaveLen;i++)
       E[i]+=offset; // align start levels precisely
-   E[0]=B[0]; // enforce exact match
-   PrintFormat("Aligned starts E[0]=%f B[0]=%f",E[0],B[0]);
 
    string backt="BackLog Array: ";
    for(int i=0;i<ArraySize(B);i++)
@@ -196,6 +194,14 @@ bool DetectWave()
       backt+=DoubleToString(B[i],6)+" ";
      }
    Print(backt);
+   
+   string examp="Example Array: ";
+   for(int i=0;i<ArraySize(E);i++)
+     {
+      examp+=DoubleToString(E[i],6)+" ";
+     }
+   Print(examp);
+
 
    // Pearson correlation
    double meanB=0.0,meanE=0.0;
