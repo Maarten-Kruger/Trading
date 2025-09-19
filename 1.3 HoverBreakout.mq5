@@ -1,6 +1,6 @@
 #property copyright "MJ Kruger"
 #property link      "https://github.com/Maarten-Kruger/Trading"
-#property version   "1.4"
+#property version   "1.3"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -123,11 +123,12 @@ double CalcLotSize(double risk_percent)
   }
 
 //+------------------------------------------------------------------+
-//| Manage open positions: time-based exit                           |
+//| Close open position after a number of bars                       |
 //+------------------------------------------------------------------+
 void CheckForExit()
   {
-  // Iterate through all open positions and close those exceeding InpMaxBarsOpen.
+// Iterate through all open positions and close those that exceed the
+// maximum number of bars specified in InpMaxBarsOpen.
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
       ulong ticket = PositionGetTicket(i);
@@ -138,12 +139,11 @@ void CheckForExit()
       if(symbol != _Symbol)
          continue;
 
-       datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
-       int      bars_open = iBarShift(_Symbol, _Period, open_time);
+      datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
+      int bars_open = iBarShift(_Symbol, _Period, open_time);
 
-  // Close position after exceeding maximum bars open
-       if(bars_open >= InpMaxBarsOpen)
-          trade.PositionClose(ticket);
+      if(bars_open >= InpMaxBarsOpen)
+         trade.PositionClose(ticket);
      }
   }
 
@@ -215,9 +215,9 @@ void OnTick()
 
 //+------------------------------------------------------------------+
 //| Custom optimization criterion                                    |
-//| y = T*Wt + C*Wp - D*Wd                                           |
+//| y = T*Wt + P*Wp - D*Wd                                           |
 //|   T : trade density = total trades / total bars                  |
-//|   C : consistency-weighted monthly profit                        |
+//|   P : monthly profit ratio = (total profit / starting equity) / months |
 //|   D : relative drawdown percent from tester statistics           |
 //+------------------------------------------------------------------+
 double OnTester()
@@ -238,49 +238,6 @@ double OnTester()
    if(months > 0.0 && startEquity > 0.0)
       monthlyProfit = (profit / startEquity) / months;
 
-   // Consistency: percentage of profitable months
-   double consistency = 0.0;
-   if(months > 0.0 && HistorySelect(g_test_start, g_test_end))
-     {
-      MqlDateTime start_struct;
-      TimeToStruct(g_test_start, start_struct);
-
-      int m = (int)months;
-      double monthProfits[];
-      ArrayResize(monthProfits, m);
-      ArrayInitialize(monthProfits, 0.0);
-
-      uint totalDeals = HistoryDealsTotal();
-      for(uint i = 0; i < totalDeals; i++)
-        {
-         ulong deal_ticket = HistoryDealGetTicket(i);
-         if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal_ticket, DEAL_ENTRY) != DEAL_ENTRY_OUT)
-            continue;
-
-         datetime deal_time = (datetime)HistoryDealGetInteger(deal_ticket, DEAL_TIME);
-         MqlDateTime deal_struct;
-         TimeToStruct(deal_time, deal_struct);
-         int index = (deal_struct.year - start_struct.year) * 12 + (deal_struct.mon - start_struct.mon);
-         if(index < 0 || index >= m)
-            continue;
-
-         double deal_profit = HistoryDealGetDouble(deal_ticket, DEAL_PROFIT) +
-                              HistoryDealGetDouble(deal_ticket, DEAL_SWAP) +
-                              HistoryDealGetDouble(deal_ticket, DEAL_COMMISSION);
-         monthProfits[index] += deal_profit;
-        }
-
-      int profitableMonths = 0;
-      for(int j = 0; j < m; j++)
-         if(monthProfits[j] > 0.0)
-            profitableMonths++;
-
-      if(m > 0)
-         consistency = (double)profitableMonths / (double)m;
-     }
-
-   double monthlyConsistency = monthlyProfit * consistency;
-
    // Normalise weights so they sum to 1.0 even if inputs don't add to 100
    double weightSum = InpWt + InpWp + InpWd;
    if(weightSum <= 0.0)
@@ -291,7 +248,7 @@ double OnTester()
 
 
    // Objective value to maximise during optimisation
-   double score = (tradeDensity * wt + monthlyConsistency * wp - drawdownPct * wd) * 100;
+   double score = (tradeDensity * wt + monthlyProfit * wp - drawdownPct * wd)*100;
    
    
    return(score);
