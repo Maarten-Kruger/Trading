@@ -12,6 +12,7 @@ input double InpBodyThresholdPips   = 20.0;      // Minimum candle body size in 
 input double InpStopLossPips        = 15.0;      // Stop loss distance in pips
 input double InpRiskRewardRatio     = 2.0;       // Risk-to-reward ratio for take profit
 input bool   InpInvertDirection     = false;     // Trade opposite to candle direction
+input int    InpMaxTradeCandles     = 16;        // Maximum number of candles to keep a position open (0 disables)
 input ulong  InpMagicNumber         = 880088;    // Expert advisor magic number
 
 //--- optimization weights (sum should be 100)
@@ -147,6 +148,12 @@ int OnInit()
       return(INIT_PARAMETERS_INCORRECT);
    }
 
+   if(InpMaxTradeCandles < 0)
+   {
+      Print("Maximum trade candle limit cannot be negative.");
+      return(INIT_PARAMETERS_INCORRECT);
+   }
+
    trade.SetExpertMagicNumber((int)InpMagicNumber);
    trade.SetTypeFillingBySymbol(_Symbol);
 
@@ -167,10 +174,54 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
+//| Helper: close positions that exceeded max candle lifetime        |
+//+------------------------------------------------------------------+
+void CloseExpiredPositions()
+{
+   if(InpMaxTradeCandles == 0)
+      return;
+
+   for(int i = PositionsTotal() - 1; i >= 0; --i)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      if((ulong)PositionGetInteger(POSITION_MAGIC) != InpMagicNumber)
+         continue;
+
+      string position_symbol = PositionGetString(POSITION_SYMBOL);
+      if(position_symbol != _Symbol)
+         continue;
+
+      datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
+      if(open_time == 0)
+         continue;
+
+      int open_shift = iBarShift(_Symbol, _Period, open_time, true);
+      if(open_shift < 0)
+         continue;
+
+      if(open_shift < InpMaxTradeCandles)
+         continue;
+
+      if(!trade.PositionClose(ticket))
+         PrintFormat("Failed to close position %I64u after exceeding max candles. Error %d", ticket, GetLastError());
+      else
+         PrintFormat("Closed position %I64u after exceeding max candles of %d.", ticket, InpMaxTradeCandles);
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick()
 {
+   CloseExpiredPositions();
+
    if(!IsNewBar())
       return;
 
