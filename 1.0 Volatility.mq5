@@ -111,12 +111,15 @@ bool CheckLargeCandles(const MqlRates &rates_array[], int rates_count, bool &isB
       return(false);
 
    double pip = PipValue();
-   double threshold = InpBodyThresholdPips * pip;
+   if(pip <= 0.0)
+      return(false);
 
    for(int i = 0; i < rates_count; ++i)
    {
-      double body = MathAbs(rates_array[i].close - rates_array[i].open);
-      if(body < threshold)
+      double body_points = MathAbs(rates_array[i].close - rates_array[i].open);
+      double body_pips   = body_points / pip;
+
+      if(body_pips < InpBodyThresholdPips)
          return(false);
    }
 
