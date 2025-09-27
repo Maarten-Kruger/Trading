@@ -207,7 +207,7 @@ void TryOpenNewTrade()
       slPrice=price+slPips*pointMultiplier;
       tpPrice=price-tpPips*pointMultiplier;
      }
-
+     
    long digitsRaw=SymbolInfoInteger(g_symbol,SYMBOL_DIGITS);
    if(digitsRaw<=0)
       digitsRaw=(long)Digits();
