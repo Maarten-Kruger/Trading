@@ -160,7 +160,9 @@ double CalculateLotSize()
    double stop_distance_price = stop_distance_points * _Point;
 
    double min_volume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   int volume_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_VOLUME_DIGITS);
+   double step   = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   int volume_digits = (int)MathRound(-MathLog10(step));
+
 
    double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    double tick_size  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
