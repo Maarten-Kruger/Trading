@@ -134,6 +134,22 @@ void EnforceMaxLife()
 }
 
 //+------------------------------------------------------------------+
+//| Helper: ensure the strategy can restart after unexpected closes  |
+//+------------------------------------------------------------------+
+void EnsureMomentumContinuity()
+{
+   if(HasOpenPosition())
+      return;
+
+   if(g_should_open_trade)
+      return;
+
+   // Recover from missed trade transaction events by arming the next entry
+   g_should_open_trade = true;
+   g_use_random_direction = true;
+}
+
+//+------------------------------------------------------------------+
 //| Helper: calculate appropriate lot size from risk% and stop loss  |
 //+------------------------------------------------------------------+
 double CalculateLotSize()
@@ -142,6 +158,9 @@ double CalculateLotSize()
    double point_factor = PipToPointFactor();
    double stop_distance_points = stop_pips * point_factor;
    double stop_distance_price = stop_distance_points * _Point;
+
+   double min_volume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   int volume_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_VOLUME_DIGITS);
 
    double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    double tick_size  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
@@ -154,6 +173,13 @@ double CalculateLotSize()
          PrintFormat("CalculateLotSize: invalid market parameters (tick_value=%f, tick_size=%f, stop_distance_price=%f).", tick_value, tick_size, stop_distance_price);
          warned_invalid_market = true;
       }
+
+      if(min_volume > 0.0)
+      {
+         PrintFormat("CalculateLotSize: falling back to minimum volume %.2f while market parameters recover.", min_volume);
+         return NormalizeDouble(min_volume, volume_digits);
+      }
+
       return 0.0;
    }
    warned_invalid_market = false;
@@ -162,11 +188,17 @@ double CalculateLotSize()
    double stop_value  = (stop_distance_price / tick_size) * tick_value;
 
    if(stop_value <= 0.0)
+   {
+      if(min_volume > 0.0)
+      {
+         Print("CalculateLotSize: computed stop value is zero; using minimum volume fallback.");
+         return NormalizeDouble(min_volume, volume_digits);
+      }
       return 0.0;
+   }
 
    double volume = risk_amount / stop_value;
 
-   double min_volume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double max_volume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    double step_volume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
@@ -174,17 +206,32 @@ double CalculateLotSize()
       step_volume = min_volume;
 
    if(step_volume <= 0.0)
+   {
+      if(min_volume > 0.0)
+      {
+         Print("CalculateLotSize: invalid volume step; using minimum volume fallback.");
+         return NormalizeDouble(min_volume, volume_digits);
+      }
       return 0.0;
+   }
 
-   volume = MathMax(volume, min_volume);
-   volume = MathMin(volume, max_volume);
+   if(min_volume > 0.0)
+      volume = MathMax(volume, min_volume);
+   if(max_volume > 0.0)
+      volume = MathMin(volume, max_volume);
+
    volume = MathFloor(volume / step_volume) * step_volume;
-   volume = MathMax(volume, min_volume);
 
-   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   int digits  = (int)MathRound(-MathLog10(step));
-   return NormalizeDouble(volume, digits);
+   if(min_volume > 0.0)
+      volume = MathMax(volume, min_volume);
 
+   if(volume <= 0.0 && min_volume > 0.0)
+   {
+      Print("CalculateLotSize: calculated volume clipped to zero; using minimum volume fallback.");
+      volume = min_volume;
+   }
+
+   return NormalizeDouble(volume, volume_digits);
 }
 
 //+------------------------------------------------------------------+
@@ -203,24 +250,62 @@ bool OpenMomentumTrade(const ENUM_ORDER_TYPE direction)
    double sl_points = InpStopLossPips * point_factor;
    double tp_points = InpTakeProfitPips * point_factor;
 
-   double price = 0.0, sl = 0.0, tp = 0.0;
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double stops_level_points = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double freeze_level_points = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   double min_distance_points = MathMax(stops_level_points, freeze_level_points);
+
+   if(min_distance_points > 0.0)
+   {
+      if(sl_points > 0.0 && sl_points < min_distance_points)
+      {
+         PrintFormat("OpenMomentumTrade: requested stop loss distance %.1f below broker minimum %.1f; widening.", sl_points, min_distance_points);
+         sl_points = min_distance_points;
+      }
+      if(tp_points > 0.0 && tp_points < min_distance_points)
+      {
+         PrintFormat("OpenMomentumTrade: requested take profit distance %.1f below broker minimum %.1f; widening.", tp_points, min_distance_points);
+         tp_points = min_distance_points;
+      }
+   }
+
+   double price = 0.0, sl = 0.0, tp = 0.0;
 
    if(direction == ORDER_TYPE_BUY)
    {
       price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-      sl = price - sl_points * _Point;
-      tp = price + tp_points * _Point;
-      if(!g_trade.Buy(volume, _Symbol, price, NormalizeDouble(sl, digits), NormalizeDouble(tp, digits)))
+      if(price <= 0.0)
+      {
+         Print("OpenMomentumTrade: ask price unavailable; will retry on the next tick.");
          return false;
+      }
+      sl = (sl_points > 0.0) ? NormalizeDouble(price - sl_points * _Point, digits) : 0.0;
+      tp = (tp_points > 0.0) ? NormalizeDouble(price + tp_points * _Point, digits) : 0.0;
+      if(!g_trade.Buy(volume, _Symbol, price, sl, tp))
+      {
+         uint retcode = g_trade.ResultRetcode();
+         PrintFormat("OpenMomentumTrade: buy order failed (retcode=%u - %s, volume=%.2f, price=%.5f, sl=%.5f, tp=%.5f).",
+                     retcode, g_trade.ResultRetcodeDescription(), volume, price, sl, tp);
+         return false;
+      }
    }
    else
    {
       price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      sl = price + sl_points * _Point;
-      tp = price - tp_points * _Point;
-      if(!g_trade.Sell(volume, _Symbol, price, NormalizeDouble(sl, digits), NormalizeDouble(tp, digits)))
+      if(price <= 0.0)
+      {
+         Print("OpenMomentumTrade: bid price unavailable; will retry on the next tick.");
          return false;
+      }
+      sl = (sl_points > 0.0) ? NormalizeDouble(price + sl_points * _Point, digits) : 0.0;
+      tp = (tp_points > 0.0) ? NormalizeDouble(price - tp_points * _Point, digits) : 0.0;
+      if(!g_trade.Sell(volume, _Symbol, price, sl, tp))
+      {
+         uint retcode = g_trade.ResultRetcode();
+         PrintFormat("OpenMomentumTrade: sell order failed (retcode=%u - %s, volume=%.2f, price=%.5f, sl=%.5f, tp=%.5f).",
+                     retcode, g_trade.ResultRetcodeDescription(), volume, price, sl, tp);
+         return false;
+      }
    }
 
    // remember the direction that has just been used for the next decision
@@ -326,6 +411,7 @@ void OnTick()
 void OnTimer()
 {
    EnforceMaxLife();
+   EnsureMomentumContinuity();
 }
 
 //+------------------------------------------------------------------+
@@ -353,7 +439,7 @@ void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest 
       return;
    }
 
-   if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY)
+   if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY && entry != DEAL_ENTRY_INOUT)
       return;
 
    double deal_profit = HistoryDealGetDouble(deal_ticket, DEAL_PROFIT)
@@ -410,5 +496,4 @@ double OnTester()
 
    return score * 100.0;
 }
-
 
