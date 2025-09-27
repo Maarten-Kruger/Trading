@@ -1,5 +1,5 @@
 #property copyright ""
-#property version   "2.00"
+#property version   "1.00"
 #property strict
 
 #include <Trade/Trade.mqh>
