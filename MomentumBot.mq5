@@ -58,7 +58,8 @@ double      CalculateMonths(datetime start_time,datetime end_time);
 //+------------------------------------------------------------------+
 int OnInit()
   {
-   MathSrand((uint)TimeLocal());
+   MathSrand((int)TimeLocal());
+
    g_symbol=(InpSymbol=="" ? Symbol() : InpSymbol);
    if(!SymbolSelect(g_symbol,true))
       return(INIT_FAILED);
@@ -249,7 +250,7 @@ bool PositionIsActive()
    int total=PositionsTotal();
    for(int pos_index=0;pos_index<total;pos_index++)
      {
-      if(!PositionSelectByIndex((uint)pos_index))
+      if(!PositionSelectByIndex((ulong)pos_index))
          continue;
 
       ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
@@ -268,7 +269,7 @@ ulong FindActivePositionTicket()
    int total=PositionsTotal();
    for(int pos_index=0;pos_index<total;pos_index++)
      {
-      if(!PositionSelectByIndex((uint)pos_index))
+      if(!PositionSelectByIndex((ulong)pos_index))
          continue;
 
       if((long)PositionGetInteger(POSITION_MAGIC)!=(long)InpMagicNumber)
@@ -428,8 +429,8 @@ double PipToPointMultiplier()
    double point=SymbolInfoDouble(g_symbol,SYMBOL_POINT);
    if(point<=0.0)
       return(0.0);
-   long rawDigits=0;
-   if(!SymbolInfoInteger(g_symbol,SYMBOL_DIGITS,rawDigits))
+   long rawDigits=SymbolInfoInteger(g_symbol,SYMBOL_DIGITS);
+   if(rawDigits<=0)
       rawDigits=(long)Digits();
    int digits=(int)rawDigits;
    if(digits==3 || digits==5)
@@ -455,8 +456,8 @@ double NormalizeLotSize(double lots)
    double normalized=MathFloor(lots/step)*step;
    normalized=MathMax(normalized,min);
    normalized=MathMin(normalized,max);
-   long volumeDigits=0;
-   if(!SymbolInfoInteger(g_symbol,SYMBOL_VOLUME_DIGITS,volumeDigits))
+   long volumeDigits=SymbolInfoInteger(g_symbol,SYMBOL_VOLUME_DIGITS);
+   if(volumeDigits<0)
       volumeDigits=2;
    return(NormalizeDouble(normalized,(int)volumeDigits));
   }
