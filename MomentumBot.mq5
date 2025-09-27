@@ -59,7 +59,6 @@ double      CalculateMonths(datetime start_time,datetime end_time);
 int OnInit()
   {
    MathSrand((int)TimeLocal());
-
    g_symbol=(InpSymbol=="" ? Symbol() : InpSymbol);
    if(!SymbolSelect(g_symbol,true))
       return(INIT_FAILED);
@@ -206,7 +205,10 @@ void TryOpenNewTrade()
       tpPrice=price-tpPips*pointMultiplier;
      }
 
-   int priceDigits=(int)SymbolInfoInteger(g_symbol,SYMBOL_DIGITS);
+   long digitsRaw=0;
+   if(!SymbolInfoInteger(g_symbol,SYMBOL_DIGITS,digitsRaw))
+      return;
+   int priceDigits=(int)digitsRaw;
    slPrice=NormalizeDouble(slPrice,priceDigits);
    tpPrice=NormalizeDouble(tpPrice,priceDigits);
 
@@ -250,7 +252,7 @@ bool PositionIsActive()
    int total=PositionsTotal();
    for(int pos_index=0;pos_index<total;pos_index++)
      {
-      if(!PositionSelectByIndex((ulong)pos_index))
+      if(!PositionSelectByIndex((uint)pos_index))
          continue;
 
       ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
@@ -269,7 +271,7 @@ ulong FindActivePositionTicket()
    int total=PositionsTotal();
    for(int pos_index=0;pos_index<total;pos_index++)
      {
-      if(!PositionSelectByIndex((ulong)pos_index))
+      if(!PositionSelectByIndex((uint)pos_index))
          continue;
 
       if((long)PositionGetInteger(POSITION_MAGIC)!=(long)InpMagicNumber)
@@ -373,7 +375,7 @@ void HandlePositionClosure(ulong ticket)
 
    for(int deal_index=0;deal_index<deals;deal_index++)
      {
-      ulong dealTicket=HistoryDealGetTicket(deal_index);
+      ulong dealTicket=HistoryDealGetTicket((uint)deal_index)
       if((long)HistoryDealGetInteger(dealTicket,DEAL_MAGIC)!= (long)InpMagicNumber)
          continue;
 
@@ -429,7 +431,9 @@ double PipToPointMultiplier()
    double point=SymbolInfoDouble(g_symbol,SYMBOL_POINT);
    if(point<=0.0)
       return(0.0);
-   long rawDigits=SymbolInfoInteger(g_symbol,SYMBOL_DIGITS);
+   long rawDigits=0;
+   if(!SymbolInfoInteger(g_symbol,SYMBOL_DIGITS,rawDigits))
+      rawDigits=(long)Digits();
    if(rawDigits<=0)
       rawDigits=(long)Digits();
    int digits=(int)rawDigits;
@@ -456,7 +460,9 @@ double NormalizeLotSize(double lots)
    double normalized=MathFloor(lots/step)*step;
    normalized=MathMax(normalized,min);
    normalized=MathMin(normalized,max);
-   long volumeDigits=SymbolInfoInteger(g_symbol,SYMBOL_VOLUME_DIGITS);
+   long volumeDigits=0;
+   if(!SymbolInfoInteger(g_symbol,SYMBOL_VOLUME_DIGITS,volumeDigits))
+      volumeDigits=2;
    if(volumeDigits<0)
       volumeDigits=2;
    return(NormalizeDouble(normalized,(int)volumeDigits));
