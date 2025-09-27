@@ -181,7 +181,10 @@ double CalculateLotSize()
    volume = MathFloor(volume / step_volume) * step_volume;
    volume = MathMax(volume, min_volume);
 
-   return NormalizeDouble(volume, (int)SymbolInfoInteger(_Symbol, SYMBOL_VOLUME_DIGITS));
+   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   int digits  = (int)MathRound(-MathLog10(step));
+   return NormalizeDouble(volume, digits);
+
 }
 
 //+------------------------------------------------------------------+
@@ -407,4 +410,5 @@ double OnTester()
 
    return score * 100.0;
 }
+
 
