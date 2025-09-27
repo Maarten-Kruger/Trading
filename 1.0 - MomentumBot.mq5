@@ -146,8 +146,17 @@ double CalculateLotSize()
    double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    double tick_size  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
 
+   static bool warned_invalid_market = false;
    if(tick_value <= 0.0 || tick_size <= 0.0 || stop_distance_price <= 0.0)
+   {
+      if(!warned_invalid_market)
+      {
+         PrintFormat("CalculateLotSize: invalid market parameters (tick_value=%f, tick_size=%f, stop_distance_price=%f).", tick_value, tick_size, stop_distance_price);
+         warned_invalid_market = true;
+      }
       return 0.0;
+   }
+   warned_invalid_market = false;
 
    double risk_amount = AccountInfoDouble(ACCOUNT_EQUITY) * InpRiskPercent / 100.0;
    double stop_value  = (stop_distance_price / tick_size) * tick_value;
@@ -182,7 +191,10 @@ bool OpenMomentumTrade(const ENUM_ORDER_TYPE direction)
 {
    double volume = CalculateLotSize();
    if(volume <= 0.0)
+   {
+      Print("OpenMomentumTrade: calculated trade volume is zero; will retry on the next tick.");
       return false;
+   }
 
    double point_factor = PipToPointFactor();
    double sl_points = InpStopLossPips * point_factor;
@@ -252,7 +264,10 @@ void ComputeSpanStats(int &bars, double &months)
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   MathSrand((uint)TimeLocal());
+   uint seed = (uint)TimeLocal() ^ GetTickCount();
+   MathSrand(seed);
+
+   EventSetTimer(10);
 
    g_trade.SetExpertMagicNumber(InpMagic);
    g_trade.SetTypeFilling(ORDER_FILLING_FOK);
@@ -278,7 +293,7 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   // No special clean-up required. Place-holder to satisfy structure guidelines.
+   EventKillTimer();
 }
 
 //+------------------------------------------------------------------+
@@ -303,6 +318,14 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
+//| Expert timer function                                            |
+//+------------------------------------------------------------------+
+void OnTimer()
+{
+   EnforceMaxLife();
+}
+
+//+------------------------------------------------------------------+
 //| Trade transaction handler                                        |
 //+------------------------------------------------------------------+
 void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest &request, const MqlTradeResult &result)
@@ -314,17 +337,20 @@ void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest 
    if(deal_ticket == 0)
       return;
 
-   if(HistoryDealGetInteger(deal_ticket, DEAL_MAGIC) != (long)InpMagic)
+   string deal_symbol = (string)HistoryDealGetString(deal_ticket, DEAL_SYMBOL);
+   if(deal_symbol != _Symbol)
       return;
 
+   long deal_magic = HistoryDealGetInteger(deal_ticket, DEAL_MAGIC);
    ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal_ticket, DEAL_ENTRY);
    if(entry == DEAL_ENTRY_IN)
    {
-      ++g_total_trades;
+      if(deal_magic == (long)InpMagic)
+         ++g_total_trades;
       return;
    }
 
-   if(entry != DEAL_ENTRY_OUT)
+   if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY)
       return;
 
    double deal_profit = HistoryDealGetDouble(deal_ticket, DEAL_PROFIT)
@@ -382,5 +408,3 @@ double OnTester()
    return score * 100.0;
 }
 
-//+------------------------------------------------------------------+
-git status -sb
