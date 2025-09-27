@@ -59,6 +59,7 @@ double      CalculateMonths(datetime start_time,datetime end_time);
 int OnInit()
   {
    MathSrand((int)TimeLocal());
+
    g_symbol=(InpSymbol=="" ? Symbol() : InpSymbol);
    if(!SymbolSelect(g_symbol,true))
       return(INIT_FAILED);
