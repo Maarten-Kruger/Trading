@@ -143,6 +143,7 @@ void EnsureMomentumContinuity()
 
    if(g_should_open_trade)
       return;
+   printf("THe ensure momentum has run");
 
    // Recover from missed trade transaction events by arming the next entry
    g_should_open_trade = true;
