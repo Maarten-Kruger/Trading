@@ -7,7 +7,7 @@
 //+------------------------------------------------------------------+
 //| Expert Advisor inputs                                            |
 //+------------------------------------------------------------------+
-input string InpSymbol               = _Symbol;   // Trading symbol
+input string InpSymbol               = "";       // Trading symbol (leave blank for current)
 input double InpRiskPercent          = 1.0;       // Risk per trade (% of equity)
 input double InpTakeProfitPips       = 50.0;      // Take-profit distance (pips)
 input double InpStopLossPips         = 30.0;      // Stop-loss distance (pips)
@@ -21,8 +21,9 @@ input double InpWeightDrawdown       = 20.0;      // Weight of drawdown impact (
 //+------------------------------------------------------------------+
 //| Global state                                                     |
 //+------------------------------------------------------------------+
+string   g_symbol = "";              // Symbol traded by the expert
 CTrade   g_trade;                     // Trading helper object
-long     g_activePositionTicket = -1; // Ticket of the currently managed position
+ulong    g_activePositionTicket = 0;  // Ticket of the currently managed position
 ENUM_ORDER_TYPE g_currentDirection;   // Direction we aim to trade next
 bool     g_waitingForExit = false;    // True if we are waiting for the last trade to finish
 bool     g_timeoutTriggered = false;  // Tracks whether the last closure was due to timeout
@@ -42,10 +43,10 @@ void        InitializeDirection();
 void        EvaluateMomentumDirection();
 void        TryOpenNewTrade();
 bool        PositionIsActive();
-long        FindActivePositionTicket();
+ulong       FindActivePositionTicket();
 void        MonitorOpenPosition();
-void        HandlePositionClosure(long ticket);
-bool        ClosePositionByTicket(long ticket);
+void        HandlePositionClosure(ulong ticket);
+bool        ClosePositionByTicket(ulong ticket);
 double      PipToPointMultiplier();
 double      NormalizeLotSize(double lots);
 double      CalculatePositionSize(ENUM_ORDER_TYPE orderType,double slPrice,double entryPrice);
@@ -58,10 +59,15 @@ double      CalculateMonths(datetime start_time,datetime end_time);
 int OnInit()
   {
    MathSrand((uint)TimeLocal());
-   if(!SymbolSelect(InpSymbol,true))
+   g_symbol=(InpSymbol=="" ? Symbol() : InpSymbol);
+   if(!SymbolSelect(g_symbol,true))
       return(INIT_FAILED);
    InitializeDirection();
-   g_trade.SetExpertMagicNumber((ulong)InpMagicNumber);
+   g_activePositionTicket=0;
+   g_waitingForExit=false;
+   g_timeoutTriggered=false;
+   g_tradeOpenTime=0;
+   g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetAsyncMode(false);
    return(INIT_SUCCEEDED);
   }
@@ -109,7 +115,10 @@ void UpdateBacktestTracking()
       g_testStart=now;
    g_testEnd=now;
 
-   datetime currentBarTime=iTime(InpSymbol,_Period,0);
+   if(g_symbol=="")
+      g_symbol=Symbol();
+
+   datetime currentBarTime=iTime(g_symbol,_Period,0);
    if(currentBarTime!=g_lastBarTime && currentBarTime>0)
      {
       g_totalBars++;
@@ -136,10 +145,13 @@ void EvaluateMomentumDirection()
    int bullish=0;
    int bearish=0;
 
-   for(int i=1;i<=InpMomentumBars && i<Bars(InpSymbol,_Period);i++)
+   if(g_symbol=="")
+      g_symbol=Symbol();
+
+   for(int i=1;i<=InpMomentumBars && i<Bars(g_symbol,_Period);i++)
      {
-      double close_i=iClose(InpSymbol,_Period,i-1);
-      double close_prev=iClose(InpSymbol,_Period,i);
+      double close_i=iClose(g_symbol,_Period,i-1);
+      double close_prev=iClose(g_symbol,_Period,i);
       if(close_i>close_prev)
          bullish++;
       else if(close_i<close_prev)
@@ -159,6 +171,9 @@ void EvaluateMomentumDirection()
 //+------------------------------------------------------------------+
 void TryOpenNewTrade()
   {
+   if(g_symbol=="")
+      return;
+
    double pointMultiplier=PipToPointMultiplier();
    double slPips=InpStopLossPips;
    double tpPips=InpTakeProfitPips;
@@ -167,7 +182,7 @@ void TryOpenNewTrade()
       return;
 
    MqlTick tick;
-   if(!SymbolInfoTick(InpSymbol,tick))
+   if(!SymbolInfoTick(g_symbol,tick))
       return;
 
    double slPrice, tpPrice;
@@ -186,7 +201,7 @@ void TryOpenNewTrade()
       tpPrice=price-tpPips*pointMultiplier;
      }
 
-   int priceDigits=(int)SymbolInfoInteger(InpSymbol,SYMBOL_DIGITS);
+   int priceDigits=(int)SymbolInfoInteger(g_symbol,SYMBOL_DIGITS);
    slPrice=NormalizeDouble(slPrice,priceDigits);
    tpPrice=NormalizeDouble(tpPrice,priceDigits);
 
@@ -196,21 +211,21 @@ void TryOpenNewTrade()
 
    bool result=false;
    if(g_currentDirection==ORDER_TYPE_BUY)
-      result=g_trade.Buy(lotSize,InpSymbol,price,slPrice,tpPrice);
+      result=g_trade.Buy(lotSize,g_symbol,price,slPrice,tpPrice);
    else
-      result=g_trade.Sell(lotSize,InpSymbol,price,slPrice,tpPrice);
+      result=g_trade.Sell(lotSize,g_symbol,price,slPrice,tpPrice);
 
    if(result)
      {
       g_activePositionTicket=g_trade.ResultDeal();
-      if(g_activePositionTicket<=0)
+      if(g_activePositionTicket==0)
          g_activePositionTicket=g_trade.ResultOrder();
 
-      long positionTicket=FindActivePositionTicket();
-      if(positionTicket>0)
+      ulong positionTicket=FindActivePositionTicket();
+      if(positionTicket!=0)
          g_activePositionTicket=positionTicket;
 
-      if(PositionSelectByTicket((ulong)g_activePositionTicket))
+      if(PositionSelectByTicket(g_activePositionTicket))
          g_tradeOpenTime=(datetime)PositionGetInteger(POSITION_TIME);
       else
          g_tradeOpenTime=TimeCurrent();
@@ -224,16 +239,16 @@ void TryOpenNewTrade()
 //+------------------------------------------------------------------+
 bool PositionIsActive()
   {
-   if(g_activePositionTicket<=0)
+   if(g_activePositionTicket==0)
       return(false);
 
-   ulong total=PositionsTotal();
-   for(ulong i=0;i<total;i++)
+   int total=(int)PositionsTotal();
+   for(int i=0;i<total;i++)
      {
-      if(!PositionSelectByIndex((int)i))
+      if(!PositionSelectByIndex(i))
          continue;
 
-      long ticket=(long)PositionGetInteger(POSITION_TICKET);
+      ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
       if(ticket==g_activePositionTicket)
          return(true);
      }
@@ -244,12 +259,12 @@ bool PositionIsActive()
 //+------------------------------------------------------------------+
 //| Locate the latest open position managed by this expert           |
 //+------------------------------------------------------------------+
-long FindActivePositionTicket()
+ulong FindActivePositionTicket()
   {
-   ulong total=PositionsTotal();
-   for(ulong i=0;i<total;i++)
+   int total=(int)PositionsTotal();
+   for(int i=0;i<total;i++)
      {
-      if(!PositionSelectByIndex((int)i))
+      if(!PositionSelectByIndex(i))
          continue;
 
       if((long)PositionGetInteger(POSITION_MAGIC)!=(long)InpMagicNumber)
@@ -257,13 +272,13 @@ long FindActivePositionTicket()
 
       string symbol="";
       PositionGetString(POSITION_SYMBOL,symbol);
-      if(symbol!=InpSymbol)
+      if(symbol!=g_symbol)
          continue;
 
-      return((long)PositionGetInteger(POSITION_TICKET));
+      return((ulong)PositionGetInteger(POSITION_TICKET));
      }
 
-   return(-1);
+   return(0);
   }
 
 //+------------------------------------------------------------------+
@@ -292,20 +307,18 @@ void MonitorOpenPosition()
 //+------------------------------------------------------------------+
 //| Close position by ticket                                         |
 //+------------------------------------------------------------------+
-bool ClosePositionByTicket(long ticket)
+bool ClosePositionByTicket(ulong ticket)
   {
-   if(ticket<=0)
+   if(ticket==0)
       return(false);
 
-   if(!PositionSelectByTicket((ulong)ticket))
+   if(!PositionSelectByTicket(ticket))
       return(false);
 
    ENUM_POSITION_TYPE type=(ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
 
    bool closed=false;
-   if(type==POSITION_TYPE_BUY)
-      closed=g_trade.PositionClose(ticket);
-   else if(type==POSITION_TYPE_SELL)
+   if(type==POSITION_TYPE_BUY || type==POSITION_TYPE_SELL)
       closed=g_trade.PositionClose(ticket);
 
    if(closed)
@@ -320,18 +333,21 @@ bool ClosePositionByTicket(long ticket)
 //+------------------------------------------------------------------+
 //| Handle the closure of the managed position                       |
 //+------------------------------------------------------------------+
-void HandlePositionClosure(long ticket)
+void HandlePositionClosure(ulong ticket)
   {
-   if(ticket<=0)
+   if(ticket==0)
      {
       EvaluateMomentumDirection();
       return;
      }
 
+   if(g_symbol=="")
+      g_symbol=Symbol();
+
    if(g_timeoutTriggered)
      {
       EvaluateMomentumDirection();
-      g_activePositionTicket=-1;
+      g_activePositionTicket=0;
       g_tradeOpenTime=0;
       g_timeoutTriggered=false;
       return;
@@ -346,11 +362,11 @@ void HandlePositionClosure(long ticket)
    if(!HistorySelect(historyStart,TimeCurrent()))
       HistorySelect(0,TimeCurrent());
 
-   ulong deals=HistoryDealsTotal();
+   uint deals=HistoryDealsTotal();
    double lastProfit=0.0;
    datetime lastCloseTime=0;
 
-   for(ulong i=0;i<deals;i++)
+   for(uint i=0;i<deals;i++)
      {
       ulong dealTicket=HistoryDealGetTicket(i);
       if((long)HistoryDealGetInteger(dealTicket,DEAL_MAGIC)!= (long)InpMagicNumber)
@@ -361,7 +377,7 @@ void HandlePositionClosure(long ticket)
          datetime closeTime=(datetime)HistoryDealGetInteger(dealTicket,DEAL_TIME);
          string dealSymbol="";
          HistoryDealGetString(dealTicket,DEAL_SYMBOL,dealSymbol);
-         if(dealSymbol!=InpSymbol)
+         if(dealSymbol!=g_symbol)
             continue;
 
          if(closeTime>lastCloseTime)
@@ -392,7 +408,7 @@ void HandlePositionClosure(long ticket)
         }
      }
 
-   g_activePositionTicket=-1;
+   g_activePositionTicket=0;
    g_tradeOpenTime=0;
    g_timeoutTriggered=false;
   }
@@ -402,10 +418,13 @@ void HandlePositionClosure(long ticket)
 //+------------------------------------------------------------------+
 double PipToPointMultiplier()
   {
-   double point=SymbolInfoDouble(InpSymbol,SYMBOL_POINT);
+   if(g_symbol=="")
+      g_symbol=Symbol();
+
+   double point=SymbolInfoDouble(g_symbol,SYMBOL_POINT);
    if(point<=0.0)
       return(0.0);
-   int digits=(int)SymbolInfoInteger(InpSymbol,SYMBOL_DIGITS);
+   int digits=(int)SymbolInfoInteger(g_symbol,SYMBOL_DIGITS);
    if(digits==3 || digits==5)
       return(point*10.0);
    return(point);
@@ -416,9 +435,12 @@ double PipToPointMultiplier()
 //+------------------------------------------------------------------+
 double NormalizeLotSize(double lots)
   {
-   double step=SymbolInfoDouble(InpSymbol,SYMBOL_VOLUME_STEP);
-   double min=SymbolInfoDouble(InpSymbol,SYMBOL_VOLUME_MIN);
-   double max=SymbolInfoDouble(InpSymbol,SYMBOL_VOLUME_MAX);
+   if(g_symbol=="")
+      g_symbol=Symbol();
+
+   double step=SymbolInfoDouble(g_symbol,SYMBOL_VOLUME_STEP);
+   double min=SymbolInfoDouble(g_symbol,SYMBOL_VOLUME_MIN);
+   double max=SymbolInfoDouble(g_symbol,SYMBOL_VOLUME_MAX);
 
    if(step<=0.0)
       step=1.0;
@@ -426,7 +448,7 @@ double NormalizeLotSize(double lots)
    double normalized=MathFloor(lots/step)*step;
    normalized=MathMax(normalized,min);
    normalized=MathMin(normalized,max);
-   return(NormalizeDouble(normalized,(int)SymbolInfoInteger(InpSymbol,SYMBOL_VOLUME_DIGITS)));
+   return(NormalizeDouble(normalized,(int)SymbolInfoInteger(g_symbol,SYMBOL_VOLUME_DIGITS)));
   }
 
 //+------------------------------------------------------------------+
@@ -434,14 +456,19 @@ double NormalizeLotSize(double lots)
 //+------------------------------------------------------------------+
 double CalculatePositionSize(ENUM_ORDER_TYPE orderType,double slPrice,double entryPrice)
   {
+   if(g_symbol=="")
+      g_symbol=Symbol();
+
+   (void)orderType;
+
    double equity=AccountInfoDouble(ACCOUNT_EQUITY);
    double riskMoney=equity*InpRiskPercent/100.0;
    if(riskMoney<=0.0)
       return(0.0);
 
-   double point=SymbolInfoDouble(InpSymbol,SYMBOL_POINT);
-   double tickValue=SymbolInfoDouble(InpSymbol,SYMBOL_TRADE_TICK_VALUE);
-   double tickSize=SymbolInfoDouble(InpSymbol,SYMBOL_TRADE_TICK_SIZE);
+   double point=SymbolInfoDouble(g_symbol,SYMBOL_POINT);
+   double tickValue=SymbolInfoDouble(g_symbol,SYMBOL_TRADE_TICK_VALUE);
+   double tickSize=SymbolInfoDouble(g_symbol,SYMBOL_TRADE_TICK_SIZE);
 
    if(tickSize<=0.0 || point<=0.0)
       return(0.0);
