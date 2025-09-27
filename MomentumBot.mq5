@@ -62,6 +62,10 @@ int OnInit()
    g_symbol=(InpSymbol=="" ? Symbol() : InpSymbol);
    if(!SymbolSelect(g_symbol,true))
       return(INIT_FAILED);
+   g_testStart=0;
+   g_testEnd=0;
+   g_totalBars=0;
+   g_lastBarTime=0;
    InitializeDirection();
    g_activePositionTicket=0;
    g_waitingForExit=false;
@@ -242,10 +246,10 @@ bool PositionIsActive()
    if(g_activePositionTicket==0)
       return(false);
 
-   int total=(int)PositionsTotal();
-   for(int i=0;i<total;i++)
+   int total=PositionsTotal();
+   for(int pos_index=0;pos_index<total;pos_index++)
      {
-      if(!PositionSelectByIndex(i))
+      if(!PositionSelectByIndex((uint)pos_index))
          continue;
 
       ulong ticket=(ulong)PositionGetInteger(POSITION_TICKET);
@@ -261,10 +265,10 @@ bool PositionIsActive()
 //+------------------------------------------------------------------+
 ulong FindActivePositionTicket()
   {
-   int total=(int)PositionsTotal();
-   for(int i=0;i<total;i++)
+   int total=PositionsTotal();
+   for(int pos_index=0;pos_index<total;pos_index++)
      {
-      if(!PositionSelectByIndex(i))
+      if(!PositionSelectByIndex((uint)pos_index))
          continue;
 
       if((long)PositionGetInteger(POSITION_MAGIC)!=(long)InpMagicNumber)
@@ -362,13 +366,13 @@ void HandlePositionClosure(ulong ticket)
    if(!HistorySelect(historyStart,TimeCurrent()))
       HistorySelect(0,TimeCurrent());
 
-   uint deals=HistoryDealsTotal();
+   int deals=HistoryDealsTotal();
    double lastProfit=0.0;
    datetime lastCloseTime=0;
 
-   for(uint i=0;i<deals;i++)
+   for(int deal_index=0;deal_index<deals;deal_index++)
      {
-      ulong dealTicket=HistoryDealGetTicket(i);
+      ulong dealTicket=HistoryDealGetTicket(deal_index);
       if((long)HistoryDealGetInteger(dealTicket,DEAL_MAGIC)!= (long)InpMagicNumber)
          continue;
 
@@ -424,7 +428,10 @@ double PipToPointMultiplier()
    double point=SymbolInfoDouble(g_symbol,SYMBOL_POINT);
    if(point<=0.0)
       return(0.0);
-   int digits=(int)SymbolInfoInteger(g_symbol,SYMBOL_DIGITS);
+   long rawDigits=0;
+   if(!SymbolInfoInteger(g_symbol,SYMBOL_DIGITS,rawDigits))
+      rawDigits=(long)Digits();
+   int digits=(int)rawDigits;
    if(digits==3 || digits==5)
       return(point*10.0);
    return(point);
@@ -448,7 +455,10 @@ double NormalizeLotSize(double lots)
    double normalized=MathFloor(lots/step)*step;
    normalized=MathMax(normalized,min);
    normalized=MathMin(normalized,max);
-   return(NormalizeDouble(normalized,(int)SymbolInfoInteger(g_symbol,SYMBOL_VOLUME_DIGITS)));
+   long volumeDigits=0;
+   if(!SymbolInfoInteger(g_symbol,SYMBOL_VOLUME_DIGITS,volumeDigits))
+      volumeDigits=2;
+   return(NormalizeDouble(normalized,(int)volumeDigits));
   }
 
 //+------------------------------------------------------------------+
@@ -458,8 +468,6 @@ double CalculatePositionSize(ENUM_ORDER_TYPE orderType,double slPrice,double ent
   {
    if(g_symbol=="")
       g_symbol=Symbol();
-
-   (void)orderType;
 
    double equity=AccountInfoDouble(ACCOUNT_EQUITY);
    double riskMoney=equity*InpRiskPercent/100.0;
@@ -475,6 +483,10 @@ double CalculatePositionSize(ENUM_ORDER_TYPE orderType,double slPrice,double ent
 
    double stopDistance=MathAbs(entryPrice-slPrice);
    if(stopDistance<=0.0)
+      return(0.0);
+
+   if((orderType==ORDER_TYPE_BUY && slPrice>=entryPrice) ||
+      (orderType==ORDER_TYPE_SELL && slPrice<=entryPrice))
       return(0.0);
 
    double valuePerPoint=tickValue/tickSize;
