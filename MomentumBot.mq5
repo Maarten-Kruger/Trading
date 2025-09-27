@@ -375,7 +375,7 @@ void HandlePositionClosure(ulong ticket)
 
    for(int deal_index=0;deal_index<deals;deal_index++)
      {
-      ulong dealTicket=HistoryDealGetTicket((uint)deal_index);
+      ulong dealTicket=HistoryDealGetTicket((uint)deal_index)
       if((long)HistoryDealGetInteger(dealTicket,DEAL_MAGIC)!= (long)InpMagicNumber)
          continue;
 
