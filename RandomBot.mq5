@@ -130,12 +130,58 @@ double CalcVolumeByRisk(const double risk_percent, const int sl_points)
    return(vol);
   }
 
+//--- state for deterministic trade direction
+int    g_next_direction = ORDER_TYPE_BUY;
+string g_last_dir_gv    = "";
+
 //+------------------------------------------------------------------+
-//| Helper: place random trade with SL/TP                            |
+//| Helper: compose global variable name for direction state         |
 //+------------------------------------------------------------------+
-bool PlaceRandomTrade()
+string LastDirectionGVName()
   {
-   int direction = (MathRand() % 2 == 0) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   if(g_last_dir_gv == "")
+     {
+      g_last_dir_gv = StringFormat("RandomBot_LastDirection_%s_%I64d", _Symbol, (long)InpMagic);
+     }
+   return(g_last_dir_gv);
+  }
+
+//+------------------------------------------------------------------+
+//| Helper: persist deterministic direction                          |
+//+------------------------------------------------------------------+
+void SaveNextDirection(const int direction)
+  {
+   g_next_direction = direction;
+   string name = LastDirectionGVName();
+   GlobalVariableSet(name, (double)direction);
+  }
+
+//+------------------------------------------------------------------+
+//| Helper: load persisted direction                                 |
+//+------------------------------------------------------------------+
+void LoadNextDirection()
+  {
+   string name = LastDirectionGVName();
+   if(GlobalVariableCheck(name))
+     {
+      double stored = GlobalVariableGet(name);
+      int dir = (int)stored;
+      if(dir == ORDER_TYPE_BUY || dir == ORDER_TYPE_SELL)
+        {
+         g_next_direction = dir;
+         return;
+        }
+     }
+   // default for first run: start with buy
+   SaveNextDirection(ORDER_TYPE_BUY);
+  }
+
+//+------------------------------------------------------------------+
+//| Helper: place deterministic trade with SL/TP                     |
+//+------------------------------------------------------------------+
+bool PlaceNextTrade()
+  {
+   int direction = g_next_direction;
 
    double volume = CalcVolumeByRisk(InpRiskPercent, InpStopLossPoints);
    if(volume <= 0.0)
@@ -155,13 +201,23 @@ bool PlaceRandomTrade()
      {
       sl = ask - InpStopLossPoints * _Point;
       tp = ask + InpTakeProfitPoints * _Point;
-      return(trade.Buy(volume, _Symbol, 0.0, sl, tp, "RandomBot BUY"));
+      if(trade.Buy(volume, _Symbol, 0.0, sl, tp, "RandomBot BUY"))
+        {
+         SaveNextDirection(ORDER_TYPE_BUY);
+         return(true);
+        }
+      return(false);
      }
    else
      {
       sl = bid + InpStopLossPoints * _Point;
       tp = bid - InpTakeProfitPoints * _Point;
-      return(trade.Sell(volume, _Symbol, 0.0, sl, tp, "RandomBot SELL"));
+      if(trade.Sell(volume, _Symbol, 0.0, sl, tp, "RandomBot SELL"))
+        {
+         SaveNextDirection(ORDER_TYPE_SELL);
+         return(true);
+        }
+      return(false);
      }
   }
 
@@ -199,7 +255,7 @@ void EnforceTimeExit()
 //+------------------------------------------------------------------+
 int OnInit()
   {
-   MathSrand((uint)TimeLocal());
+   LoadNextDirection();
    trade.SetExpertMagicNumber(InpMagic);
    return(INIT_SUCCEEDED);
   }
@@ -229,8 +285,8 @@ void OnTick()
    if(bars_since_entry < InpBarsBetweenTrades)
       return;
 
-   // Try to place a random trade with SL/TP and risk-based volume
-   if(PlaceRandomTrade())
+   // Try to place the next deterministic trade with SL/TP and risk-based volume
+   if(PlaceNextTrade())
      {
       bars_since_entry = 0; // reset after a successful entry
      }
