@@ -303,7 +303,6 @@ bool OpenMomentumTrade(const ENUM_ORDER_TYPE direction)
    // remember the direction that has just been used for the next decision
    g_last_direction = direction;
    g_should_open_trade = false;
-   g_use_random_direction = false;
 
    return true;
 }
