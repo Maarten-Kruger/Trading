@@ -24,7 +24,6 @@ CTrade         g_trade;
 ENUM_ORDER_TYPE g_next_direction   = ORDER_TYPE_BUY; // direction to use for the next trade
 ENUM_ORDER_TYPE g_last_direction   = ORDER_TYPE_BUY; // direction used for the most recent trade
 bool            g_should_open_trade = true;          // flag instructing the EA to place the next order
-bool            g_use_random_direction = true;       // flag forcing the next trade to be random
 
 datetime        g_test_start_time  = 0;  // first tick timestamp observed in the test
 datetime        g_test_end_time    = 0;  // latest tick timestamp observed in the test
@@ -42,16 +41,6 @@ double PipToPointFactor()
    if(digits == 3 || digits == 5)
       return 10.0;
    return 1.0;
-}
-
-//+------------------------------------------------------------------+
-//| Helper: choose a random order direction                          |
-//+------------------------------------------------------------------+
-ENUM_ORDER_TYPE RandomDirection()
-{
-   if(MathRand() % 2 == 0)
-      return ORDER_TYPE_BUY;
-   return ORDER_TYPE_SELL;
 }
 
 //+------------------------------------------------------------------+
@@ -127,9 +116,9 @@ void EnforceMaxLife()
 
    if(closed_by_time)
    {
-      // restart the momentum train with a random direction when a time based exit occurs
+      // restart the momentum train in the same direction as the previous trade
       g_should_open_trade = true;
-      g_use_random_direction = true;
+      g_next_direction = g_last_direction;
    }
 }
 
@@ -147,7 +136,7 @@ void EnsureMomentumContinuity()
 
    // Recover from missed trade transaction events by arming the next entry
    g_should_open_trade = true;
-   g_use_random_direction = true;
+   g_next_direction = g_last_direction;
 }
 
 //+------------------------------------------------------------------+
@@ -355,9 +344,6 @@ void ComputeSpanStats(int &bars, double &months)
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   uint seed = (uint)TimeLocal() ^ GetTickCount();
-   MathSrand(seed);
-
    EventSetTimer(10);
 
    g_trade.SetExpertMagicNumber(InpMagic);
@@ -372,7 +358,6 @@ int OnInit()
    g_test_end_time = 0;
 
    g_should_open_trade = true;
-   g_use_random_direction = true;
    g_next_direction = ORDER_TYPE_BUY;
    g_last_direction = ORDER_TYPE_BUY;
 
@@ -401,7 +386,7 @@ void OnTick()
    if(!g_should_open_trade)
       return;
 
-   ENUM_ORDER_TYPE direction = g_use_random_direction ? RandomDirection() : g_next_direction;
+   ENUM_ORDER_TYPE direction = g_next_direction;
    if(OpenMomentumTrade(direction))
       return;
 
@@ -455,18 +440,16 @@ void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest 
    {
       g_next_direction = g_last_direction;
       g_should_open_trade = true;
-      g_use_random_direction = false;
    }
    else if(deal_profit < 0.0)
    {
       g_next_direction = OppositeDirection(g_last_direction);
       g_should_open_trade = true;
-      g_use_random_direction = false;
    }
    else
    {
+      g_next_direction = g_last_direction;
       g_should_open_trade = true;
-      g_use_random_direction = true;
    }
 }
 
