@@ -41,6 +41,7 @@ int            total_months  = 0;        // months in test period
 //+------------------------------------------------------------------+
 bool   AllowNewTrades();
 void   FridayRiskManagement();
+bool   GetCurrentGmt(MqlDateTime &out);
 bool   CloseWorstLosingPosition();
 ulong  FindWorstLosingTicket();
 void   CloseAllPositionsByMagic();
@@ -52,6 +53,7 @@ int OnInit()
   {
    max_equity = AccountInfoDouble(ACCOUNT_EQUITY);
    trade.SetExpertMagicNumber(MagicNumber);
+   EventSetTimer(60);
    return(INIT_SUCCEEDED);
   }
 
@@ -73,6 +75,14 @@ void OnTick()
       last_bar_time = current;
       OnNewBar();
      }
+  }
+
+//+------------------------------------------------------------------+
+//| Timer handler to enforce Friday protections without ticks         |
+//+------------------------------------------------------------------+
+void OnTimer()
+  {
+   FridayRiskManagement();
   }
 
 //+------------------------------------------------------------------+
@@ -231,9 +241,9 @@ bool AllowNewTrades()
    if(!FridayCloseAll)
       return(true);
 
-   datetime gmt = TimeGMT();
    MqlDateTime t;
-   TimeToStruct(gmt,t);
+   if(!GetCurrentGmt(t))
+      return(true);
    if(t.day_of_week != 5) // not Friday
       return(true);
 
@@ -253,9 +263,9 @@ void FridayRiskManagement()
    if(!FridayCloseAll)
       return;
 
-   datetime gmt = TimeGMT();
    MqlDateTime t;
-   TimeToStruct(gmt,t);
+   if(!GetCurrentGmt(t))
+      return;
 
    if(t.day_of_week != 5)
       return;
@@ -269,6 +279,24 @@ void FridayRiskManagement()
 
    if(should_close)
       CloseAllPositionsByMagic();
+  }
+
+//+------------------------------------------------------------------+
+//| Retrieves current time in GMT considering server offset           |
+//+------------------------------------------------------------------+
+bool GetCurrentGmt(MqlDateTime &out)
+  {
+   datetime server_time = TimeTradeServer();
+   if(server_time == 0)
+      server_time = TimeCurrent();
+
+   long offset_seconds = 0;
+   if(!SymbolInfoInteger(_Symbol,SYMBOL_TIMEZONE,offset_seconds))
+      offset_seconds = TerminalInfoInteger(TERMINAL_UTC_OFFSET);
+
+   datetime gmt_time = server_time - offset_seconds;
+   TimeToStruct(gmt_time,out);
+   return(true);
   }
 
 //+------------------------------------------------------------------+
@@ -343,7 +371,7 @@ double OnTester()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
-   // nothing special
+   EventKillTimer();
   }
 
 //+------------------------------------------------------------------+
