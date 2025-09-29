@@ -285,19 +285,12 @@ void FridayRiskManagement()
 //| Retrieves current time in GMT considering server offset           |
 //+------------------------------------------------------------------+
 bool GetCurrentGmt(MqlDateTime &out)
-  {
-   datetime server_time = TimeTradeServer();
-   if(server_time == 0)
-      server_time = TimeCurrent();
+{
+   datetime gmt_time = TimeGMT();   // directly returns current GMT/UTC time
+   TimeToStruct(gmt_time, out);
+   return true;
+}
 
-   long offset_seconds = 0;
-   if(!SymbolInfoInteger(_Symbol,SYMBOL_TIMEZONE,offset_seconds))
-      offset_seconds = TerminalInfoInteger(TERMINAL_UTC_OFFSET);
-
-   datetime gmt_time = server_time - offset_seconds;
-   TimeToStruct(gmt_time,out);
-   return(true);
-  }
 
 //+------------------------------------------------------------------+
 //| Closes every open position with the EA's magic number             |
