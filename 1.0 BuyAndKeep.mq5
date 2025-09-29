@@ -14,7 +14,7 @@
 //---- trading inputs
 input double   RiskPercent       = 1.0;    // percent of equity risked per trade
 input int      BACKCHECK         = 5;      // candles back for reference high/low
-input double   THRESHOLD         = 5.0;    // threshold percent (|value|<=1 treated as ratio; negative flips logic)
+input double   THRESHOLD         = 5.0;    // threshold percent (decimals like 0.01 = 0.01%; negative flips logic)
 input double   TakeProfitPips    = 100;    // take profit distance in pips
 input double   MaxDrawdownPct    = 30.0;   // maximum allowed drawdown before trimming positions
 input long     MagicNumber       = 1101;   // magic number for trade identification
@@ -91,8 +91,6 @@ void OnNewBar()
    double current_low = iLow(_Symbol,_Period,0);
 
    double threshold_normalized = THRESHOLD;
-   if(MathAbs(THRESHOLD) <= 1.0)
-      threshold_normalized = THRESHOLD * 100.0;
 
    if(threshold_normalized >= 0.0)
      {
