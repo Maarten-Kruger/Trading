@@ -5,18 +5,24 @@
 
 //+------------------------------------------------------------------+
 //| Expert Advisor: Buy and Keep                                     |
-//| Version: 1.0                                                     |
+//| Version: 1.1                                                     |
 //| Implements a simple mean reversion buy strategy that             |
 //| accumulates positions when price drops by a threshold and        |
 //| manages risk via equity drawdown control.                        |
 //+------------------------------------------------------------------+
 
 //---- trading inputs
-input double   RiskPercent     = 1.0;    // percent of equity risked per trade
-input int      BACKCHECK       = 5;      // candles back for reference high
-input double   THRESHOLD       = 5.0;    // percent drop from reference high to trigger buy
-input double   TakeProfitPips  = 100;    // take profit distance in pips
-input double   MaxDrawdownPct  = 30.0;   // maximum allowed drawdown before trimming positions
+input double   RiskPercent       = 1.0;    // percent of equity risked per trade
+input int      BACKCHECK         = 5;      // candles back for reference high/low
+input double   THRESHOLD         = 5.0;    // threshold percent (decimals like 0.01 = 0.01%; negative flips logic)
+input double   TakeProfitPips    = 100;    // take profit distance in pips
+input double   MaxDrawdownPct    = 30.0;   // maximum allowed drawdown before trimming positions
+input long     MagicNumber       = 1101;   // magic number for trade identification
+input bool     FridayCloseAll    = true;   // enable Friday cutoff risk management
+input int      FridayCutoffHour  = 20;     // GMT hour after which new trades are blocked on Friday
+input int      FridayCutoffMinute= 0;      // GMT minute after which new trades are blocked on Friday
+input int      FridayCloseHour   = 21;     // GMT hour to close all trades on Friday
+input int      FridayCloseMinute = 0;      // GMT minute to close all trades on Friday
 
 //---- optimization weights (sum should equal 100)
 input double   Wt = 33.0;               // weight for trade density
@@ -31,11 +37,23 @@ int            total_bars    = 0;        // bars in test period
 int            total_months  = 0;        // months in test period
 
 //+------------------------------------------------------------------+
+//| Helper forward declarations                                      |
+//+------------------------------------------------------------------+
+bool   AllowNewTrades();
+void   FridayRiskManagement();
+bool   GetCurrentGmt(MqlDateTime &out);
+bool   CloseWorstLosingPosition();
+ulong  FindWorstLosingTicket();
+void   CloseAllPositionsByMagic();
+
+//+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
   {
    max_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   trade.SetExpertMagicNumber(MagicNumber);
+   EventSetTimer(60);
    return(INIT_SUCCEEDED);
   }
 
@@ -47,6 +65,9 @@ void OnTick()
    //--- manage equity drawdown every tick
    ManageDrawdown();
 
+   //--- handle Friday cutoff logic
+   FridayRiskManagement();
+
    //--- new bar detection
    datetime current = iTime(_Symbol,_Period,0);
    if(current != last_bar_time)
@@ -54,6 +75,14 @@ void OnTick()
       last_bar_time = current;
       OnNewBar();
      }
+  }
+
+//+------------------------------------------------------------------+
+//| Timer handler to enforce Friday protections without ticks         |
+//+------------------------------------------------------------------+
+void OnTimer()
+  {
+   FridayRiskManagement();
   }
 
 //+------------------------------------------------------------------+
@@ -65,16 +94,36 @@ void OnNewBar()
    if(Bars(_Symbol,_Period) <= BACKCHECK)
       return;
 
-   //--- calculate percentage drop from high BACKCHECK bars ago
-   double reference_high = iHigh(_Symbol,_Period,BACKCHECK);
-   double current_low    = iLow(_Symbol,_Period,0);
-   if(reference_high <= 0.0)
+   //--- obey Friday trade cutoff rules
+   if(!AllowNewTrades())
       return;
-   double drop_percent = (reference_high - current_low) / reference_high * 100.0;
 
-   //--- entry condition: price has fallen more than THRESHOLD percent
-   if(drop_percent > THRESHOLD)
-      OpenBuy();
+   double current_low = iLow(_Symbol,_Period,0);
+
+   double threshold_normalized = THRESHOLD;
+
+   if(threshold_normalized >= 0.0)
+     {
+      //--- mean reversion logic: buy on drop from reference high
+      double reference_high = iHigh(_Symbol,_Period,BACKCHECK);
+      if(reference_high <= 0.0)
+         return;
+      double drop_percent = (reference_high - current_low) / reference_high * 100.0;
+
+      if(drop_percent > threshold_normalized)
+         OpenBuy();
+     }
+   else
+     {
+      //--- momentum logic: buy on strength from reference low
+      double reference_low = iLow(_Symbol,_Period,BACKCHECK);
+      if(reference_low <= 0.0)
+         return;
+      double gain_percent = (current_low - reference_low) / reference_low * 100.0;
+
+      if(gain_percent > MathAbs(threshold_normalized))
+         OpenBuy();
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -120,30 +169,151 @@ void ManageDrawdown()
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    if(equity > max_equity)
       max_equity = equity;
+   if(max_equity <= 0.0)
+      return;
+
    double drawdown = (max_equity - equity) / max_equity * 100.0;
-   
+
    //--- close worst losing positions until drawdown is within limit
-   while(drawdown > MaxDrawdownPct && PositionsTotal() > 0)
+   while(drawdown > MaxDrawdownPct)
      {
-      int    index_worst = -1;
-      double profit_worst = 0.0;
-      for(int i=0;i<PositionsTotal();i++)
-        {
-         if(PositionGetTicket(i) == 0)
-            continue;
-         double profit = PositionGetDouble(POSITION_PROFIT);
-         if(index_worst == -1 || profit < profit_worst)
-           {
-            index_worst   = i;
-            profit_worst = profit;
-           }
-        }
-      if(index_worst == -1 || profit_worst >= 0)
+      if(!CloseWorstLosingPosition())
          break;
-      ulong ticket = PositionGetTicket(index_worst);
-      trade.PositionClose(ticket);
+
       equity = AccountInfoDouble(ACCOUNT_EQUITY);
+      if(max_equity <= 0.0)
+         break;
       drawdown = (max_equity - equity) / max_equity * 100.0;
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Closes the worst losing position owned by this EA                 |
+//+------------------------------------------------------------------+
+bool CloseWorstLosingPosition()
+  {
+   ulong ticket = FindWorstLosingTicket();
+   if(ticket == 0)
+      return(false);
+
+   return(trade.PositionClose(ticket));
+  }
+
+//+------------------------------------------------------------------+
+//| Finds the worst losing position ticket for this EA                |
+//+------------------------------------------------------------------+
+ulong FindWorstLosingTicket()
+  {
+   bool  found        = false;
+   ulong worst_ticket = 0;
+   double worst_profit= 0.0;
+
+   for(int i=PositionsTotal()-1;i>=0;i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != MagicNumber)
+         continue;
+
+      double profit = PositionGetDouble(POSITION_PROFIT);
+      if(!found || profit < worst_profit)
+        {
+         found         = true;
+         worst_ticket  = ticket;
+         worst_profit  = profit;
+        }
+     }
+
+   if(!found || worst_profit >= 0.0)
+      return(0);
+
+   return(worst_ticket);
+  }
+
+//+------------------------------------------------------------------+
+//| Determines whether new trades are allowed under Friday rules      |
+//+------------------------------------------------------------------+
+bool AllowNewTrades()
+  {
+   if(!FridayCloseAll)
+      return(true);
+
+   MqlDateTime t;
+   if(!GetCurrentGmt(t))
+      return(true);
+   if(t.day_of_week != 5) // not Friday
+      return(true);
+
+   if(t.hour > FridayCutoffHour)
+      return(false);
+   if(t.hour == FridayCutoffHour && t.min >= FridayCutoffMinute)
+      return(false);
+
+   return(true);
+  }
+
+//+------------------------------------------------------------------+
+//| Applies Friday close logic: block entries and close positions     |
+//+------------------------------------------------------------------+
+void FridayRiskManagement()
+  {
+   if(!FridayCloseAll)
+      return;
+
+   MqlDateTime t;
+   if(!GetCurrentGmt(t))
+      return;
+
+   if(t.day_of_week != 5)
+      return;
+
+   //--- close all positions after configured time
+   bool should_close = false;
+   if(t.hour > FridayCloseHour)
+      should_close = true;
+   else if(t.hour == FridayCloseHour && t.min >= FridayCloseMinute)
+      should_close = true;
+
+   if(should_close)
+      CloseAllPositionsByMagic();
+  }
+
+//+------------------------------------------------------------------+
+//| Retrieves current time in GMT considering server offset           |
+//+------------------------------------------------------------------+
+bool GetCurrentGmt(MqlDateTime &out)
+  {
+   datetime server_time = TimeTradeServer();
+   if(server_time == 0)
+      server_time = TimeCurrent();
+
+   long offset_seconds = 0;
+   if(!SymbolInfoInteger(_Symbol,SYMBOL_TIMEZONE,offset_seconds))
+      offset_seconds = TerminalInfoInteger(TERMINAL_UTC_OFFSET);
+
+   datetime gmt_time = server_time - offset_seconds;
+   TimeToStruct(gmt_time,out);
+   return(true);
+  }
+
+//+------------------------------------------------------------------+
+//| Closes every open position with the EA's magic number             |
+//+------------------------------------------------------------------+
+void CloseAllPositionsByMagic()
+  {
+   for(int i=PositionsTotal()-1;i>=0;i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != MagicNumber)
+         continue;
+      trade.PositionClose(ticket);
      }
   }
 
@@ -201,7 +371,7 @@ double OnTester()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
-   // nothing special
+   EventKillTimer();
   }
 
 //+------------------------------------------------------------------+
