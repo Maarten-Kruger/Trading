@@ -19,10 +19,10 @@ input double   TakeProfitPips    = 100;    // take profit distance in pips
 input double   MaxDrawdownPct    = 30.0;   // maximum allowed drawdown before trimming positions
 input long     MagicNumber       = 1101;   // magic number for trade identification
 input bool     FridayCloseAll    = true;   // enable Friday cutoff risk management
-input int      FridayCutoffHour  = 20;     // GMT hour after which new trades are blocked on Friday
-input int      FridayCutoffMinute= 0;      // GMT minute after which new trades are blocked on Friday
-input int      FridayCloseHour   = 21;     // GMT hour to close all trades on Friday
-input int      FridayCloseMinute = 0;      // GMT minute to close all trades on Friday
+input int      FridayCutoffHour  = 20;     // server hour after which new trades are blocked on Friday
+input int      FridayCutoffMinute= 0;      // server minute after which new trades are blocked on Friday
+input int      FridayCloseHour   = 21;     // server hour to close all trades on Friday
+input int      FridayCloseMinute = 0;      // server minute to close all trades on Friday
 
 //---- optimization weights (sum should equal 100)
 input double   Wt = 33.0;               // weight for trade density
@@ -41,7 +41,7 @@ int            total_months  = 0;        // months in test period
 //+------------------------------------------------------------------+
 bool   AllowNewTrades();
 void   FridayRiskManagement();
-bool   GetCurrentGmt(MqlDateTime &out);
+bool   GetCurrentTradingTime(MqlDateTime &out);
 bool   CloseWorstLosingPosition();
 ulong  FindWorstLosingTicket();
 void   CloseAllPositionsByMagic();
@@ -242,7 +242,7 @@ bool AllowNewTrades()
       return(true);
 
    MqlDateTime t;
-   if(!GetCurrentGmt(t))
+   if(!GetCurrentTradingTime(t))
       return(true);
    if(t.day_of_week != 5) // not Friday
       return(true);
@@ -264,7 +264,7 @@ void FridayRiskManagement()
       return;
 
    MqlDateTime t;
-   if(!GetCurrentGmt(t))
+   if(!GetCurrentTradingTime(t))
       return;
 
    if(t.day_of_week != 5)
@@ -282,14 +282,17 @@ void FridayRiskManagement()
   }
 
 //+------------------------------------------------------------------+
-//| Retrieves current time in GMT considering server offset           |
+//| Retrieves current trading time (strategy tester or live server)   |
 //+------------------------------------------------------------------+
-bool GetCurrentGmt(MqlDateTime &out)
-{
-   datetime gmt_time = TimeGMT();   // directly returns current GMT/UTC time
-   TimeToStruct(gmt_time, out);
-   return true;
-}
+bool GetCurrentTradingTime(MqlDateTime &out)
+  {
+   datetime server_time = TimeCurrent();   // uses tester or live server clock
+   if(server_time <= 0)
+      return(false);
+
+   TimeToStruct(server_time,out);
+   return(true);
+  }
 
 
 //+------------------------------------------------------------------+
