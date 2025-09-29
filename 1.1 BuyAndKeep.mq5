@@ -19,10 +19,10 @@ input double   TakeProfitPips    = 100;    // take profit distance in pips
 input double   MaxDrawdownPct    = 30.0;   // maximum allowed drawdown before trimming positions
 input long     MagicNumber       = 1101;   // magic number for trade identification
 input bool     FridayCloseAll    = true;   // enable Friday cutoff risk management
-input int      FridayCutoffHour  = 20;     // GMT hour after which new trades are blocked on Friday
-input int      FridayCutoffMinute= 0;      // GMT minute after which new trades are blocked on Friday
-input int      FridayCloseHour   = 21;     // GMT hour to close all trades on Friday
-input int      FridayCloseMinute = 0;      // GMT minute to close all trades on Friday
+input int      FridayCutoffHour  = 20;     // server hour after which new trades are blocked on Friday
+input int      FridayCutoffMinute= 0;      // server minute after which new trades are blocked on Friday
+input int      FridayCloseHour   = 21;     // server hour to close all trades on Friday
+input int      FridayCloseMinute = 0;      // server minute to close all trades on Friday
 
 //---- optimization weights (sum should equal 100)
 input double   Wt = 33.0;               // weight for trade density
@@ -35,13 +35,15 @@ datetime       last_bar_time = 0;        // time of last processed bar
 double         max_equity    = 0;        // tracks peak equity for drawdown calculation
 int            total_bars    = 0;        // bars in test period
 int            total_months  = 0;        // months in test period
+datetime       last_server_time = 0;     // last reliable trade server time snapshot
+datetime       last_local_snapshot = 0;  // matching local time when server time captured
 
 //+------------------------------------------------------------------+
 //| Helper forward declarations                                      |
 //+------------------------------------------------------------------+
 bool   AllowNewTrades();
 void   FridayRiskManagement();
-bool   GetCurrentGmt(MqlDateTime &out);
+bool   GetCurrentTradingTime(MqlDateTime &out);
 bool   CloseWorstLosingPosition();
 ulong  FindWorstLosingTicket();
 void   CloseAllPositionsByMagic();
@@ -242,7 +244,7 @@ bool AllowNewTrades()
       return(true);
 
    MqlDateTime t;
-   if(!GetCurrentGmt(t))
+   if(!GetCurrentTradingTime(t))
       return(true);
    if(t.day_of_week != 5) // not Friday
       return(true);
@@ -264,7 +266,7 @@ void FridayRiskManagement()
       return;
 
    MqlDateTime t;
-   if(!GetCurrentGmt(t))
+   if(!GetCurrentTradingTime(t))
       return;
 
    if(t.day_of_week != 5)
@@ -282,14 +284,33 @@ void FridayRiskManagement()
   }
 
 //+------------------------------------------------------------------+
-//| Retrieves current time in GMT considering server offset           |
+//| Retrieves current trading time (strategy tester or live server)   |
 //+------------------------------------------------------------------+
-bool GetCurrentGmt(MqlDateTime &out)
-{
-   datetime gmt_time = TimeGMT();   // directly returns current GMT/UTC time
-   TimeToStruct(gmt_time, out);
-   return true;
-}
+bool GetCurrentTradingTime(MqlDateTime &out)
+  {
+   datetime server_time = TimeCurrent();
+   datetime local_time  = TimeLocal();
+
+   //--- update the server snapshot whenever a newer timestamp arrives
+   if(server_time > 0 && (last_server_time == 0 || server_time >= last_server_time))
+     {
+      last_server_time    = server_time;
+      last_local_snapshot = local_time;
+     }
+   else if(last_server_time > 0 && local_time > last_local_snapshot)
+     {
+      //--- extrapolate forward using local clock when ticks stop updating server time
+      long delta = (long)(local_time - last_local_snapshot);
+      last_server_time    += delta;
+      last_local_snapshot  = local_time;
+     }
+
+   if(last_server_time <= 0)
+      return(false);
+
+   TimeToStruct(last_server_time,out);
+   return(true);
+  }
 
 
 //+------------------------------------------------------------------+
