@@ -35,6 +35,8 @@ datetime       last_bar_time = 0;        // time of last processed bar
 double         max_equity    = 0;        // tracks peak equity for drawdown calculation
 int            total_bars    = 0;        // bars in test period
 int            total_months  = 0;        // months in test period
+datetime       last_server_time = 0;     // last reliable trade server time snapshot
+datetime       last_local_snapshot = 0;  // matching local time when server time captured
 
 //+------------------------------------------------------------------+
 //| Helper forward declarations                                      |
@@ -286,11 +288,27 @@ void FridayRiskManagement()
 //+------------------------------------------------------------------+
 bool GetCurrentTradingTime(MqlDateTime &out)
   {
-   datetime server_time = TimeCurrent();   // uses tester or live server clock
-   if(server_time <= 0)
+   datetime server_time = TimeCurrent();
+   datetime local_time  = TimeLocal();
+
+   //--- update the server snapshot whenever a newer timestamp arrives
+   if(server_time > 0 && (last_server_time == 0 || server_time >= last_server_time))
+     {
+      last_server_time    = server_time;
+      last_local_snapshot = local_time;
+     }
+   else if(last_server_time > 0 && local_time > last_local_snapshot)
+     {
+      //--- extrapolate forward using local clock when ticks stop updating server time
+      long delta = (long)(local_time - last_local_snapshot);
+      last_server_time    += delta;
+      last_local_snapshot  = local_time;
+     }
+
+   if(last_server_time <= 0)
       return(false);
 
-   TimeToStruct(server_time,out);
+   TimeToStruct(last_server_time,out);
    return(true);
   }
 
