@@ -42,7 +42,6 @@ datetime       last_local_snapshot = 0;  // matching local time when server time
 bool   AllowNewTrades();
 void   FridayRiskManagement();
 bool   GetCurrentTradingTime(MqlDateTime &out);
-bool   CloseWorstLosingPosition();
 ulong  FindWorstLosingTicket();
 void   CloseAllPositionsByMagic();
 int    CountPositionsByMagic();
@@ -174,13 +173,25 @@ void ManageDrawdown()
       return;
 
    double drawdown = (max_equity - equity) / max_equity * 100.0;
-   bool   trimmed  = false;
+   bool   trimmed        = false;
+   bool   attempted_trim = false;
 
    //--- close worst losing positions until drawdown is within limit
    while(drawdown > MaxDrawdownPct)
      {
-      if(!CloseWorstLosingPosition())
+      ulong ticket = FindWorstLosingTicket();
+      if(ticket == 0)
+        {
+         attempted_trim = true;
          break;
+        }
+
+      attempted_trim = true;
+
+      if(!trade.PositionClose(ticket))
+         break;
+
+      trimmed = true;
 
       trimmed = true;
 
@@ -190,34 +201,29 @@ void ManageDrawdown()
       drawdown = (max_equity - equity) / max_equity * 100.0;
      }
 
+   int open_positions = CountPositionsByMagic();
+
    if(trimmed)
      {
       //--- after forced liquidation, treat the current balance as the new peak
       //    so the EA can resume trading instead of repeatedly closing
-      if(CountPositionsByMagic() == 0)
-        {
-         max_equity = equity;
-        }
-      else if(drawdown > MaxDrawdownPct && equity > 0.0)
+      if(open_positions == 0)
         {
          max_equity = equity;
         }
      }
+   else if(attempted_trim && open_positions == 0 && equity > 0.0)
+     {
+      //--- drawdown remains but there are no positions to close; reset baseline
+      max_equity = equity;
+     }
+   else if(drawdown > 0.0 && open_positions == 0 && equity > 0.0)
+     {
+      //--- realized loss with no exposure should not block new entries
+      max_equity = equity;
+     }
   }
 
-//+------------------------------------------------------------------+
-//| Closes the worst losing position owned by this EA                 |
-//+------------------------------------------------------------------+
-bool CloseWorstLosingPosition()
-  {
-   ulong ticket = FindWorstLosingTicket();
-   if(ticket == 0)
-      return(false);
-
-   return(trade.PositionClose(ticket));
-  }
-
-//+------------------------------------------------------------------+
 //| Finds the worst losing position ticket for this EA                |
 //+------------------------------------------------------------------+
 ulong FindWorstLosingTicket()
