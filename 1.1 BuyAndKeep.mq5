@@ -19,10 +19,8 @@ input double   TakeProfitPips    = 100;    // take profit distance in pips
 input double   MaxDrawdownPct    = 30.0;   // maximum allowed drawdown before trimming positions
 input long     MagicNumber       = 1101;   // magic number for trade identification
 input bool     FridayCloseAll    = true;   // enable Friday cutoff risk management
-input int      FridayCutoffHour  = 20;     // server hour after which new trades are blocked on Friday
-input int      FridayCutoffMinute= 0;      // server minute after which new trades are blocked on Friday
-input int      FridayCloseHour   = 21;     // server hour to close all trades on Friday
-input int      FridayCloseMinute = 0;      // server minute to close all trades on Friday
+input int      FridayCutoffHour  = 20;     // server hour after which trades are closed on Friday
+input int      FridayCutoffMinute= 0;      // server minute after which trades are closed on Friday
 
 //---- optimization weights (sum should equal 100)
 input double   Wt = 33.0;               // weight for trade density
@@ -47,6 +45,7 @@ bool   GetCurrentTradingTime(MqlDateTime &out);
 bool   CloseWorstLosingPosition();
 ulong  FindWorstLosingTicket();
 void   CloseAllPositionsByMagic();
+int    CountPositionsByMagic();
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -175,6 +174,7 @@ void ManageDrawdown()
       return;
 
    double drawdown = (max_equity - equity) / max_equity * 100.0;
+   bool   trimmed  = false;
 
    //--- close worst losing positions until drawdown is within limit
    while(drawdown > MaxDrawdownPct)
@@ -182,10 +182,26 @@ void ManageDrawdown()
       if(!CloseWorstLosingPosition())
          break;
 
+      trimmed = true;
+
       equity = AccountInfoDouble(ACCOUNT_EQUITY);
       if(max_equity <= 0.0)
          break;
       drawdown = (max_equity - equity) / max_equity * 100.0;
+     }
+
+   if(trimmed)
+     {
+      //--- after forced liquidation, treat the current balance as the new peak
+      //    so the EA can resume trading instead of repeatedly closing
+      if(CountPositionsByMagic() == 0)
+        {
+         max_equity = equity;
+        }
+      else if(drawdown > MaxDrawdownPct && equity > 0.0)
+        {
+         max_equity = equity;
+        }
      }
   }
 
@@ -274,9 +290,9 @@ void FridayRiskManagement()
 
    //--- close all positions after configured time
    bool should_close = false;
-   if(t.hour > FridayCloseHour)
+   if(t.hour > FridayCutoffHour)
       should_close = true;
-   else if(t.hour == FridayCloseHour && t.min >= FridayCloseMinute)
+   else if(t.hour == FridayCutoffHour && t.min >= FridayCutoffMinute)
       should_close = true;
 
    if(should_close)
@@ -329,6 +345,26 @@ void CloseAllPositionsByMagic()
          continue;
       trade.PositionClose(ticket);
      }
+  }
+
+//+------------------------------------------------------------------+
+//| Counts open positions controlled by this EA                       |
+//+------------------------------------------------------------------+
+int CountPositionsByMagic()
+  {
+   int count = 0;
+   for(int i=PositionsTotal()-1;i>=0;i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(!PositionSelectByTicket(ticket))
+         continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != MagicNumber)
+         continue;
+      count++;
+     }
+   return(count);
   }
 
 //+------------------------------------------------------------------+
