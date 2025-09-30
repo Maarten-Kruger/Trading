@@ -193,6 +193,8 @@ void ManageDrawdown()
 
       trimmed = true;
 
+      trimmed = true;
+
       equity = AccountInfoDouble(ACCOUNT_EQUITY);
       if(max_equity <= 0.0)
          break;
