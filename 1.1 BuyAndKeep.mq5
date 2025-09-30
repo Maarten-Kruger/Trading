@@ -323,8 +323,9 @@ bool GetCurrentTradingTime(MqlDateTime &out)
      {
       //--- extrapolate forward using local clock when ticks stop updating server time
       long delta = (long)(local_time - last_local_snapshot);
-      last_server_time    += delta;
+      last_server_time    += (datetime)delta;
       last_local_snapshot  = local_time;
+
      }
 
    if(last_server_time <= 0)
