@@ -44,10 +44,6 @@ bool           csv_header_ready = false; // indicates header already written
 bool   AllowNewTrades();
 void   FridayRiskManagement();
 bool   GetCurrentTradingTime(MqlDateTime &out);
-ulong  FindWorstLosingTicket();
-void   CloseAllPositionsByMagic();
-int    CountPositionsByMagic();
-void   EnsureCsvHeader();
 void   LogClosedTrade(const MqlTradeTransaction &trans);
 datetime ExtractOpenTime(ulong position_id);
 void   AppendTradeCsv(ulong ticket, datetime open_time, datetime close_time, double equity);
