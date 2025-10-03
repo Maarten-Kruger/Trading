@@ -44,7 +44,15 @@ bool           csv_header_ready = false; // indicates header already written
 bool   AllowNewTrades();
 void   FridayRiskManagement();
 bool   GetCurrentTradingTime(MqlDateTime &out);
-void   LogClosedTrade(const MqlTradeTransaction &trans);
+void   OnNewBar();
+void   ManageDrawdown();
+void   OpenBuy();
+double CalculateVolume();
+ulong  FindWorstLosingTicket();
+void   CloseAllPositionsByMagic();
+int    CountPositionsByMagic();
+void   EnsureCsvHeader();
+void   LogClosedTrade(ulong deal_ticket, ulong position_id, datetime close_time);
 datetime ExtractOpenTime(ulong position_id);
 void   AppendTradeCsv(ulong ticket, datetime open_time, datetime close_time, double equity);
 
@@ -98,23 +106,38 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
                         const MqlTradeRequest &request,
                         const MqlTradeResult &result)
   {
-   //--- only interested in completed closing deals belonging to this EA
    if(trans.type != TRADE_TRANSACTION_DEAL_ADD)
       return;
-   if(trans.deal_entry != DEAL_ENTRY_OUT)
-      return;
-   if((long)trans.magic != MagicNumber)
+
+   ulong deal_ticket = trans.deal;
+   if(deal_ticket == 0)
       return;
 
-   ulong position_id = trans.position_id;
-   if(position_id == 0)
-      position_id = trans.position;
+   if(!HistorySelect(0,TimeCurrent()))
+      return;
 
-   //--- skip if position still exists (partial close)
+   if((string)HistoryDealGetString(deal_ticket,DEAL_SYMBOL) != _Symbol)
+      return;
+
+   long magic = HistoryDealGetInteger(deal_ticket,DEAL_MAGIC);
+   if(magic != (long)MagicNumber)
+      return;
+
+   ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal_ticket,DEAL_ENTRY);
+   if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY && entry != DEAL_ENTRY_INOUT)
+      return;
+
+   ulong position_id = (ulong)HistoryDealGetInteger(deal_ticket,DEAL_POSITION_ID);
+
    if(position_id != 0 && PositionSelectByTicket(position_id))
-      return;
+     {
+      double remaining = PositionGetDouble(POSITION_VOLUME);
+      if(remaining > 0.0)
+         return;
+     }
 
-   LogClosedTrade(trans);
+   datetime close_time = (datetime)HistoryDealGetInteger(deal_ticket,DEAL_TIME);
+   LogClosedTrade(deal_ticket,position_id,close_time);
   }
 
 //+------------------------------------------------------------------+
@@ -222,8 +245,6 @@ void ManageDrawdown()
 
       if(!trade.PositionClose(ticket))
          break;
-
-      trimmed = true;
 
       trimmed = true;
 
@@ -439,18 +460,18 @@ datetime ExtractOpenTime(ulong position_id)
    if(position_id == 0)
       return(0);
 
-   if(!HistorySelectByPosition(position_id))
-      return(0);
-
    int deals = (int)HistoryDealsTotal();
-   for(int i=0; i<deals; i++)
+   for(int index=deals-1; index>=0; index--)
      {
-      ulong deal_ticket = HistoryDealGetTicket(i);
+      ulong deal_ticket = HistoryDealGetTicket(index);
       if(deal_ticket == 0)
          continue;
 
-      long entry = HistoryDealGetInteger(deal_ticket,DEAL_ENTRY);
-      if(entry == DEAL_ENTRY_IN)
+      if((ulong)HistoryDealGetInteger(deal_ticket,DEAL_POSITION_ID) != position_id)
+         continue;
+
+      long entry_value = HistoryDealGetInteger(deal_ticket,DEAL_ENTRY);
+      if(entry_value == DEAL_ENTRY_IN || entry_value == DEAL_ENTRY_INOUT)
          return((datetime)HistoryDealGetInteger(deal_ticket,DEAL_TIME));
      }
 
@@ -484,20 +505,14 @@ void AppendTradeCsv(ulong ticket, datetime open_time, datetime close_time, doubl
 //+------------------------------------------------------------------+
 //| Logs a closed trade: print message and persist to CSV             |
 //+------------------------------------------------------------------+
-void LogClosedTrade(const MqlTradeTransaction &trans)
+void LogClosedTrade(ulong deal_ticket, ulong position_id, datetime close_time)
   {
-   ulong ticket = 0;
-   if(trans.position_id != 0)
-      ticket = trans.position_id;
-   else if(trans.position != 0)
-      ticket = trans.position;
-   else if(trans.deal != 0)
-      ticket = trans.deal;
+   ulong ticket = position_id != 0 ? position_id : deal_ticket;
+   if(close_time > 0)
+      HistorySelect(0,close_time);
 
-   ulong reference_id  = trans.position_id != 0 ? trans.position_id : trans.position;
-   datetime open_time  = ExtractOpenTime(reference_id);
-   datetime close_time = (datetime)trans.time;
-   double   equity     = AccountInfoDouble(ACCOUNT_EQUITY);
+   datetime open_time = ExtractOpenTime(position_id);
+   double   equity    = AccountInfoDouble(ACCOUNT_EQUITY);
 
    EnsureCsvHeader();
    AppendTradeCsv(ticket,open_time,close_time,equity);
