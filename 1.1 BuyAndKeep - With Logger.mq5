@@ -37,6 +37,9 @@ datetime       last_server_time = 0;     // last reliable trade server time snap
 datetime       last_local_snapshot = 0;  // matching local time when server time captured
 string         csv_filename;             // output CSV file for closed trade logging
 bool           csv_header_ready = false; // indicates header already written
+string         equity_csv_filename;      // output CSV for hourly equity snapshots
+bool           equity_csv_header_ready = false;
+datetime       last_equity_log_hour = 0; // hour timestamp of the last recorded equity
 
 //+------------------------------------------------------------------+
 //| Helper forward declarations                                      |
@@ -55,6 +58,9 @@ void   EnsureCsvHeader();
 void   LogClosedTrade(ulong deal_ticket, ulong position_id, datetime close_time);
 datetime ExtractOpenTime(ulong position_id);
 void   AppendTradeCsv(ulong ticket, datetime open_time, datetime close_time, double equity);
+void   EnsureEquityCsvHeader();
+void   AppendEquityCsv(datetime timestamp, double equity);
+void   MaybeLogHourlyEquity();
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -68,6 +74,9 @@ int OnInit()
    //--- prepare CSV logging infrastructure
    csv_filename = StringFormat("%s_BuyAndKeep_Trades.csv", _Symbol);
    EnsureCsvHeader();
+
+   equity_csv_filename = StringFormat("%s_BuyAndKeep_Equity.csv", _Symbol);
+   EnsureEquityCsvHeader();
    return(INIT_SUCCEEDED);
   }
 
@@ -78,6 +87,8 @@ void OnTick()
   {
    //--- manage equity drawdown every tick
    ManageDrawdown();
+
+   MaybeLogHourlyEquity();
 
    //--- handle Friday cutoff logic
    FridayRiskManagement();
@@ -97,6 +108,7 @@ void OnTick()
 void OnTimer()
   {
    FridayRiskManagement();
+   MaybeLogHourlyEquity();
   }
 
 //+------------------------------------------------------------------+
@@ -500,6 +512,80 @@ void AppendTradeCsv(ulong ticket, datetime open_time, datetime close_time, doubl
              close_str,
              DoubleToString(equity,2));
    FileClose(handle);
+  }
+
+//+------------------------------------------------------------------+
+//| Ensures the hourly equity CSV exists with a header                |
+//+------------------------------------------------------------------+
+void EnsureEquityCsvHeader()
+  {
+   if(equity_csv_header_ready)
+      return;
+
+   if(FileIsExist(equity_csv_filename,FILE_COMMON))
+     {
+      equity_csv_header_ready = true;
+      return;
+     }
+
+   int handle = FileOpen(equity_csv_filename,
+                         FILE_WRITE|FILE_CSV|FILE_COMMON|FILE_SHARE_READ|FILE_SHARE_WRITE,
+                         ',');
+   if(handle == INVALID_HANDLE)
+      return;
+
+   FileWrite(handle,"Hour","Equity");
+   FileClose(handle);
+   equity_csv_header_ready = true;
+  }
+
+//+------------------------------------------------------------------+
+//| Appends hourly equity information to CSV                          |
+//+------------------------------------------------------------------+
+void AppendEquityCsv(datetime timestamp, double equity)
+  {
+   int handle = FileOpen(equity_csv_filename,
+                         FILE_READ|FILE_WRITE|FILE_CSV|FILE_COMMON|FILE_SHARE_READ|FILE_SHARE_WRITE,
+                         ',');
+   if(handle == INVALID_HANDLE)
+      return;
+
+   FileSeek(handle,0,SEEK_END);
+
+   string time_str = timestamp > 0 ? TimeToString(timestamp,TIME_DATE|TIME_MINUTES) : "";
+
+   FileWrite(handle,
+             time_str,
+             DoubleToString(equity,2));
+   FileClose(handle);
+  }
+
+//+------------------------------------------------------------------+
+//| Records equity snapshots at most once per hour                    |
+//+------------------------------------------------------------------+
+void MaybeLogHourlyEquity()
+  {
+   MqlDateTime t;
+   if(!GetCurrentTradingTime(t))
+      return;
+
+   datetime now = StructToTime(t);
+   if(now <= 0)
+      return;
+
+   datetime hour_stamp = now - (t.min * 60 + t.sec);
+   if(hour_stamp <= 0)
+      hour_stamp = now;
+
+   if(last_equity_log_hour != 0 && hour_stamp <= last_equity_log_hour)
+      return;
+
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+
+   EnsureEquityCsvHeader();
+   AppendEquityCsv(hour_stamp,equity);
+
+   last_equity_log_hour = hour_stamp;
   }
 
 //+------------------------------------------------------------------+
