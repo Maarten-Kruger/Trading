@@ -289,8 +289,16 @@ double NormalizeVolume(const double volume,const double minVolume,const double s
    double normalized = minVolume + stepsCount*step;
    normalized = MathMax(minVolume,MathMin(normalized,maxVolume));
 
-   int volumeDigits = (int)SymbolInfoInteger(_Symbol,SYMBOL_VOLUME_DIGITS);
-   volumeDigits = MathMax(volumeDigits,0);
+   int volumeDigits = 2;
+   if(step>0.0)
+     {
+      double stepDigits = -MathLog10(step);
+      if(MathIsValidNumber(stepDigits))
+        {
+         volumeDigits = (int)MathRound(stepDigits);
+         volumeDigits = (int)MathMax(0.0,MathMin((double)volumeDigits,8.0));
+        }
+     }
    return(NormalizeDouble(normalized,volumeDigits));
   }
 
