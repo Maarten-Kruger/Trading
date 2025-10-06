@@ -423,7 +423,13 @@ double CalculateElapsedMonths(const datetime startTime,const datetime endTime)
 //+------------------------------------------------------------------+
 bool DoubleIsValid(const double value)
   {
-   return(!DoubleIsNaN(value) && value!=EMPTY_VALUE && MathIsValidNumber(value));
+   if(!MathIsValidNumber(value))
+      return(false);
+
+   if(value==EMPTY_VALUE || value==DBL_MAX || value==-DBL_MAX)
+      return(false);
+
+   return(true);
   }
 
 //+------------------------------------------------------------------+
