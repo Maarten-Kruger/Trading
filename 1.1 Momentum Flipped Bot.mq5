@@ -224,7 +224,7 @@ double CalculateLinearRegressionSlope(const int period,const int shift)
 
    for(int i=0;i<period;i++)
      {
-      double x = (double)(period - 1 - i);
+      double x = (double)i;
       double y = priceBuffer[i];
       sumX  += x;
       sumY  += y;
