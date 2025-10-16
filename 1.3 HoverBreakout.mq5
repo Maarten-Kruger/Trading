@@ -16,6 +16,7 @@ input uint   InpSlippage       = 5;      // Slippage in points
 input double InpWt             = 40.0;   // Weight % for trade density
 input double InpWp             = 40.0;   // Weight % for monthly consistency
 input double InpWd             = 20.0;   // Weight % for drawdown
+input ulong  InpMagicNumber    = 1300001;// Magic number for HoverBreakout trades
 
 //--- global objects
 CTrade  trade;               // trading object
@@ -91,8 +92,31 @@ bool CalcRange(int bars_back, double &range_high, double &range_low)
       if(l < range_low)
          range_low  = l;
      }
-  return((range_high - range_low) <= InpRangePoints * _Point);
- }
+   return((range_high - range_low) <= InpRangePoints * _Point);
+  }
+
+//+------------------------------------------------------------------+
+//| Determine if Friday 16:00 GMT+2 close time has been reached      |
+//+------------------------------------------------------------------+
+bool IsFridayCutoffReached()
+  {
+   const int   GMT_PLUS_TWO = 2 * 60 * 60;
+   datetime    now_gmt      = TimeGMT();
+   datetime    now_gmt2     = now_gmt + GMT_PLUS_TWO;
+   MqlDateTime time_struct;
+   TimeToStruct(now_gmt2, time_struct);
+
+   if(time_struct.day_of_week != 5) // 0 = Sunday ... 5 = Friday
+      return(false);
+
+   if(time_struct.hour > 16)
+      return(true);
+
+   if(time_struct.hour == 16 && time_struct.min >= 0)
+      return(true);
+
+   return(false);
+  }
 
 //+------------------------------------------------------------------+
 //| Calculate trade volume based on equity risk                     |
@@ -129,6 +153,8 @@ void CheckForExit()
   {
 // Iterate through all open positions and close those that exceed the
 // maximum number of bars specified in InpMaxBarsOpen.
+   bool friday_cutoff = IsFridayCutoffReached();
+
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
       ulong ticket = PositionGetTicket(i);
@@ -139,10 +165,15 @@ void CheckForExit()
       if(symbol != _Symbol)
          continue;
 
+      long magic = PositionGetInteger(POSITION_MAGIC);
+      if(magic != (long)InpMagicNumber)
+         continue;
+
       datetime open_time = (datetime)PositionGetInteger(POSITION_TIME);
       int bars_open = iBarShift(_Symbol, _Period, open_time);
+      bool close_due_to_bars = (bars_open >= InpMaxBarsOpen && bars_open >= 0);
 
-      if(bars_open >= InpMaxBarsOpen)
+      if(friday_cutoff || close_due_to_bars)
          trade.PositionClose(ticket);
      }
   }
@@ -155,6 +186,9 @@ void CheckForEntry()
    double high, low;
    if(!CalcRange(InpRangeBars, high, low))
       return; // Range condition not met
+
+   if(IsFridayCutoffReached())
+      return; // Do not open new trades after the cutoff time
 
    double last_close = iClose(_Symbol, _Period, 1);
 
@@ -186,6 +220,7 @@ void CheckForEntry()
 //+------------------------------------------------------------------+
 int OnInit()
   {
+   trade.SetExpertMagicNumber((long)InpMagicNumber);
    return(INIT_SUCCEEDED);
   }
 
