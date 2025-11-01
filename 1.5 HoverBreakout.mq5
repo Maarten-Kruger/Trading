@@ -322,7 +322,6 @@ double CalcExpectedMaxDrawdown(double win_rate, double avg_win, double avg_loss)
 double OnTester()
 {
     // --- METRIC CALCULATIONS ---
-    double payoff_ratio = (InpSLPoints > 0) ? InpTPPoints / InpSLPoints : 0;
     double total_profit = TesterStatistics(STAT_PROFIT);
     double start_equity = TesterStatistics(STAT_INITIAL_DEPOSIT);
     double num_months = CalcMonths(g_test_start, g_test_end);
@@ -337,6 +336,7 @@ double OnTester()
     double loss_trades = TesterStatistics(STAT_LOSS_TRADES);
     double avg_win = profit_trades > 0 ? TesterStatistics(STAT_GROSS_PROFIT) / profit_trades : 0;
     double avg_loss = loss_trades > 0 ? TesterStatistics(STAT_GROSS_LOSS) / loss_trades : 0;
+    double payoff_ratio = (avg_loss > 0) ? avg_win / avg_loss : 0;
     double expected_max_drawdown = CalcExpectedMaxDrawdown(win_rate, avg_win, avg_loss);
 
     // --- NORMALIZATION (as per user request) ---
@@ -344,6 +344,14 @@ double OnTester()
     negative_penalty /= 100.0;
     trades_per_month /= 100.0;
     expected_max_drawdown *= 100.0;
+
+    // --- DEBUG OUTPUT ---
+    printf("Payoff Ratio: %f", payoff_ratio);
+    printf("Monthly Return: %f", monthly_return);
+    printf("Negative Penalty: %f", negative_penalty);
+    printf("Trades Per Month: %f", trades_per_month);
+    printf("Sharpe Ratio: %f", sharpe_ratio);
+    printf("Expected Max Drawdown: %f", expected_max_drawdown);
 
     // --- WEIGHTING ---
     double total_weight = InpWpr + InpWmr + InpWnp + InpWtc + InpWsr + InpWle;
