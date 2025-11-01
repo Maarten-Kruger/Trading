@@ -302,18 +302,19 @@ double CalcNegativePenalty()
 //+------------------------------------------------------------------+
 //| Calculate the expected maximum drawdown over 1000 trades         |
 //+------------------------------------------------------------------+
-double CalcExpectedMaxDrawdown(double win_rate, double avg_win, double avg_loss)
+double CalcExpectedMaxDrawdown(double win_rate, double risk_percent)
 {
     if (win_rate <= 0 || win_rate >= 1) return 0;
 
-    double p = 1.0 - win_rate; // Probability of losing
-    int n = 1000; // Number of trades
+    double prob_win = win_rate;
+    double prob_loss = 1.0 - prob_win;
+    if (prob_loss <= 0) return 0;
 
-    // Expected number of consecutive losses
-    double E_L = -MathLog(n) / MathLog(p);
+    double losing_streak = (MathLog(1000) + MathLog(prob_win)) / -MathLog(prob_loss);
+    double L = risk_percent / 100.0;
+    double emd = 1.0 - MathPow(1.0 - L, losing_streak);
 
-    // Expected maximum drawdown
-    return E_L * avg_loss;
+    return emd;
 }
 
 //+------------------------------------------------------------------+
@@ -337,7 +338,7 @@ double OnTester()
     double avg_win = profit_trades > 0 ? TesterStatistics(STAT_GROSS_PROFIT) / profit_trades : 0;
     double avg_loss = loss_trades > 0 ? TesterStatistics(STAT_GROSS_LOSS) / loss_trades : 0;
     double payoff_ratio = (avg_loss > 0) ? avg_win / avg_loss : 0;
-    double expected_max_drawdown = CalcExpectedMaxDrawdown(win_rate, avg_win, avg_loss);
+    double expected_max_drawdown = CalcExpectedMaxDrawdown(win_rate, InpRiskPercent);
 
     // --- NORMALIZATION (as per user request) ---
     monthly_return /= 100.0;
