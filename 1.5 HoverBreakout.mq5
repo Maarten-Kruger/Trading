@@ -1,6 +1,6 @@
 #property copyright "MJ Kruger"
 #property link      "https://github.com/Maarten-Kruger/Trading"
-#property version   "1.3"
+#property version   "1.5"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -13,9 +13,12 @@ input double InpSLPoints       = 200;    // Stop loss distance in points
 input double InpRiskPercent    = 1.0;    // Risk percentage of equity per trade
 input int    InpMaxBarsOpen    = 5;      // Maximum bars to keep position open
 input uint   InpSlippage       = 5;      // Slippage in points
-input double InpWt             = 40.0;   // Weight % for trade density
-input double InpWp             = 40.0;   // Weight % for monthly consistency
-input double InpWd             = 20.0;   // Weight % for drawdown
+input double InpWpr            = 20.0;   // Weight for Payoff Ratio
+input double InpWmr            = 20.0;   // Weight for Monthly Return
+input double InpWnp            = 15.0;   // Weight for Negative Penalty
+input double InpWtc            = 15.0;   // Weight for Trade Count per Month
+input double InpWsr            = 15.0;   // Weight for Sharpe Ratio
+input double InpWle            = 15.0;   // Weight for Expected Maximum Drawdown
 input ulong  InpMagicNumber    = 1300001;// Magic number for HoverBreakout trades
 
 //--- global objects
@@ -249,43 +252,118 @@ void OnTick()
   }
 
 //+------------------------------------------------------------------+
+//| Calculate the average sum of absolute losses from negative months|
+//+------------------------------------------------------------------+
+double CalcNegativePenalty()
+{
+    double monthly_profits[];
+    int num_months = (int)CalcMonths(g_test_start, g_test_end);
+    if(num_months <= 0) return 0;
+
+    ArrayResize(monthly_profits, num_months);
+    ArrayInitialize(monthly_profits, 0.0);
+
+    HistorySelect(g_test_start, g_test_end);
+    for(int i = 0; i < HistoryDealsTotal(); i++)
+    {
+        long ticket = HistoryDealGetTicket(i);
+        if(ticket > 0)
+        {
+            datetime close_time = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+            double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+
+            MqlDateTime start_struct, close_struct;
+            TimeToStruct(g_test_start, start_struct);
+            TimeToStruct(close_time, close_struct);
+
+            int month_index = (close_struct.year - start_struct.year) * 12 + (close_struct.mon - start_struct.mon);
+            if(month_index >= 0 && month_index < num_months)
+            {
+                monthly_profits[month_index] += profit;
+            }
+        }
+    }
+
+    double total_loss = 0;
+    int negative_months = 0;
+    for(int i = 0; i < num_months; i++)
+    {
+        if(monthly_profits[i] < 0)
+        {
+            total_loss += MathAbs(monthly_profits[i]);
+            negative_months++;
+        }
+    }
+
+    return (negative_months > 0) ? total_loss / negative_months : 0;
+}
+
+
+//+------------------------------------------------------------------+
+//| Calculate the expected maximum drawdown over 1000 trades         |
+//+------------------------------------------------------------------+
+double CalcExpectedMaxDrawdown(double win_rate, double avg_win, double avg_loss)
+{
+    if (win_rate <= 0 || win_rate >= 1) return 0;
+
+    double p = 1.0 - win_rate; // Probability of losing
+    int n = 1000; // Number of trades
+
+    // Expected number of consecutive losses
+    double E_L = -MathLog(n) / MathLog(p);
+
+    // Expected maximum drawdown
+    return E_L * avg_loss;
+}
+
+//+------------------------------------------------------------------+
 //| Custom optimization criterion                                    |
-//| y = T*Wt + P*Wp - D*Wd                                           |
-//|   T : trade density = total trades / total bars                  |
-//|   P : monthly profit ratio = (total profit / starting equity) / months |
-//|   D : relative drawdown percent from tester statistics           |
 //+------------------------------------------------------------------+
 double OnTester()
-  {
-   // Retrieve base statistics from the strategy tester
-   double trades        = TesterStatistics(STAT_TRADES);                 // total number of trades
-   double bars          = (double)g_total_bars;                          // total number of bars processed
-   double profit        = TesterStatistics(STAT_PROFIT);                 // total net profit
-   double startEquity   = TesterStatistics(STAT_INITIAL_DEPOSIT);        // starting equity
-   double months        = CalcMonths(g_test_start, g_test_end);          // test length in months
-   double drawdownPct   = TesterStatistics(STAT_EQUITY_DDREL_PERCENT)/100;   // relative drawdown
+{
+    // --- METRIC CALCULATIONS ---
+    double payoff_ratio = (InpSLPoints > 0) ? InpTPPoints / InpSLPoints : 0;
+    double total_profit = TesterStatistics(STAT_PROFIT);
+    double start_equity = TesterStatistics(STAT_INITIAL_DEPOSIT);
+    double num_months = CalcMonths(g_test_start, g_test_end);
+    double monthly_return = (num_months > 0 && start_equity > 0) ? (total_profit / start_equity) / num_months : 0;
+    double negative_penalty = CalcNegativePenalty();
+    double total_trades = TesterStatistics(STAT_TRADES);
+    double trades_per_month = (num_months > 0) ? total_trades / num_months : 0;
+    double sharpe_ratio = TesterStatistics(STAT_SHARPE_RATIO);
 
-   double tradeDensity = 0.0;
-   if(bars > 0.0)
-      tradeDensity = trades / bars;
+    double win_rate = total_trades > 0 ? TesterStatistics(STAT_PROFIT_TRADES) / total_trades : 0;
+    double profit_trades = TesterStatistics(STAT_PROFIT_TRADES);
+    double loss_trades = TesterStatistics(STAT_LOSS_TRADES);
+    double avg_win = profit_trades > 0 ? TesterStatistics(STAT_GROSS_PROFIT) / profit_trades : 0;
+    double avg_loss = loss_trades > 0 ? TesterStatistics(STAT_GROSS_LOSS) / loss_trades : 0;
+    double expected_max_drawdown = CalcExpectedMaxDrawdown(win_rate, avg_win, avg_loss);
 
-   double monthlyProfit = 0.0;
-   if(months > 0.0 && startEquity > 0.0)
-      monthlyProfit = (profit / startEquity) / months;
+    // --- NORMALIZATION (as per user request) ---
+    monthly_return /= 100.0;
+    negative_penalty /= 100.0;
+    trades_per_month /= 100.0;
+    expected_max_drawdown *= 100.0;
 
-   // Normalise weights so they sum to 1.0 even if inputs don't add to 100
-   double weightSum = InpWt + InpWp + InpWd;
-   if(weightSum <= 0.0)
-      weightSum = 1.0;
-   double wt = InpWt / weightSum;
-   double wp = InpWp / weightSum;
-   double wd = InpWd / weightSum;
+    // --- WEIGHTING ---
+    double total_weight = InpWpr + InpWmr + InpWnp + InpWtc + InpWsr + InpWle;
+    if (total_weight <= 0) total_weight = 1;
 
+    double Wpr = InpWpr / total_weight;
+    double Wmr = InpWmr / total_weight;
+    double Wnp = InpWnp / total_weight;
+    double Wtc = InpWtc / total_weight;
+    double Wsr = InpWsr / total_weight;
+    double Wle = InpWle / total_weight;
 
-   // Objective value to maximise during optimisation
-   double score = (tradeDensity * wt + monthlyProfit * wp - drawdownPct * wd)*100;
-   
-   
-   return(score);
-  }
+    // --- FINAL OBJECTIVE FUNCTION ---
+    double objective_score = (payoff_ratio * Wpr) +
+                             (monthly_return * Wmr) -
+                             (negative_penalty * Wnp) +
+                             (trades_per_month * Wtc) +
+                             (sharpe_ratio * Wsr) -
+                             (expected_max_drawdown * Wle);
+
+    return(objective_score);
+}
 
