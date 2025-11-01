@@ -337,13 +337,13 @@ double OnTester()
     double loss_trades = TesterStatistics(STAT_LOSS_TRADES);
     double avg_win = profit_trades > 0 ? TesterStatistics(STAT_GROSS_PROFIT) / profit_trades : 0;
     double avg_loss = loss_trades > 0 ? TesterStatistics(STAT_GROSS_LOSS) / loss_trades : 0;
-    double payoff_ratio = (avg_loss > 0) ? avg_win / avg_loss : 0;
+    double payoff_ratio = (avg_loss != 0) ? avg_win / MathAbs(avg_loss) : 0;
     double expected_max_drawdown = CalcExpectedMaxDrawdown(win_rate, InpRiskPercent);
 
     // --- NORMALIZATION (as per user request) ---
-    monthly_return /= 100.0;
+    monthly_return *= 100.0;
     negative_penalty /= 100.0;
-    trades_per_month /= 100.0;
+    trades_per_month /= 10.0;
     expected_max_drawdown *= 100.0;
 
     // --- DEBUG OUTPUT ---
