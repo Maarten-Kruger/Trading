@@ -5,14 +5,14 @@ from scipy.optimize import fsolve
 # --- 1. Parameters to Adjust ---
 # All calculations will update based on these values.
 
-m = 2   # The midpoint (where score is 0.5)
-x1 = 3  # The 'x' value of your constraint point
-y1 = 0.9    # The 'y' score of your constraint point (e.g., f(x1) = y1)
+m = 4.25   # The midpoint (where score is 0.5)
+x1 = 0.5  # The 'x' value of your constraint point
+y1 = 0.1    # The 'y' score of your constraint point (e.g., f(x1) = y1)
 
 # Plotting range and ticks
-plot_min_x = -3
-plot_max_x = m*2  # Plot from 0 to twice the midpoint (e.g., 800)
-x_tick_step = 1  # Step for x-axis ticks
+plot_min_x = -2
+plot_max_x = 10  # Plot from 0 to twice the midpoint (e.g., 800)
+x_tick_step = 0.5  # Step for x-axis ticks
 y_tick_step = 0.1   # Step for y-axis ticks
 
 # --- 2. Define Sigmoid Function ---
