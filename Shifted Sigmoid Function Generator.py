@@ -5,13 +5,13 @@ from scipy.optimize import fsolve
 # --- 1. Parameters to Adjust ---
 # All calculations will update based on these values.
 
-input_name = "Payoff Ratio"
-x1 = 0.5    # The 'x' value where the score is 0.1
-x2 = 8.0    # The 'x' value where the score is 0.9
+input_name = "Risk of Ruin %"
+x1 = 0    # The 'x' value where the score is 0.1
+x2 = 100    # The 'x' value where the score is 0.9
 
 # Plotting range and ticks
-plot_margin = 2  # How much extra space to show on the x-axis beyond x1 and x2
-x_tick_step = 0.5  # Step for x-axis ticks
+x_tick_step = 10  # Step for x-axis ticks
+plot_margin = 2*x_tick_step  # How much extra space to show on the x-axis beyond x1 and x2
 y_tick_step = 0.1   # Step for y-axis ticks
 
 # Fixed y-values for the constraints
