@@ -18,7 +18,7 @@ input double InpWmr            = 20.0;   // Weight for Monthly Return
 input double InpWnp            = 15.0;   // Weight for Negative Penalty
 input double InpWtc            = 15.0;   // Weight for Trade Count per Month
 input double InpWsr            = 15.0;   // Weight for Sharpe Ratio
-input double InpWle            = 15.0;   // Weight for Expected Maximum Drawdown
+input double InpWRor           = 15.0;   // Weight for Risk of Ruin
 input ulong  InpMagicNumber    = 1300001;// Magic number for HoverBreakout trades
 
 //--- global objects
@@ -300,21 +300,49 @@ double CalcNegativePenalty()
 
 
 //+------------------------------------------------------------------+
-//| Calculate the expected maximum drawdown over 1000 trades         |
+//| Calculate the Risk of Ruin (RoR)                                 |
 //+------------------------------------------------------------------+
-double CalcExpectedMaxDrawdown(double win_rate, double risk_percent)
+double CalcRiskOfRuin(double prob_win, double avg_win, double avg_loss)
 {
-    if (win_rate <= 0 || win_rate >= 1) return 0;
+    const double MaxRisk = 0.05; // 5%
+    const double VERY_LARGE_ROR = 1.0e9; // A large number to signify certain ruin
 
-    double prob_win = win_rate;
+    // --- Edge Case Handling ---
+    if (prob_win >= 1.0) return 0.0; // 100% win rate = 0% RoR
+
+    if (prob_win <= 0 || avg_win <= 0 || avg_loss >= 0)
+    {
+        printf("RoR Error: Invalid strategy parameters. prob_win=%.2f, avg_win=%.2f, avg_loss=%.2f", prob_win, avg_win, avg_loss);
+        return VERY_LARGE_ROR;
+    }
+
     double prob_loss = 1.0 - prob_win;
-    if (prob_loss <= 0) return 0;
 
-    double losing_streak = (MathLog(1000) + MathLog(prob_win)) / -MathLog(prob_loss);
-    double L = risk_percent / 100.0;
-    double emd = 1.0 - MathPow(1.0 - L, losing_streak);
+    // --- Formula Calculation ---
+    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    if (equity <= 0)
+    {
+        printf("RoR Error: Cannot calculate with zero or negative equity.");
+        return VERY_LARGE_ROR;
+    }
 
-    return emd;
+    double avg_win_pct = avg_win / equity;
+    double avg_loss_pct = MathAbs(avg_loss) / equity;
+
+    double Z = (prob_win * avg_win_pct) - (prob_loss * avg_loss_pct);
+    double A = MathSqrt((prob_win * MathPow(avg_win_pct, 2)) + (prob_loss * MathPow(avg_loss_pct, 2)));
+
+    if (A == 0) return (Z > 0) ? 0.0 : VERY_LARGE_ROR;
+
+    double P = 0.5 * (1 + (Z / A));
+
+    // --- Final RoR Calculation ---
+    if (P >= 1.0) return 0.0; // 100% chance of positive step = 0% RoR
+    if (P <= 0) return VERY_LARGE_ROR;   // 0% chance of positive step = certain ruin
+
+    double RoR = MathPow(((1.0 - P) / P), (MaxRisk / A));
+
+    return RoR;
 }
 
 //+------------------------------------------------------------------+
@@ -338,13 +366,13 @@ double OnTester()
     double avg_win = profit_trades > 0 ? TesterStatistics(STAT_GROSS_PROFIT) / profit_trades : 0;
     double avg_loss = loss_trades > 0 ? TesterStatistics(STAT_GROSS_LOSS) / loss_trades : 0;
     double payoff_ratio = (avg_loss != 0) ? avg_win / MathAbs(avg_loss) : 0;
-    double expected_max_drawdown = CalcExpectedMaxDrawdown(win_rate, InpRiskPercent);
+    double risk_of_ruin = CalcRiskOfRuin(win_rate, avg_win, avg_loss);
 
     // --- NORMALIZATION (as per user request) ---
     monthly_return *= 100.0;
     negative_penalty /= 100.0;
     trades_per_month /= 10.0;
-    expected_max_drawdown *= 100.0;
+    risk_of_ruin *= 100.0;
 
     // --- DEBUG OUTPUT ---
     printf("Payoff Ratio: %f", payoff_ratio);
@@ -352,10 +380,10 @@ double OnTester()
     printf("Negative Penalty: %f", negative_penalty);
     printf("Trades Per Month: %f", trades_per_month);
     printf("Sharpe Ratio: %f", sharpe_ratio);
-    printf("Expected Max Drawdown: %f", expected_max_drawdown);
+    printf("Risk of Ruin: %f", risk_of_ruin);
 
     // --- WEIGHTING ---
-    double total_weight = InpWpr + InpWmr + InpWnp + InpWtc + InpWsr + InpWle;
+    double total_weight = InpWpr + InpWmr + InpWnp + InpWtc + InpWsr + InpWRor;
     if (total_weight <= 0) total_weight = 1;
 
     double Wpr = InpWpr / total_weight;
@@ -363,7 +391,7 @@ double OnTester()
     double Wnp = InpWnp / total_weight;
     double Wtc = InpWtc / total_weight;
     double Wsr = InpWsr / total_weight;
-    double Wle = InpWle / total_weight;
+    double WRor = InpWRor / total_weight;
 
     // --- FINAL OBJECTIVE FUNCTION ---
     double objective_score = (payoff_ratio * Wpr) +
@@ -371,7 +399,7 @@ double OnTester()
                              (negative_penalty * Wnp) +
                              (trades_per_month * Wtc) +
                              (sharpe_ratio * Wsr) -
-                             (expected_max_drawdown * Wle);
+                             (risk_of_ruin * WRor);
 
     return(objective_score);
 }
