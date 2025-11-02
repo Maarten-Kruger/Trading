@@ -391,11 +391,11 @@ double OnTester()
     // --- DEBUG OUTPUT (BEFORE NORMALIZATION) ---
     printf("--- Before Sigmoid Normalization ---");
     printf("Payoff Ratio (Pr): %.2f", payoff_ratio_raw);
-    printf("Monthly Return (Mr): %.2f%%", monthly_return_raw);
+    printf("Monthly Return (Mr): %.2f", monthly_return_raw);
     printf("Negative Penalty (Np): %.2f", negative_penalty_raw);
     printf("Trade Count/Month (Tc): %.2f", trades_per_month_raw);
     printf("Sharpe Ratio (Sr): %.2f", sharpe_ratio_raw);
-    printf("Risk of Ruin (RoR): %.2f%%", risk_of_ruin_raw);
+    printf("Risk of Ruin (RoR): %.2f", risk_of_ruin_raw);
 
     // --- SIGMOID NORMALIZATION ---
     double payoff_ratio_norm = SigmoidNormalize(payoff_ratio_raw, InpPrK, InpPrM);

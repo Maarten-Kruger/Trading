@@ -5,14 +5,14 @@ from scipy.optimize import fsolve
 # --- 1. Parameters to Adjust ---
 # All calculations will update based on these values.
 
-m = 400   # The midpoint (where score is 0.5)
-x1 = 100  # The 'x' value of your constraint point
-y1 = 0.1    # The 'y' score of your constraint point (e.g., f(x1) = y1)
+m = 2   # The midpoint (where score is 0.5)
+x1 = 3  # The 'x' value of your constraint point
+y1 = 0.9    # The 'y' score of your constraint point (e.g., f(x1) = y1)
 
 # Plotting range and ticks
-plot_min_x = 0
+plot_min_x = -3
 plot_max_x = m*2  # Plot from 0 to twice the midpoint (e.g., 800)
-x_tick_step = 50  # Step for x-axis ticks
+x_tick_step = 1  # Step for x-axis ticks
 y_tick_step = 0.1   # Step for y-axis ticks
 
 # --- 2. Define Sigmoid Function ---
@@ -80,6 +80,13 @@ plt.ylabel('Value Score f(x)', fontsize=12)
 plt.grid(True, which='both', linestyle='--', linewidth=0.5)
 plt.ylim([0, 1])
 plt.xlim([plot_min_x, plot_max_x])
+
+# Add text box for the slope 'k'
+# We use transform=plt.gca().transAxes to use relative (0-1) coordinates
+k_string = f'Slope (k) = {k_solved:.6f}'
+plt.text(0.825, 0.17, k_string, transform=plt.gca().transAxes, fontsize=10,
+         bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='black', alpha=0.8))
+
 
 # Set the ticks based on your parameters from section 1
 plt.xticks(np.arange(plot_min_x, plot_max_x + x_tick_step, x_tick_step))
