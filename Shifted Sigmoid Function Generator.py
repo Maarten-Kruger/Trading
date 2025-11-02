@@ -5,18 +5,18 @@ from scipy.optimize import fsolve
 # --- 1. Parameters to Adjust ---
 # All calculations will update based on these values.
 
+input_name = "Payoff Ratio"
 x1 = 0.5    # The 'x' value where the score is 0.1
 x2 = 8.0    # The 'x' value where the score is 0.9
+
+# Plotting range and ticks
+plot_margin = 2  # How much extra space to show on the x-axis beyond x1 and x2
+x_tick_step = 0.5  # Step for x-axis ticks
+y_tick_step = 0.1   # Step for y-axis ticks
 
 # Fixed y-values for the constraints
 y1 = 0.1
 y2 = 0.9
-
-
-# Plotting range and ticks
-plot_margin = 1.0  # How much extra space to show on the x-axis beyond x1 and x2
-x_tick_step = 0.5  # Step for x-axis ticks
-y_tick_step = 0.1   # Step for y-axis ticks
 
 # Dynamically set the plot range based on the input points and the margin
 plot_min_x = min(x1, x2) - plot_margin
@@ -79,7 +79,7 @@ plt.axvline(x=x2, color="#000000", linestyle='--', linewidth=1.5)
 
 # --- 6. Format the Plot ---
 plt.title('Solved Sigmoid Function with "Scale" Tiers', fontsize=16)
-plt.xlabel('Number of input (x)', fontsize=12)
+plt.xlabel(f'Number of {input_name}', fontsize=12)
 plt.ylabel('Value Score f(x)', fontsize=12)
 plt.grid(True, which='both', linestyle='--', linewidth=0.5)
 plt.ylim([0, 1])
@@ -88,7 +88,7 @@ plt.xlim([plot_min_x, plot_max_x])
 # Add text box for the slope 'k'
 # We use transform=plt.gca().transAxes to use relative (0-1) coordinates
 k_string = f'Slope (k) = {k_solved:.6f}'
-plt.text(0.825, 0.17, k_string, transform=plt.gca().transAxes, fontsize=10,
+plt.text(0.85, 0.17, k_string, transform=plt.gca().transAxes, fontsize=10,
          bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='black', alpha=0.8))
 
 
