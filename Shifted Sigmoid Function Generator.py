@@ -5,14 +5,14 @@ from scipy.optimize import fsolve
 # --- 1. Parameters to Adjust ---
 # All calculations will update based on these values.
 
-m = 2.0   # The midpoint (where score is 0.5)
-x1 = 0  # The 'x' value of your constraint point
+m = 400   # The midpoint (where score is 0.5)
+x1 = 100  # The 'x' value of your constraint point
 y1 = 0.1    # The 'y' score of your constraint point (e.g., f(x1) = y1)
 
 # Plotting range and ticks
-plot_min_x = -3
-plot_max_x = 8  # Plot from 0 to twice the midpoint (e.g., 800)
-x_tick_step = 0.5  # Step for x-axis ticks
+plot_min_x = 0
+plot_max_x = m*2  # Plot from 0 to twice the midpoint (e.g., 800)
+x_tick_step = 50  # Step for x-axis ticks
 y_tick_step = 0.1   # Step for y-axis ticks
 
 # --- 2. Define Sigmoid Function ---
@@ -34,7 +34,6 @@ def goal_function(k, x_val, y_val, m_val):
 k_solved = fsolve(goal_function, 0.01, args=(x1, y1, m))[0]
 
 print("--- Solved Parameters ---")
-print(f"Midpoint (m): {m:.2f}")
 print(f"Steepness (k): {k_solved:.6f}\n")
 
 # --- 4. Test Key Points (Get "Sense of Scale") ---
@@ -75,7 +74,7 @@ plt.axvline(x=x_sym, color="#000000", linestyle='--', linewidth=1.5)
 
 # --- 6. Format the Plot ---
 plt.title('Solved Sigmoid Function with "Scale" Tiers', fontsize=16)
-plt.xlabel('Number of Trades (x)', fontsize=12)
+plt.xlabel('Number of input (x)', fontsize=12)
 plt.ylabel('Value Score f(x)', fontsize=12)
 plt.grid(True, which='both', linestyle='--', linewidth=0.5)
 plt.ylim([0, 1])
