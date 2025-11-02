@@ -19,6 +19,18 @@ input double InpWnp            = 15.0;   // Weight for Negative Penalty
 input double InpWtc            = 15.0;   // Weight for Trade Count per Month
 input double InpWsr            = 15.0;   // Weight for Sharpe Ratio
 input double InpWRor           = 15.0;   // Weight for Risk of Ruin
+input double InpPrK            = 1.0;    // Payoff Ratio Steepness (k)
+input double InpPrM            = 1.5;    // Payoff Ratio Midpoint (m)
+input double InpMrK            = 0.1;    // Monthly Return Steepness (k)
+input double InpMrM            = 10.0;   // Monthly Return Midpoint (m)
+input double InpNpK            = -0.01;  // Negative Penalty Steepness (k)
+input double InpNpM            = 500.0;  // Negative Penalty Midpoint (m)
+input double InpTcK            = 0.2;    // Trade Count Steepness (k)
+input double InpTcM            = 20.0;   // Trade Count Midpoint (m)
+input double InpSrK            = 2.0;    // Sharpe Ratio Steepness (k)
+input double InpSrM            = 1.0;    // Sharpe Ratio Midpoint (m)
+input double InpRoRK           = -0.1;   // Risk of Ruin Steepness (k)
+input double InpRoRM           = 50.0;   // Risk of Ruin Midpoint (m)
 input ulong  InpMagicNumber    = 1300001;// Magic number for HoverBreakout trades
 
 //--- global objects
@@ -252,6 +264,14 @@ void OnTick()
   }
 
 //+------------------------------------------------------------------+
+//| Sigmoid normalization function                                   |
+//+------------------------------------------------------------------+
+double SigmoidNormalize(double x, double k, double m)
+{
+    return (1.0 / (1.0 + MathPow(2.71828, -k * (x - m))));
+}
+
+//+------------------------------------------------------------------+
 //| Calculate the average sum of absolute losses from negative months|
 //+------------------------------------------------------------------+
 double CalcNegativePenalty()
@@ -354,37 +374,49 @@ double OnTester()
     double total_profit = TesterStatistics(STAT_PROFIT);
     double start_equity = TesterStatistics(STAT_INITIAL_DEPOSIT);
     double num_months = CalcMonths(g_test_start, g_test_end);
-    double monthly_return = (num_months > 0 && start_equity > 0) ? (total_profit / start_equity) / num_months : 0;
-    double negative_penalty = CalcNegativePenalty();
+    double monthly_return_raw = (num_months > 0 && start_equity > 0) ? ((total_profit / start_equity) / num_months) * 100.0 : 0; // Normalized to %
+    double negative_penalty_raw = CalcNegativePenalty();
     double total_trades = TesterStatistics(STAT_TRADES);
-    double trades_per_month = (num_months > 0) ? total_trades / num_months : 0;
-    double sharpe_ratio = TesterStatistics(STAT_SHARPE_RATIO);
+    double trades_per_month_raw = (num_months > 0) ? total_trades / num_months : 0;
+    double sharpe_ratio_raw = TesterStatistics(STAT_SHARPE_RATIO);
 
     double win_rate = total_trades > 0 ? TesterStatistics(STAT_PROFIT_TRADES) / total_trades : 0;
     double profit_trades = TesterStatistics(STAT_PROFIT_TRADES);
     double loss_trades = TesterStatistics(STAT_LOSS_TRADES);
     double avg_win = profit_trades > 0 ? TesterStatistics(STAT_GROSS_PROFIT) / profit_trades : 0;
     double avg_loss = loss_trades > 0 ? TesterStatistics(STAT_GROSS_LOSS) / loss_trades : 0;
-    double payoff_ratio = (avg_loss != 0) ? avg_win / MathAbs(avg_loss) : 0;
-    double risk_of_ruin = CalcRiskOfRuin(win_rate, avg_win, avg_loss);
+    double payoff_ratio_raw = (avg_loss != 0) ? avg_win / MathAbs(avg_loss) : 0;
+    double risk_of_ruin_raw = CalcRiskOfRuin(win_rate, avg_win, avg_loss) * 100.0; // Normalized to %
 
-    // --- NORMALIZATION (as per user request) ---
-    monthly_return *= 100.0;
-    negative_penalty /= 100.0;
-    trades_per_month /= 10.0;
-    risk_of_ruin *= 100.0;
+    // --- DEBUG OUTPUT (BEFORE NORMALIZATION) ---
+    printf("--- Before Sigmoid Normalization ---");
+    printf("Payoff Ratio (Pr): %.2f", payoff_ratio_raw);
+    printf("Monthly Return (Mr): %.2f%%", monthly_return_raw);
+    printf("Negative Penalty (Np): %.2f", negative_penalty_raw);
+    printf("Trade Count/Month (Tc): %.2f", trades_per_month_raw);
+    printf("Sharpe Ratio (Sr): %.2f", sharpe_ratio_raw);
+    printf("Risk of Ruin (RoR): %.2f%%", risk_of_ruin_raw);
 
-    // --- DEBUG OUTPUT ---
-    printf("Payoff Ratio: %f", payoff_ratio);
-    printf("Monthly Return: %f", monthly_return);
-    printf("Negative Penalty: %f", negative_penalty);
-    printf("Trades Per Month: %f", trades_per_month);
-    printf("Sharpe Ratio: %f", sharpe_ratio);
-    printf("Risk of Ruin: %f", risk_of_ruin);
+    // --- SIGMOID NORMALIZATION ---
+    double payoff_ratio_norm = SigmoidNormalize(payoff_ratio_raw, InpPrK, InpPrM);
+    double monthly_return_norm = SigmoidNormalize(monthly_return_raw, InpMrK, InpMrM);
+    double negative_penalty_norm = SigmoidNormalize(negative_penalty_raw, InpNpK, InpNpM);
+    double trades_per_month_norm = SigmoidNormalize(trades_per_month_raw, InpTcK, InpTcM);
+    double sharpe_ratio_norm = SigmoidNormalize(sharpe_ratio_raw, InpSrK, InpSrM);
+    double risk_of_ruin_norm = SigmoidNormalize(risk_of_ruin_raw, InpRoRK, InpRoRM);
+
+    // --- DEBUG OUTPUT (AFTER NORMALIZATION) ---
+    printf("--- After Sigmoid Normalization ---");
+    printf("Payoff Ratio (Pr) Norm: %.4f", payoff_ratio_norm);
+    printf("Monthly Return (Mr) Norm: %.4f", monthly_return_norm);
+    printf("Negative Penalty (Np) Norm: %.4f", negative_penalty_norm);
+    printf("Trade Count/Month (Tc) Norm: %.4f", trades_per_month_norm);
+    printf("Sharpe Ratio (Sr) Norm: %.4f", sharpe_ratio_norm);
+    printf("Risk of Ruin (RoR) Norm: %.4f", risk_of_ruin_norm);
 
     // --- WEIGHTING ---
     double total_weight = InpWpr + InpWmr + InpWnp + InpWtc + InpWsr + InpWRor;
-    if (total_weight <= 0) total_weight = 1;
+    if (total_weight <= 0) total_weight = 1.0; // Avoid division by zero
 
     double Wpr = InpWpr / total_weight;
     double Wmr = InpWmr / total_weight;
@@ -394,12 +426,15 @@ double OnTester()
     double WRor = InpWRor / total_weight;
 
     // --- FINAL OBJECTIVE FUNCTION ---
-    double objective_score = (payoff_ratio * Wpr) +
-                             (monthly_return * Wmr) -
-                             (negative_penalty * Wnp) +
-                             (trades_per_month * Wtc) +
-                             (sharpe_ratio * Wsr) -
-                             (risk_of_ruin * WRor);
+    double objective_score = (payoff_ratio_norm * Wpr) +
+                             (monthly_return_norm * Wmr) -
+                             (negative_penalty_norm * Wnp) +
+                             (trades_per_month_norm * Wtc) +
+                             (sharpe_ratio_norm * Wsr) -
+                             (risk_of_ruin_norm * WRor);
+
+    printf("--- Final Score ---");
+    printf("Objective Score: %.4f", objective_score);
 
     return(objective_score);
 }
