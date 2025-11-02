@@ -426,12 +426,12 @@ double OnTester()
     double WRor = InpWRor / total_weight;
 
     // --- FINAL OBJECTIVE FUNCTION ---
-    double objective_score = (payoff_ratio_norm * Wpr) +
+    double objective_score = ((payoff_ratio_norm * Wpr) +
                              (monthly_return_norm * Wmr) -
                              (negative_penalty_norm * Wnp) +
                              (trades_per_month_norm * Wtc) +
                              (sharpe_ratio_norm * Wsr) -
-                             (risk_of_ruin_norm * WRor);
+                             (risk_of_ruin_norm * WRor))*100;
 
     printf("--- Final Score ---");
     printf("Objective Score: %.4f", objective_score);
