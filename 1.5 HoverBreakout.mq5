@@ -300,7 +300,7 @@ double CalcNegativePenalty()
 
 
 //+------------------------------------------------------------------+
-//| Calculate the expected maximum drawdown over 1000 trades         |
+//| Calculate the expected maximum drawdown over 1000000 trades         |
 //+------------------------------------------------------------------+
 double CalcExpectedMaxDrawdown(double win_rate, double risk_percent)
 {
@@ -310,7 +310,7 @@ double CalcExpectedMaxDrawdown(double win_rate, double risk_percent)
     double prob_loss = 1.0 - prob_win;
     if (prob_loss <= 0) return 0;
 
-    double losing_streak = (MathLog(1000) + MathLog(prob_win)) / -MathLog(prob_loss);
+    double losing_streak = (MathLog(1000000) + MathLog(prob_win)) / -MathLog(prob_loss);
     double L = risk_percent / 100.0;
     double emd = 1.0 - MathPow(1.0 - L, losing_streak);
 
@@ -353,7 +353,7 @@ double OnTester()
     printf("Trades Per Month: %f", trades_per_month);
     printf("Sharpe Ratio: %f", sharpe_ratio);
     printf("Expected Max Drawdown: %f", expected_max_drawdown);
-
+    
     // --- WEIGHTING ---
     double total_weight = InpWpr + InpWmr + InpWnp + InpWtc + InpWsr + InpWle;
     if (total_weight <= 0) total_weight = 1;
