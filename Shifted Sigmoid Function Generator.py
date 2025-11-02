@@ -34,6 +34,7 @@ def goal_function(k, x_val, y_val, m_val):
 k_solved = fsolve(goal_function, 0.01, args=(x1, y1, m))[0]
 
 print("--- Solved Parameters ---")
+print(f"Midpoint (m): {m:.2f}")
 print(f"Steepness (k): {k_solved:.6f}\n")
 
 # --- 4. Test Key Points (Get "Sense of Scale") ---
