@@ -5,15 +5,22 @@ from scipy.optimize import fsolve
 # --- 1. Parameters to Adjust ---
 # All calculations will update based on these values.
 
-m = 4.25   # The midpoint (where score is 0.5)
-x1 = 0.5  # The 'x' value of your constraint point
-y1 = 0.1    # The 'y' score of your constraint point (e.g., f(x1) = y1)
+x1 = 0.5    # The 'x' value where the score is 0.1
+x2 = 8.0    # The 'x' value where the score is 0.9
+
+# Fixed y-values for the constraints
+y1 = 0.1
+y2 = 0.9
+
 
 # Plotting range and ticks
-plot_min_x = -2
-plot_max_x = 10  # Plot from 0 to twice the midpoint (e.g., 800)
+plot_margin = 1.0  # How much extra space to show on the x-axis beyond x1 and x2
 x_tick_step = 0.5  # Step for x-axis ticks
 y_tick_step = 0.1   # Step for y-axis ticks
+
+# Dynamically set the plot range based on the input points and the margin
+plot_min_x = min(x1, x2) - plot_margin
+plot_max_x = max(x1, x2) + plot_margin
 
 # --- 2. Define Sigmoid Function ---
 def sigmoid(x, k, m):
@@ -21,20 +28,22 @@ def sigmoid(x, k, m):
     with np.errstate(over='ignore'): # Ignore potential overflow in exp
         return 1.0 / (1.0 + np.exp(-k * (x - m)))
 
-# --- 3. Solve for Steepness 'k' ---
+# --- 3. Solve for Steepness 'k' and Midpoint 'm' ---
 
-# We need to find 'k' such that sigmoid(x1, k, m) - y1 = 0
-# We create a "goal function" for fsolve to target (find the root of)
-def goal_function(k, x_val, y_val, m_val):
-    """Function to solve for k. We want this to be zero."""
-    return sigmoid(x_val, k, m_val) - y_val
+if x1 == x2:
+    raise ValueError("x-values cannot be the same.")
 
-# Use fsolve. It needs the function to solve, an initial guess (0.01 is good),
-# and any extra arguments for our goal_function.
-k_solved = fsolve(goal_function, 0.01, args=(x1, y1, m))[0]
+# Because y1 and y2 are symmetrical (0.1 and 0.9), the midpoint is simply the average of x1 and x2.
+m_solved = (x1 + x2) / 2.0
+
+# We can now solve for k analytically using one of the points (e.g., x1, y1)
+# The sigmoid equation is: y = 1 / (1 + exp(-k * (x - m)))
+# Rearranging for k: k = -ln((1/y - 1)) / (x - m)
+k_solved = -np.log((1 / y1) - 1) / (x1 - m_solved)
+
 
 print("--- Solved Parameters ---")
-print(f"Midpoint (m): {m:.2f}")
+print(f"Midpoint (m): {m_solved:.2f}")
 print(f"Steepness (k): {k_solved:.6f}\n")
 
 # --- 4. Test Key Points (Get "Sense of Scale") ---
@@ -42,12 +51,7 @@ print(f"Steepness (k): {k_solved:.6f}\n")
 # Create a final, easy-to-use function with our solved 'k' and 'm'
 def f_final(x):
     """Sigmoid function with the solved parameters."""
-    return sigmoid(x, k_solved, m)
-
-# Calculate symmetrical "good" point
-dist_to_mid = m - x1
-x_sym = m + dist_to_mid
-y_sym = f_final(x_sym) # This will be (1 - y1)
+    return sigmoid(x, k_solved, m_solved)
 
 # --- 5. Plot the Function with Visual Tiers ---
 plt.figure(figsize=(12, 7))
@@ -67,11 +71,11 @@ plt.fill_between(x_range, 0.9, 1.0, color="#D8B3FD", alpha=0.6)
 plt.plot(x_range, f_final(x_range), 'k', linewidth=2.5, label='f(x) - Score')
 
 # Plot the key anchor points
-plt.plot(m, f_final(m), 'ko', markersize=8, markerfacecolor='#4CAF50', label=f'Midpoint ({m}, 0.5)')
-plt.plot(x1, f_final(x1), 'ko', markersize=8, markerfacecolor='#F44336', label=f'Constraint ({x1}, {y1})')
-plt.plot(x_sym, f_final(x_sym), 'ko', markersize=8, markerfacecolor='#3F51B5', label=f'Symmetrical ({x_sym}, {y_sym:.1f})')
+plt.plot(m_solved, 0.5, 'ko', markersize=8, markerfacecolor='#4CAF50', label=f'Midpoint ({m_solved:.2f}, 0.5)')
+plt.plot(x1, y1, 'ko', markersize=8, markerfacecolor='#F44336', label=f'Constraint 1 ({x1}, {y1})')
+plt.plot(x2, y2, 'ko', markersize=8, markerfacecolor='#3F51B5', label=f'Constraint 2 ({x2}, {y2})')
 plt.axvline(x=x1, color="#000000", linestyle='--', linewidth=1.5)
-plt.axvline(x=x_sym, color="#000000", linestyle='--', linewidth=1.5)
+plt.axvline(x=x2, color="#000000", linestyle='--', linewidth=1.5)
 
 # --- 6. Format the Plot ---
 plt.title('Solved Sigmoid Function with "Scale" Tiers', fontsize=16)
