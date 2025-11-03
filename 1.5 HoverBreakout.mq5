@@ -16,21 +16,21 @@ uint   InpSlippage       = 5;      // Slippage in points
 double InpWpr            = 20.0;   // Weight for Payoff Ratio
 double InpWmr            = 20.0;   // Weight for Monthly Return
 double InpWnp            = 15.0;   // Weight for Negative Penalty
-double InpWtc            = 15.0;   // Weight for Trade Count per Month
+double InpWtc            = 20.0;   // Weight for Trade Count per Month
 double InpWsr            = 15.0;   // Weight for Sharpe Ratio
-double InpWRor           = 15.0;   // Weight for Risk of Ruin
+double InpWRor           = 10.0;   // Weight for Risk of Ruin
 double InpPrK            = 0.585927;    // Payoff Ratio Steepness (k)
 double InpPrM            = 4.25;    // Payoff Ratio Midpoint (m)
 double InpMrK            = 0.005859;    // Monthly Return Steepness (k)
 double InpMrM            = 425;   // Monthly Return Midpoint (m)
-double InpNpK            = 0.004384;  // Negative Penalty Steepness (k)
-double InpNpM            = 500.0;  // Negative Penalty Midpoint (m)
+double InpNpK            = 0.005493;  // Negative Penalty Steepness (k)
+double InpNpM            = 600.0;  // Negative Penalty Midpoint (m)
 double InpTcK            = 0.079899;    // Trade Count Steepness (k)
 double InpTcM            = 42.5;   // Trade Count Midpoint (m)
 double InpSrK            = 0.878890;    // Sharpe Ratio Steepness (k)
 double InpSrM            = 2.5;    // Sharpe Ratio Midpoint (m)
-double InpRoRK           = 0.043944;   // Risk of Ruin Steepness (k)
-double InpRoRM           = 50;   // Risk of Ruin Midpoint (m)
+double InpRoRK           = 0.046257;   // Risk of Ruin Steepness (k)
+double InpRoRM           = 52.5;   // Risk of Ruin Midpoint (m)
 ulong  InpMagicNumber    = 1300001;// Magic number for HoverBreakout trades
 
 //--- global objects
