@@ -219,9 +219,55 @@
             font-size: 14px !important;
         }
 
+        /* Stats Modal */
+        #stats-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        #stats-modal {
+            background: var(--panel-color);
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            width: 90%;
+            max-width: 500px;
+            color: var(--text-color);
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin: 20px 0;
+        }
+
     </style>
 </head>
 <body>
+
+    <!-- Stats Overlay -->
+    <div id="stats-overlay">
+        <div id="stats-modal">
+            <h2>Current Statistics</h2>
+            <div class="stats-grid">
+                <div>Total Trades: <span id="modal-trades">0</span></div>
+                <div>Win Rate: <span id="modal-winrate">0%</span></div>
+                <div>Total P/L: <span id="modal-pnl">0.00</span></div>
+                <div>Total Fees: <span id="modal-fees">0.00</span></div>
+                <div>Avg Win: <span id="modal-avg-win">0.00</span></div>
+                <div>Avg Loss: <span id="modal-avg-loss">0.00</span></div>
+                <div>Balance: <span id="modal-balance">0.00</span></div>
+                <div>Equity: <span id="modal-equity">0.00</span></div>
+            </div>
+            <div style="text-align: right;">
+                <button id="btn-close-stats">Close</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Start Screen -->
     <div id="start-screen" class="screen active">
@@ -245,6 +291,10 @@
                         <button id="btn-zoom-out-v">V-</button>
                         <button id="btn-fee" style="font-size: 14px; width: 40px;">Fee</button>
                         <button id="btn-lev" style="font-size: 14px; width: 40px;">Lev</button>
+                        <span style="border-left: 1px solid #555; margin: 0 5px;"></span>
+                        <button id="btn-stats-open">Stats</button>
+                        <button id="btn-save-game">Save</button>
+                        <button id="btn-reset-game" style="background-color: var(--red-color);">Reset</button>
                     </div>
                     <div style="position: absolute; top: 10px; left: 10px; font-family: monospace;">EURUSD</div>
                 </div>
@@ -1067,6 +1117,140 @@
     window.addEventListener('mouseup', () => {
         isDragging = false;
         canvas.style.cursor = 'default';
+    });
+
+    // --- Save/Load System ---
+    function saveGame(silent = false) {
+        if (!document.getElementById('simulation-screen').classList.contains('active')) return;
+
+        const state = {
+            username,
+            balance,
+            feesPaid,
+            trades,
+            tradeIdCounter,
+            visibleCandles,
+            tradingFee,
+            tradingUnits,
+            currentCandleIndex,
+            currentTick,
+            viewOffset,
+            yMin, yMax,
+            currentCandleHigh,
+            currentCandleLow,
+            candlesLength: candles.length
+        };
+        localStorage.setItem('tradingSimSave', JSON.stringify(state));
+        if (!silent) alert("Game Saved!");
+    }
+
+    function loadGame() {
+        const saved = localStorage.getItem('tradingSimSave');
+        if (!saved) return false;
+
+        try {
+            const state = JSON.parse(saved);
+            // Basic validation
+            if (!state.username || state.candlesLength === undefined) return false;
+
+            username = state.username;
+            balance = state.balance;
+            feesPaid = state.feesPaid;
+            trades = state.trades;
+            tradeIdCounter = state.tradeIdCounter;
+            visibleCandles = state.visibleCandles;
+            tradingFee = state.tradingFee;
+            tradingUnits = state.tradingUnits;
+            currentCandleIndex = state.currentCandleIndex;
+            currentTick = state.currentTick;
+            viewOffset = state.viewOffset;
+            yMin = state.yMin;
+            yMax = state.yMax;
+            currentCandleHigh = state.currentCandleHigh;
+            currentCandleLow = state.currentCandleLow;
+
+            // Initialize UI
+            document.getElementById('start-screen').classList.remove('active');
+            document.getElementById('simulation-screen').classList.add('active');
+            document.getElementById('username').value = username;
+
+            parseData();
+
+            // Generate path for current candle
+            if (currentCandleIndex < candles.length) {
+                currentPath = generateCandlePath(candles[currentCandleIndex]);
+            }
+
+            // Restore prices
+            if (currentTick < currentPath.length) {
+                currentPrice = currentPath[currentTick];
+            } else if (currentCandleIndex < candles.length) {
+                currentPrice = candles[currentCandleIndex].close;
+            }
+
+            updateTradingCalculations();
+            updateInfoText();
+            renderTradeList();
+
+            // Start loop
+            renderLoop();
+            return true;
+        } catch (e) {
+            console.error("Failed to load save", e);
+            return false;
+        }
+    }
+
+    function resetGame() {
+        if (confirm("Are you sure you want to reset? All progress will be lost.")) {
+            localStorage.removeItem('tradingSimSave');
+            location.reload();
+        }
+    }
+
+    // --- Statistics Menu ---
+    function showStats() {
+        // Calculate stats
+        const closedTrades = trades.filter(t => t.status === 'closed');
+        const totalTrades = closedTrades.length;
+        const totalPnL = closedTrades.reduce((acc, t) => acc + t.pnl, 0) - feesPaid;
+        const wins = closedTrades.filter(t => t.pnl > 0);
+        const losses = closedTrades.filter(t => t.pnl <= 0);
+        const winrate = totalTrades > 0 ? (wins.length / totalTrades) * 100 : 0;
+        const avgWin = wins.length > 0 ? wins.reduce((a, t) => a + t.pnl, 0) / wins.length : 0;
+        const avgLoss = losses.length > 0 ? losses.reduce((a, t) => a + t.pnl, 0) / losses.length : 0;
+
+        let floatingPL = 0;
+        trades.filter(t => t.status === 'open').forEach(t => floatingPL += t.pnl);
+        const equity = balance + floatingPL;
+
+        document.getElementById('modal-trades').innerText = totalTrades;
+        document.getElementById('modal-winrate').innerText = winrate.toFixed(1) + '%';
+        document.getElementById('modal-pnl').innerText = totalPnL.toFixed(2);
+        document.getElementById('modal-fees').innerText = feesPaid.toFixed(2);
+        document.getElementById('modal-avg-win').innerText = avgWin.toFixed(2);
+        document.getElementById('modal-avg-loss').innerText = avgLoss.toFixed(2);
+        document.getElementById('modal-balance').innerText = balance.toFixed(2);
+        document.getElementById('modal-equity').innerText = equity.toFixed(2);
+
+        document.getElementById('stats-overlay').style.display = 'flex';
+    }
+
+    document.getElementById('btn-stats-open').addEventListener('click', showStats);
+    document.getElementById('btn-close-stats').addEventListener('click', () => {
+        document.getElementById('stats-overlay').style.display = 'none';
+    });
+    document.getElementById('btn-save-game').addEventListener('click', () => saveGame(false));
+    document.getElementById('btn-reset-game').addEventListener('click', resetGame);
+
+    // Auto-save
+    setInterval(() => saveGame(true), 10000);
+
+    // Auto-load on startup
+    window.addEventListener('load', () => {
+        if (localStorage.getItem('tradingSimSave')) {
+            loadGame();
+        }
     });
 
 </script>
