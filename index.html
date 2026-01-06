@@ -101,17 +101,6 @@
             height: 100%;
         }
 
-        /* Vertical Scrollbar Style */
-        #v-scrollbar {
-            writing-mode: bt-lr; /* IE/Edge */
-            -webkit-appearance: slider-vertical; /* Webkit */
-            width: 20px;
-            height: 100%;
-            margin: 0;
-            padding: 0;
-            background: var(--panel-color);
-        }
-
         #controls-container {
             width: 100%;
             height: 40%;
@@ -223,7 +212,7 @@
         #zoom-controls button {
             background: rgba(255, 255, 255, 0.1);
             padding: 5px 10px;
-            font-size: 18px;
+            font-size: 14px;
         }
 
         #btn-home {
@@ -250,18 +239,16 @@
                     <canvas id="chart"></canvas>
                     <div id="zoom-controls">
                         <button id="btn-home">Home</button>
-                        <button id="btn-zoom-out">-</button>
-                        <button id="btn-zoom-in">+</button>
+                        <button id="btn-zoom-in-h">H+</button>
+                        <button id="btn-zoom-out-h">H-</button>
+                        <button id="btn-zoom-in-v">V+</button>
+                        <button id="btn-zoom-out-v">V-</button>
                         <button id="btn-fee" style="font-size: 14px; width: 40px;">Fee</button>
                         <button id="btn-lev" style="font-size: 14px; width: 40px;">Lev</button>
                     </div>
                     <div style="position: absolute; top: 10px; left: 10px; font-family: monospace;">EURUSD</div>
                 </div>
-                <!-- Vertical Scrollbar (Price) -->
-                <input type="range" id="v-scrollbar" min="0" max="2" step="0.0001" value="1.17">
             </div>
-            <!-- Horizontal Scrollbar (Time) -->
-            <input type="range" id="h-scrollbar" min="0" max="0" value="0" step="0.01" style="width: 100%; display: block; margin: 0; padding: 0;">
         </div>
         <div id="controls-container">
             <div id="trading-panel">
@@ -630,7 +617,7 @@
         if (currentTick >= TICKS_PER_CANDLE) {
             currentCandleIndex++;
             prepareNextCandle();
-            updateScrollbarMax();
+            // updateScrollbarMax(); // Scrollbar logic removed
         }
 
         animationFrameId = requestAnimationFrame(renderLoop);
@@ -657,10 +644,41 @@
         if (endIndex < 0) endIndex = 0;
         let startIndex = Math.max(0, endIndex - visibleCandles + 1);
 
+        // If we are left-aligned (filling the screen), we should scan from 0 to visibleCandles
+        // Actually, logic is handled by range scan.
+        // We need to scan visible candles.
+
         let minPrice = Infinity;
         let maxPrice = -Infinity;
 
-        for (let i = Math.floor(startIndex); i <= Math.ceil(endIndex); i++) {
+        // Determine loop bounds for auto-scale
+        // Similar to drawing logic, but here we just need min/max of WHAT IS DRAWN.
+
+        let rightEdgeIndex = currentCandleIndex - viewOffset;
+        // Left-align fix: if we haven't filled screen, rightEdgeIndex should be tracked to fill.
+        // But here we rely on what drawChart does.
+        // Let's use the same "Effective Right Edge" logic.
+
+        let effectiveRightEdge = rightEdgeIndex;
+
+        // If live (viewOffset ~ 0) and filling up:
+        if (viewOffset <= 0.001 && currentCandleIndex < visibleCandles - 1) {
+             // We want to see from 0 to current.
+             // But drawChart will use 'rightEdgeIndex - visibleCandles + 1' as start x.
+             // To make start x = 0, we need 'rightEdgeIndex - visibleCandles + 1 = 0' -> rightEdgeIndex = visibleCandles - 1.
+             effectiveRightEdge = visibleCandles - 1;
+        }
+
+        // So effective range to scan:
+        // Start: effectiveRightEdge - visibleCandles + 1
+        // End: effectiveRightEdge
+
+        let scanStart = Math.floor(effectiveRightEdge - visibleCandles + 1);
+        let scanEnd = Math.ceil(effectiveRightEdge);
+
+        if (scanStart < 0) scanStart = 0;
+
+        for (let i = scanStart; i <= scanEnd; i++) {
             if (i >= candles.length) break;
             let c = candles[i];
             let h = c.high;
@@ -703,18 +721,31 @@
             const auto = getAutoRange();
             effectiveMin = auto.min;
             effectiveMax = auto.max;
-
-            // Sync vertical scrollbar to auto values if not in manual mode
-            const vScroll = document.getElementById('v-scrollbar');
-            const center = (effectiveMin + effectiveMax) / 2;
-            if (Math.abs(parseFloat(vScroll.value) - center) > 0.0001) {
-                 vScroll.value = center;
-            }
         }
 
-        // Determine Visible Range (X Axis)
-        let endIndex = currentCandleIndex - viewOffset;
-        let startIndex = Math.max(0, endIndex - visibleCandles + 1);
+        // Determine Visible Range (X Axis) and Left Alignment
+        // Standard: rightEdge = current - offset.
+        // Left Align: If screen not full, rightEdge should be fixed such that start is 0.
+        // Start = rightEdge - visible + 1.
+        // We want Start >= 0.
+        // So rightEdge >= visible - 1.
+
+        let rawRightEdge = currentCandleIndex - viewOffset;
+        let effectiveRightEdge = rawRightEdge;
+
+        // Apply Left Alignment logic if we are "live" (offset=0) or just generally?
+        // User said: "scrolling should start with the left most candle".
+        // This implies that until we have enough candles to scroll, they build up from left.
+
+        if (currentCandleIndex < visibleCandles - 1 && viewOffset <= 0.001) {
+             effectiveRightEdge = visibleCandles - 1;
+        }
+
+        // Also if we scroll back?
+        // If current=5, visible=10. effective=9. Start=0. Candle 5 is at index 5.
+        // If we scroll back (viewOffset > 0), rightEdge becomes < 9. Start becomes < 0.
+        // Candle 0 moves right.
+        // This seems fine.
 
         const candleWidth = width / visibleCandles;
         const gap = candleWidth * 0.2;
@@ -725,16 +756,26 @@
             return height - ((price - effectiveMin) / (effectiveMax - effectiveMin)) * height;
         }
 
-        let rightEdgeIndex = currentCandleIndex - viewOffset;
-        let loopStart = Math.floor(rightEdgeIndex - visibleCandles - 1);
-        let loopEnd = Math.floor(rightEdgeIndex + 1);
+        // Draw loop
+        // We draw based on effectiveRightEdge.
+        // i corresponds to data index.
+        // x position depends on relative index to window start.
+        // windowStart = effectiveRightEdge - visibleCandles + 1.
+
+        let windowStart = effectiveRightEdge - visibleCandles + 1;
+
+        // Determine loop bounds
+        let loopStart = Math.floor(windowStart);
+        let loopEnd = Math.floor(effectiveRightEdge + 1); // Draw a bit more to be safe
 
         if (loopStart < 0) loopStart = 0;
         if (loopEnd > currentCandleIndex) loopEnd = currentCandleIndex;
 
         for (let i = loopStart; i <= loopEnd; i++) {
             const c = candles[i];
-            const x = (i - (rightEdgeIndex - visibleCandles + 1)) * candleWidth + gap / 2;
+
+            // x = (i - windowStart) * candleWidth
+            const x = (i - windowStart) * candleWidth + gap / 2;
 
             let open = c.open;
             let close = (i === currentCandleIndex) ? currentPrice : c.close;
@@ -938,14 +979,41 @@
     document.getElementById('btn-buy').addEventListener('click', () => openTrade('buy'));
     document.getElementById('btn-sell').addEventListener('click', () => openTrade('sell'));
 
-    document.getElementById('btn-zoom-in').addEventListener('click', () => {
+    document.getElementById('btn-zoom-in-h').addEventListener('click', () => {
         if (visibleCandles > 10) visibleCandles -= 5;
         drawChart();
     });
 
-    document.getElementById('btn-zoom-out').addEventListener('click', () => {
+    document.getElementById('btn-zoom-out-h').addEventListener('click', () => {
         if (visibleCandles < 200) visibleCandles += 5;
         drawChart();
+    });
+
+    // Vertical Zoom
+    function applyVerticalZoom(factor) {
+        // If not in manual mode, switch to manual with current auto range
+        if (yMin === null || yMax === null) {
+            const auto = getAutoRange();
+            yMin = auto.min;
+            yMax = auto.max;
+        }
+
+        let range = yMax - yMin;
+        let center = (yMin + yMax) / 2;
+
+        let newRange = range * factor;
+        yMin = center - newRange / 2;
+        yMax = center + newRange / 2;
+
+        drawChart();
+    }
+
+    document.getElementById('btn-zoom-in-v').addEventListener('click', () => {
+        applyVerticalZoom(0.8); // Zoom In = Smaller Range
+    });
+
+    document.getElementById('btn-zoom-out-v').addEventListener('click', () => {
+        applyVerticalZoom(1.25); // Zoom Out = Larger Range
     });
 
     document.getElementById('btn-fee').addEventListener('click', () => {
@@ -987,51 +1055,9 @@
         yMin = null; // Auto scale
         yMax = null;
         drawChart();
-        updateScrollbarMax();
     });
 
     window.addEventListener('resize', drawChart);
-
-    // Horizontal Scrollbar
-    const hScrollbar = document.getElementById('h-scrollbar');
-
-    hScrollbar.addEventListener('input', () => {
-        viewOffset = parseFloat(hScrollbar.max) - parseFloat(hScrollbar.value);
-        if (viewOffset < 0) viewOffset = 0;
-        drawChart();
-    });
-
-    function updateScrollbarMax() {
-        const oldMax = parseFloat(hScrollbar.max);
-        const wasLive = (parseFloat(hScrollbar.value) >= oldMax - 0.1);
-
-        hScrollbar.max = currentCandleIndex;
-
-        if (wasLive || viewOffset === 0) {
-             hScrollbar.value = hScrollbar.max;
-        } else {
-             hScrollbar.value = hScrollbar.max - viewOffset;
-        }
-    }
-
-    // Vertical Scrollbar
-    const vScrollbar = document.getElementById('v-scrollbar');
-    vScrollbar.addEventListener('input', () => {
-        // User is manually adjusting center price.
-        const center = parseFloat(vScrollbar.value);
-
-        let currentRange = 0.01; // Default fallback
-        if (yMin !== null && yMax !== null) {
-            currentRange = yMax - yMin;
-        } else {
-            const auto = getAutoRange();
-            currentRange = auto.max - auto.min;
-        }
-
-        yMin = center - currentRange / 2;
-        yMax = center + currentRange / 2;
-        drawChart();
-    });
 
     // Drag to scroll
     canvas.addEventListener('mousedown', e => {
@@ -1066,26 +1092,14 @@
         viewOffset = dragStartOffset + candlesShift;
         if (viewOffset < 0) viewOffset = 0;
         if (viewOffset > currentCandleIndex) viewOffset = currentCandleIndex;
-        hScrollbar.value = parseFloat(hScrollbar.max) - viewOffset;
 
         // Vertical
         const dy = e.clientY - dragStartY; // Drag down (+y)
         const pricePerPixel = (dragStartYMax - dragStartYMin) / height;
         const priceShift = dy * pricePerPixel;
 
-        // Dragging down -> Chart should move down -> Prices at viewport stay same?
-        // Drag Down = Move Viewport Up -> Seeing Higher Prices?
-        // Standard: Drag Content.
-        // If I put finger on chart and pull DOWN. I expect the candle I touched to move DOWN.
-        // If candle moves down, I am seeing HIGHER prices at the top.
-        // So Center Price INCREASES.
-        // So Shift is positive.
-
         yMin = dragStartYMin + priceShift;
         yMax = dragStartYMax + priceShift;
-
-        // Sync v-scroll
-        vScrollbar.value = (yMin + yMax) / 2;
 
         drawChart();
     });
