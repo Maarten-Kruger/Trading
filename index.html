@@ -217,8 +217,11 @@
             <div id="zoom-controls">
                 <button id="btn-zoom-out">-</button>
                 <button id="btn-zoom-in">+</button>
+                <button id="btn-fee" style="font-size: 14px; width: 40px;">Fee</button>
+                <button id="btn-lev" style="font-size: 14px; width: 40px;">Lev</button>
             </div>
             <div style="position: absolute; top: 10px; left: 10px; font-family: monospace;">EURUSD</div>
+            <input type="range" id="scrollbar" min="0" max="0" value="0" step="0.01" style="width: 100%; display: block; margin: 0; padding: 0;">
         </div>
         <div id="controls-container">
             <div id="trading-panel">
@@ -233,7 +236,7 @@
                     <button id="btn-buy">Buy</button>
                     <button id="btn-sell">Sell</button>
                 </div>
-                <div style="font-size: 12px; color: #888; text-align: center;">
+                <div id="info-text" style="font-size: 12px; color: #888; text-align: center;">
                     Fee: $5 | Size: $100 (1:100 Lev)
                 </div>
             </div>
@@ -417,14 +420,16 @@
 2026/01/06 10:00;1.17126;1.17126;1.17102;1.17103`;
 
     // --- State ---
-    const CANDLE_DURATION = 30000; // 30s
-    const FPS = 60;
+    const CANDLE_DURATION = 60000; // 60s
+    const FPS = 30;
     const TICKS_PER_CANDLE = (CANDLE_DURATION / 1000) * FPS;
 
     let candles = [];
     let currentCandleIndex = 0;
     let currentTick = 0;
     let currentPrice = 0;
+    let currentCandleHigh = -Infinity;
+    let currentCandleLow = Infinity;
     let currentPath = []; // Precomputed price path for the current candle
 
     let username = "";
@@ -433,6 +438,14 @@
     let trades = []; // { id, type: 'buy'|'sell', openPrice, timeOpen, status: 'open'|'closed', closePrice, timeClose, pnl, fee }
     let tradeIdCounter = 1;
     let visibleCandles = 60;
+
+    let tradingFee = 5;
+    let tradingUnits = 10000;
+
+    let viewOffset = 0; // 0 = follow live, >0 = look back
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartOffset = 0;
 
     // --- Parse Data ---
     function parseData() {
@@ -552,6 +565,15 @@
             currentPrice = candles[currentCandleIndex].close; // Ensure close is exact
         }
 
+        // Track High/Low for the current forming candle
+        if (currentTick === 0) {
+            currentCandleHigh = currentPrice;
+            currentCandleLow = currentPrice;
+        } else {
+            if (currentPrice > currentCandleHigh) currentCandleHigh = currentPrice;
+            if (currentPrice < currentCandleLow) currentCandleLow = currentPrice;
+        }
+
         // Update UI
         updateTradingCalculations();
         drawChart();
@@ -561,6 +583,7 @@
         if (currentTick >= TICKS_PER_CANDLE) {
             currentCandleIndex++;
             prepareNextCandle();
+            updateScrollbarMax();
         }
 
         animationFrameId = requestAnimationFrame(renderLoop);
@@ -595,7 +618,8 @@
         // End index is currentCandleIndex. Start is max(0, current - visible).
         // Plus maybe some space for the future? No, just the active one.
 
-        let endIndex = currentCandleIndex;
+        let endIndex = currentCandleIndex - viewOffset;
+        if (endIndex < 0) endIndex = 0;
         let startIndex = Math.max(0, endIndex - visibleCandles + 1);
         let numCandles = endIndex - startIndex + 1;
 
@@ -624,15 +648,13 @@
             // Actually, for the current candle, we only "know" what happened so far.
             // But to avoid seizure-inducing UI, let's include the full current candle range if we can,
             // OR just scale to historical max/min + current price.
-            if (i === endIndex) {
-                // Approximate 'seen' high/low for current candle
-                // This is hard. Let's just use the current price vs open.
-                h = Math.max(c.open, currentPrice);
-                l = Math.min(c.open, currentPrice);
-                // Also check past prices in this candle? Too complex.
-                // Let's just use the candle's defined High/Low for stability.
-                h = c.high;
-                l = c.low;
+            if (i === currentCandleIndex) {
+                // Use the tracked live High/Low for the current forming candle
+                h = currentCandleHigh;
+                l = currentCandleLow;
+                // Fallback if not set yet (start of candle)
+                if (h === -Infinity) h = Math.max(c.open, currentPrice);
+                if (l === Infinity) l = Math.min(c.open, currentPrice);
             }
             if (h > maxPrice) maxPrice = h;
             if (l < minPrice) minPrice = l;
@@ -649,14 +671,59 @@
         }
 
         // Draw Candles
-        for (let i = startIndex; i <= endIndex; i++) {
+        // For fractional viewOffset, we need to shift X.
+        // startIndex is int. viewOffset is float.
+        // endIndex = currentCandleIndex - viewOffset.
+        // If viewOffset is 0.5, endIndex is X.5.
+        // We iterate i from startIndex to floor(endIndex)?
+        // Wait, if viewOffset is 0.5, we want to shift everything left by 0.5 candleWidth?
+        // No, dragging right reveals history, so we shift RIGHT?
+        // Let's stick to the logic:
+        // Screen shows from [endIndex - visible] to [endIndex].
+        // If endIndex is 100.5, we show 40.5 to 100.5.
+        // The candle at 100 is at the right edge? No.
+        // Let's say right edge of canvas corresponds to 'endIndex'.
+        // x for candle i:
+        // x = (i - (endIndex - visibleCandles)) * candleWidth
+        //    = (i - endIndex + visibleCandles) * candleWidth
+        // This handles fractional endIndex naturally.
+
+        let rightEdgeIndex = currentCandleIndex - viewOffset;
+
+        // Ensure we draw enough candles
+        // We need to draw any candle i where x is within [0, width].
+        // i starts around rightEdgeIndex - visibleCandles
+        let loopStart = Math.floor(rightEdgeIndex - visibleCandles - 1);
+        let loopEnd = Math.floor(rightEdgeIndex + 1);
+
+        if (loopStart < 0) loopStart = 0;
+        if (loopEnd > currentCandleIndex) loopEnd = currentCandleIndex;
+
+        for (let i = loopStart; i <= loopEnd; i++) {
             const c = candles[i];
-            const x = (i - startIndex) * candleWidth + gap / 2;
+            // Calculate x based on rightEdgeIndex
+            // x = (i - (rightEdgeIndex - visibleCandles)) * candleWidth
+            // Actually, let's align:
+            // if i == rightEdgeIndex, x should be width - gap/2 ?
+            // Let's use the previous logic but adapted.
+            // x = (i - startIndex) * cw  where startIndex = endIndex - visible + 1
+            // becomes:
+            // x = (i - (rightEdgeIndex - visibleCandles + 1)) * candleWidth + gap/2
+
+            const x = (i - (rightEdgeIndex - visibleCandles + 1)) * candleWidth + gap / 2;
 
             let open = c.open;
-            let close = (i === endIndex) ? currentPrice : c.close;
-            let high = (i === endIndex) ? Math.max(open, close) : c.high; // Simplified for current
-            let low = (i === endIndex) ? Math.min(open, close) : c.low;
+            let close = (i === currentCandleIndex) ? currentPrice : c.close;
+            let high = c.high;
+            let low = c.low;
+
+            if (i === currentCandleIndex) {
+                 high = currentCandleHigh;
+                 low = currentCandleLow;
+                 // Fallback
+                 if (high === -Infinity) high = Math.max(open, close);
+                 if (low === Infinity) low = Math.min(open, close);
+            }
 
             // Wick
             ctx.beginPath();
@@ -687,6 +754,26 @@
         // Price Label
         ctx.fillStyle = '#2196f3';
         ctx.fillText(currentPrice.toFixed(5), width - 50, yPrice - 5);
+
+        // Trade Lines and IDs
+        trades.forEach(t => {
+            if (t.status === 'open') {
+                 const y = getY(t.openPrice);
+
+                 // Line
+                 ctx.beginPath();
+                 ctx.moveTo(0, y);
+                 ctx.lineTo(width, y);
+                 ctx.strokeStyle = t.type === 'buy' ? '#00e676' : '#ff1744';
+                 ctx.lineWidth = 1;
+                 ctx.stroke();
+
+                 // ID Label on the right
+                 ctx.fillStyle = t.type === 'buy' ? '#00e676' : '#ff1744';
+                 ctx.font = '12px monospace';
+                 ctx.fillText(`ID: ${t.id}`, width - 60, y - 5);
+            }
+        });
     }
 
     // --- Trading Logic ---
@@ -706,7 +793,7 @@
                 // PnL = (Close - Open) * 10,000 (if quote is USD).
                 // Yes, EURUSD quote is USD.
 
-                const units = 10000;
+                const units = tradingUnits;
                 const direction = t.type === 'buy' ? 1 : -1;
                 const pnl = (currentPrice - t.openPrice) * direction * units;
                 t.pnl = pnl;
@@ -733,8 +820,8 @@
         if (currentCandleIndex >= candles.length) return;
 
         // Deduct Fee
-        balance -= 5;
-        feesPaid += 5;
+        balance -= tradingFee;
+        feesPaid += tradingFee;
 
         const trade = {
             id: tradeIdCounter++,
@@ -745,7 +832,7 @@
             closePrice: null,
             timeClose: null,
             pnl: 0,
-            fee: 5
+            fee: tradingFee
         };
         trades.unshift(trade);
         renderTradeList();
@@ -759,7 +846,7 @@
             trade.timeClose = candles[currentCandleIndex].time; // Approx
             // Finalize PnL
             // Calculation is already in trade.pnl from update loop, but recalculate to be precise
-            const units = 10000;
+            const units = tradingUnits;
             const direction = trade.type === 'buy' ? 1 : -1;
             trade.pnl = (currentPrice - trade.openPrice) * direction * units;
 
@@ -867,7 +954,102 @@
         drawChart();
     });
 
+    document.getElementById('btn-fee').addEventListener('click', () => {
+        const pw = prompt("Enter Password to change fee:");
+        if (pw === "Maarten281") {
+            const f = parseFloat(prompt("Enter new fee:", tradingFee));
+            if (!isNaN(f) && f >= 0) {
+                tradingFee = f;
+                updateInfoText();
+                alert("Fee updated to " + f);
+            }
+        } else {
+            alert("Incorrect password.");
+        }
+    });
+
+    function updateInfoText() {
+         document.getElementById('info-text').innerText = `Fee: $${tradingFee} | Units: ${tradingUnits}`;
+    }
+
+    document.getElementById('btn-lev').addEventListener('click', () => {
+        const pw = prompt("Enter Password to change leverage:");
+        if (pw === "Maarten281") {
+            const u = parseFloat(prompt("Enter new leverage units (currently " + tradingUnits + "):", tradingUnits));
+            if (!isNaN(u) && u > 0) {
+                tradingUnits = u;
+                updateInfoText();
+                alert("Leverage units updated to " + u);
+            }
+        } else {
+            alert("Incorrect password.");
+        }
+    });
+
     window.addEventListener('resize', drawChart);
+
+    // Scrollbar Logic
+    const scrollbar = document.getElementById('scrollbar');
+
+    scrollbar.addEventListener('input', () => {
+        // Standard Timeline: Right (Max) = Live/Now. Left (0) = History.
+        // viewOffset: 0 = Live. >0 = History.
+        // So: viewOffset = Max - Value.
+        viewOffset = parseFloat(scrollbar.max) - parseFloat(scrollbar.value);
+        if (viewOffset < 0) viewOffset = 0;
+        drawChart();
+    });
+
+    function updateScrollbarMax() {
+        const oldMax = parseFloat(scrollbar.max);
+        const wasLive = (parseFloat(scrollbar.value) >= oldMax - 0.1);
+
+        scrollbar.max = currentCandleIndex;
+
+        // If we were following live, keep following live
+        if (wasLive || viewOffset === 0) {
+             scrollbar.value = scrollbar.max;
+        } else {
+             // Keep the same viewOffset
+             // value = max - viewOffset
+             scrollbar.value = scrollbar.max - viewOffset;
+        }
+    }
+
+    // Drag to scroll
+    canvas.addEventListener('mousedown', e => {
+        isDragging = true;
+        dragStartX = e.clientX;
+        dragStartOffset = viewOffset;
+        canvas.style.cursor = 'grabbing';
+    });
+
+    window.addEventListener('mousemove', e => {
+        if (!isDragging) return;
+        const width = canvas.parentElement.clientWidth;
+        const candleWidth = width / visibleCandles;
+        const dx = e.clientX - dragStartX;
+        const candlesShift = dx / candleWidth; // Float
+
+        // Dragging right (dx > 0) -> Pulling chart right -> Seeing left (history)
+        // So viewOffset increases.
+        viewOffset = dragStartOffset + candlesShift;
+
+        // Clamp
+        if (viewOffset < 0) viewOffset = 0;
+        if (viewOffset > currentCandleIndex) viewOffset = currentCandleIndex;
+
+        // Sync scrollbar
+        // Value = Max - viewOffset
+        scrollbar.value = parseFloat(scrollbar.max) - viewOffset;
+
+        drawChart();
+    });
+
+    window.addEventListener('mouseup', () => {
+        isDragging = false;
+        canvas.style.cursor = 'default';
+    });
 
 </script>
 </body>
