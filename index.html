@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Simulator</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --panel-color: #1e1e1e;
+            --text-color: #e0e0e0;
+            --accent-color: #2196f3;
+            --green-color: #00e676;
+            --red-color: #ff1744;
+            --border-color: #333;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Screens */
+        .screen {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            width: 100%;
+        }
+
+        .screen.active {
+            display: flex;
+        }
+
+        /* Start Screen */
+        #start-screen input {
+            padding: 10px;
+            font-size: 16px;
+            margin-bottom: 20px;
+            background: var(--panel-color);
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            border-radius: 4px;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        /* Simulation Screen */
+        #simulation-screen {
+            justify-content: flex-start;
+        }
+
+        #chart-container {
+            width: 100%;
+            height: 60%;
+            position: relative;
+            background-color: var(--bg-color);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #controls-container {
+            width: 100%;
+            height: 40%;
+            display: flex;
+            flex-direction: row;
+            background-color: var(--panel-color);
+        }
+
+        #trading-panel {
+            width: 300px;
+            padding: 20px;
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        #stats-display {
+            font-family: 'Courier New', monospace;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+
+        .pnl-positive { color: var(--green-color); }
+        .pnl-negative { color: var(--red-color); }
+
+        #order-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        #btn-buy {
+            flex: 1;
+            background-color: var(--green-color);
+        }
+
+        #btn-sell {
+            flex: 1;
+            background-color: var(--red-color);
+        }
+
+        #trades-list-container {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            color: var(--accent-color);
+        }
+
+        .close-btn {
+            background-color: var(--panel-color);
+            border: 1px solid var(--border-color);
+            padding: 2px 8px;
+            font-size: 12px;
+        }
+
+        .close-btn:hover {
+            background-color: var(--border-color);
+        }
+
+        /* Report Screen */
+        #report-screen {
+            overflow-y: auto;
+            justify-content: flex-start;
+            padding: 40px;
+        }
+
+        #report-stats {
+            margin-bottom: 40px;
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            background: var(--panel-color);
+            padding: 20px;
+            border-radius: 8px;
+        }
+
+        #report-history {
+            width: 100%;
+            max-width: 800px;
+        }
+
+        #zoom-controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            gap: 5px;
+        }
+
+        #zoom-controls button {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 5px 10px;
+            font-size: 18px;
+        }
+
+    </style>
+</head>
+<body>
+
+    <!-- Start Screen -->
+    <div id="start-screen" class="screen active">
+        <h1>Trading Experiment</h1>
+        <p>Please enter your participant ID or username to begin.</p>
+        <input type="text" id="username" placeholder="Username" />
+        <button id="btn-start">Start Simulation</button>
+    </div>
+
+    <!-- Simulation Screen -->
+    <div id="simulation-screen" class="screen">
+        <div id="chart-container">
+            <canvas id="chart"></canvas>
+            <div id="zoom-controls">
+                <button id="btn-zoom-out">-</button>
+                <button id="btn-zoom-in">+</button>
+            </div>
+            <div style="position: absolute; top: 10px; left: 10px; font-family: monospace;">EURUSD</div>
+        </div>
+        <div id="controls-container">
+            <div id="trading-panel">
+                <div id="stats-display">
+                    <div class="stat-row"><span>Balance:</span> <span id="disp-balance">10000.00</span></div>
+                    <div class="stat-row"><span>Equity:</span> <span id="disp-equity">10000.00</span></div>
+                    <div class="stat-row"><span>P/L:</span> <span id="disp-pnl">0.00</span></div>
+                    <div class="stat-row"><span>Price:</span> <span id="disp-price">0.00000</span></div>
+                    <div class="stat-row"><span>Candle:</span> <span id="disp-candle">0/120</span></div>
+                </div>
+                <div id="order-buttons">
+                    <button id="btn-buy">Buy</button>
+                    <button id="btn-sell">Sell</button>
+                </div>
+                <div style="font-size: 12px; color: #888; text-align: center;">
+                    Fee: $5 | Size: $100 (1:100 Lev)
+                </div>
+            </div>
+            <div id="trades-list-container">
+                <h3>Open Trades</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Type</th>
+                            <th>Open Price</th>
+                            <th>Current Price</th>
+                            <th>P/L</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="open-trades-body">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Report Screen -->
+    <div id="report-screen" class="screen">
+        <h1>Simulation Report</h1>
+        <h2 id="report-username">User: </h2>
+
+        <div id="report-stats">
+            <div>Total Trades: <span id="stat-total-trades">0</span></div>
+            <div>Total P/L: <span id="stat-total-pnl">0.00</span></div>
+            <div>Winrate: <span id="stat-winrate">0%</span></div>
+            <div>Total Fees: <span id="stat-fees">0.00</span></div>
+            <div>Avg Win Size: <span id="stat-avg-win">0.00</span></div>
+            <div>Avg Loss Size: <span id="stat-avg-loss">0.00</span></div>
+        </div>
+
+        <h3>Trade History</h3>
+        <div id="report-history">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Type</th>
+                        <th>Open Price</th>
+                        <th>Close Price</th>
+                        <th>Time Open</th>
+                        <th>Time Close</th>
+                        <th>P/L</th>
+                    </tr>
+                </thead>
+                <tbody id="history-body">
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+<script>
+    // --- Data ---
+    const rawCSV = `Time;Open;High;Low;Close
+2026/01/06 09:00;1.17282;1.17287;1.17262;1.17286
+2026/01/06 09:01;1.17287;1.17287;1.17237;1.17251
+2026/01/06 09:01;1.17252;1.17259;1.17233;1.17248
+2026/01/06 09:02;1.17246;1.1726;1.17239;1.17241
+2026/01/06 09:02;1.1724;1.17251;1.17211;1.17211
+2026/01/06 09:03;1.1721;1.17232;1.1721;1.17216
+2026/01/06 09:03;1.17218;1.17218;1.17201;1.17206
+2026/01/06 09:04;1.17207;1.17212;1.17195;1.17199
+2026/01/06 09:04;1.17199;1.17222;1.17199;1.17214
+2026/01/06 09:05;1.17214;1.1722;1.1721;1.17213
+2026/01/06 09:05;1.17215;1.17215;1.17201;1.17206
+2026/01/06 09:06;1.17209;1.17211;1.17198;1.17199
+2026/01/06 09:06;1.17196;1.17202;1.17182;1.17202
+2026/01/06 09:07;1.17206;1.17207;1.17184;1.17184
+2026/01/06 09:07;1.17183;1.17184;1.1717;1.17177
+2026/01/06 09:08;1.17179;1.17182;1.17171;1.17171
+2026/01/06 09:08;1.17171;1.17181;1.1716;1.17181
+2026/01/06 09:09;1.17181;1.17187;1.17156;1.17157
+2026/01/06 09:09;1.17158;1.17169;1.17153;1.17167
+2026/01/06 09:10;1.17166;1.17166;1.17152;1.17161
+2026/01/06 09:10;1.17161;1.17161;1.17131;1.17135
+2026/01/06 09:11;1.17136;1.17155;1.17136;1.17155
+2026/01/06 09:11;1.17156;1.17174;1.17146;1.17146
+2026/01/06 09:12;1.17147;1.1715;1.17124;1.17135
+2026/01/06 09:12;1.17134;1.17145;1.1712;1.1712
+2026/01/06 09:13;1.17121;1.17126;1.17107;1.1711
+2026/01/06 09:13;1.17111;1.17121;1.17108;1.17121
+2026/01/06 09:14;1.17124;1.17126;1.17099;1.17099
+2026/01/06 09:14;1.17101;1.17111;1.17095;1.17097
+2026/01/06 09:15;1.17099;1.17116;1.17098;1.17116
+2026/01/06 09:15;1.17114;1.17114;1.17095;1.17095
+2026/01/06 09:16;1.17096;1.17117;1.17095;1.17115
+2026/01/06 09:16;1.17115;1.17116;1.17102;1.17105
+2026/01/06 09:17;1.17106;1.17111;1.17105;1.17105
+2026/01/06 09:17;1.17105;1.17107;1.17091;1.17094
+2026/01/06 09:18;1.17096;1.17096;1.17081;1.17082
+2026/01/06 09:18;1.17081;1.17097;1.1708;1.17097
+2026/01/06 09:19;1.17098;1.17098;1.17081;1.17082
+2026/01/06 09:19;1.17084;1.17095;1.17084;1.17087
+2026/01/06 09:20;1.17089;1.17102;1.17083;1.17102
+2026/01/06 09:20;1.17103;1.17118;1.17102;1.17111
+2026/01/06 09:21;1.17113;1.17133;1.17113;1.17121
+2026/01/06 09:21;1.17122;1.17135;1.17119;1.17133
+2026/01/06 09:22;1.17133;1.1714;1.17131;1.17135
+2026/01/06 09:22;1.17134;1.17143;1.1713;1.17136
+2026/01/06 09:23;1.17134;1.17155;1.1713;1.17155
+2026/01/06 09:23;1.17155;1.17164;1.17147;1.17164
+2026/01/06 09:24;1.17163;1.17169;1.17151;1.17158
+2026/01/06 09:24;1.17159;1.17173;1.17155;1.17173
+2026/01/06 09:25;1.17173;1.17181;1.17172;1.1718
+2026/01/06 09:25;1.17178;1.17179;1.17157;1.17157
+2026/01/06 09:26;1.17156;1.17158;1.17147;1.17151
+2026/01/06 09:26;1.17149;1.17164;1.17148;1.17151
+2026/01/06 09:27;1.17155;1.17164;1.17155;1.17155
+2026/01/06 09:27;1.17155;1.17181;1.17152;1.17152
+2026/01/06 09:28;1.1715;1.17155;1.17142;1.17153
+2026/01/06 09:28;1.17152;1.17162;1.17152;1.17158
+2026/01/06 09:29;1.17156;1.17169;1.17154;1.17162
+2026/01/06 09:29;1.17163;1.17163;1.17143;1.17148
+2026/01/06 09:30;1.17147;1.17153;1.17132;1.17132
+2026/01/06 09:30;1.17132;1.17132;1.17117;1.17125
+2026/01/06 09:31;1.17124;1.17133;1.17124;1.17127
+2026/01/06 09:31;1.17129;1.17132;1.17116;1.17117
+2026/01/06 09:32;1.17117;1.17117;1.17098;1.17099
+2026/01/06 09:32;1.17099;1.17113;1.17097;1.17108
+2026/01/06 09:33;1.17106;1.17112;1.17104;1.17112
+2026/01/06 09:33;1.17112;1.17137;1.17112;1.17132
+2026/01/06 09:34;1.1713;1.17153;1.1713;1.17151
+2026/01/06 09:34;1.17153;1.17156;1.1714;1.17147
+2026/01/06 09:35;1.17146;1.17147;1.17131;1.17141
+2026/01/06 09:35;1.17143;1.17151;1.17141;1.17147
+2026/01/06 09:36;1.17148;1.17148;1.1714;1.17141
+2026/01/06 09:36;1.17141;1.17141;1.17121;1.17123
+2026/01/06 09:37;1.17121;1.17121;1.17111;1.17116
+2026/01/06 09:37;1.17117;1.1712;1.17108;1.17108
+2026/01/06 09:38;1.1711;1.17116;1.17102;1.17104
+2026/01/06 09:38;1.17103;1.17103;1.17086;1.17088
+2026/01/06 09:39;1.1709;1.17101;1.17082;1.17098
+2026/01/06 09:39;1.17096;1.17122;1.17096;1.17119
+2026/01/06 09:40;1.17117;1.17135;1.17116;1.17131
+2026/01/06 09:40;1.1713;1.17137;1.17127;1.17135
+2026/01/06 09:41;1.17133;1.17152;1.17133;1.17146
+2026/01/06 09:41;1.17145;1.17149;1.17132;1.17149
+2026/01/06 09:42;1.1715;1.17159;1.17148;1.17159
+2026/01/06 09:42;1.17157;1.17161;1.17149;1.1715
+2026/01/06 09:43;1.1715;1.17157;1.17139;1.1715
+2026/01/06 09:43;1.1715;1.17153;1.17132;1.17143
+2026/01/06 09:44;1.17142;1.17145;1.17139;1.17145
+2026/01/06 09:44;1.17147;1.1715;1.17133;1.17135
+2026/01/06 09:45;1.1714;1.17145;1.17135;1.17145
+2026/01/06 09:45;1.17146;1.17146;1.17133;1.17133
+2026/01/06 09:46;1.17132;1.17133;1.17127;1.17128
+2026/01/06 09:46;1.17131;1.17133;1.17121;1.17131
+2026/01/06 09:47;1.17132;1.17144;1.17132;1.17143
+2026/01/06 09:47;1.17143;1.17149;1.17137;1.17137
+2026/01/06 09:48;1.17137;1.17147;1.17137;1.17141
+2026/01/06 09:48;1.1714;1.17153;1.17139;1.17143
+2026/01/06 09:49;1.17144;1.17151;1.17142;1.17148
+2026/01/06 09:49;1.17148;1.17159;1.17147;1.17159
+2026/01/06 09:50;1.17158;1.17168;1.17157;1.17168
+2026/01/06 09:50;1.17171;1.17171;1.17149;1.17159
+2026/01/06 09:51;1.1716;1.17166;1.17145;1.17145
+2026/01/06 09:51;1.17146;1.17146;1.17136;1.17142
+2026/01/06 09:52;1.17141;1.17141;1.1712;1.17129
+2026/01/06 09:52;1.17129;1.17142;1.17124;1.17124
+2026/01/06 09:53;1.17124;1.17132;1.17121;1.17122
+2026/01/06 09:53;1.17121;1.17132;1.17121;1.17132
+2026/01/06 09:54;1.17135;1.17143;1.17124;1.17124
+2026/01/06 09:54;1.17122;1.17124;1.1712;1.17124
+2026/01/06 09:55;1.17124;1.17136;1.17116;1.17136
+2026/01/06 09:55;1.17135;1.17143;1.17132;1.17132
+2026/01/06 09:56;1.17132;1.17136;1.17131;1.17133
+2026/01/06 09:56;1.17134;1.17138;1.17134;1.17135
+2026/01/06 09:57;1.17136;1.17136;1.17116;1.17116
+2026/01/06 09:57;1.17118;1.17122;1.1711;1.17122
+2026/01/06 09:58;1.17122;1.17124;1.17118;1.17122
+2026/01/06 09:58;1.17124;1.17127;1.17122;1.17125
+2026/01/06 09:59;1.17124;1.17124;1.17115;1.17121
+2026/01/06 09:59;1.1712;1.17123;1.17117;1.17119
+2026/01/06 10:00;1.17121;1.17129;1.17119;1.17126
+2026/01/06 10:00;1.17126;1.17126;1.17102;1.17103`;
+
+    // --- State ---
+    const CANDLE_DURATION = 30000; // 30s
+    const FPS = 60;
+    const TICKS_PER_CANDLE = (CANDLE_DURATION / 1000) * FPS;
+
+    let candles = [];
+    let currentCandleIndex = 0;
+    let currentTick = 0;
+    let currentPrice = 0;
+    let currentPath = []; // Precomputed price path for the current candle
+
+    let username = "";
+    let balance = 10000;
+    let feesPaid = 0;
+    let trades = []; // { id, type: 'buy'|'sell', openPrice, timeOpen, status: 'open'|'closed', closePrice, timeClose, pnl, fee }
+    let tradeIdCounter = 1;
+    let visibleCandles = 60;
+
+    // --- Parse Data ---
+    function parseData() {
+        const lines = rawCSV.split('\n');
+        // Skip header
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            const parts = line.split(';');
+            candles.push({
+                time: parts[0],
+                open: parseFloat(parts[1]),
+                high: parseFloat(parts[2]),
+                low: parseFloat(parts[3]),
+                close: parseFloat(parts[4])
+            });
+        }
+    }
+
+    // --- Path Generation ---
+    function generateCandlePath(candle) {
+        // Generate a jittery path from Open to Close that touches High and Low
+        // Keypoints: Open, High, Low, Close
+        // But order of High/Low is unknown. Randomize it.
+
+        let path = new Array(Math.floor(TICKS_PER_CANDLE));
+        let points = [];
+
+        // Decide order: 0 = Open->High->Low->Close, 1 = Open->Low->High->Close
+        let order = Math.random() > 0.5 ? 0 : 1;
+
+        // Times for High and Low.
+        // We have duration T. Open at 0, Close at T.
+        // High/Low at t1, t2 where 0 < t1 < t2 < T.
+        // Randomize t1 and t2 with some padding.
+
+        const T = TICKS_PER_CANDLE;
+        const padding = T * 0.1;
+        let t1 = Math.floor(padding + Math.random() * (T * 0.4)); // First point in first half roughly
+        let t2 = Math.floor(t1 + padding + Math.random() * (T - t1 - 2*padding));
+
+        if (t2 >= T) t2 = T - 1;
+
+        let p1, p2;
+        if (order === 0) {
+            p1 = candle.high;
+            p2 = candle.low;
+        } else {
+            p1 = candle.low;
+            p2 = candle.high;
+        }
+
+        // Segments:
+        // 0 to t1: Open to p1
+        // t1 to t2: p1 to p2
+        // t2 to T: p2 to Close
+
+        function interpolate(startVal, endVal, steps) {
+            let seg = [];
+            for (let i = 0; i < steps; i++) {
+                let ratio = i / steps;
+                // Add noise
+                let noise = (Math.random() - 0.5) * (candle.high - candle.low) * 0.1;
+                let val = startVal + (endVal - startVal) * ratio + noise;
+
+                // Clamp slightly to ensure we don't go wildly out of bounds,
+                // but strictly speaking we should allow noise inside.
+                // However, at the key ticks, we enforce the value.
+                seg.push(val);
+            }
+            return seg;
+        }
+
+        let seg1 = interpolate(candle.open, p1, t1);
+        let seg2 = interpolate(p1, p2, t2 - t1);
+        let seg3 = interpolate(p2, candle.close, T - t2);
+
+        // Stitch
+        for (let i = 0; i < t1; i++) path[i] = seg1[i];
+        for (let i = t1; i < t2; i++) path[i] = seg2[i - t1];
+        for (let i = t2; i < T; i++) path[i] = seg3[i - t2];
+
+        return path;
+    }
+
+    // --- Simulation Loop ---
+    let animationFrameId;
+
+    function startSimulation() {
+        document.getElementById('start-screen').classList.remove('active');
+        document.getElementById('simulation-screen').classList.add('active');
+
+        parseData();
+        prepareNextCandle();
+        renderLoop();
+    }
+
+    function prepareNextCandle() {
+        if (currentCandleIndex >= candles.length) {
+            endSimulation();
+            return;
+        }
+        currentTick = 0;
+        currentPath = generateCandlePath(candles[currentCandleIndex]);
+
+        // Update display of total candles
+        document.getElementById('disp-candle').innerText = `${currentCandleIndex + 1}/${candles.length}`;
+    }
+
+    function renderLoop() {
+        if (currentCandleIndex >= candles.length) return;
+
+        // Logic
+        if (currentTick < currentPath.length) {
+            currentPrice = currentPath[currentTick];
+        } else {
+            currentPrice = candles[currentCandleIndex].close; // Ensure close is exact
+        }
+
+        // Update UI
+        updateTradingCalculations();
+        drawChart();
+
+        // Advance
+        currentTick++;
+        if (currentTick >= TICKS_PER_CANDLE) {
+            currentCandleIndex++;
+            prepareNextCandle();
+        }
+
+        animationFrameId = requestAnimationFrame(renderLoop);
+    }
+
+    function endSimulation() {
+        cancelAnimationFrame(animationFrameId);
+        // Force close all trades
+        trades.forEach(t => {
+            if (t.status === 'open') closeTrade(t.id);
+        });
+
+        document.getElementById('simulation-screen').classList.remove('active');
+        document.getElementById('report-screen').classList.add('active');
+        generateReport();
+    }
+
+    // --- Charting ---
+    const canvas = document.getElementById('chart');
+    const ctx = canvas.getContext('2d');
+
+    function drawChart() {
+        const width = canvas.parentElement.clientWidth;
+        const height = canvas.parentElement.clientHeight;
+        canvas.width = width;
+        canvas.height = height;
+
+        ctx.clearRect(0, 0, width, height);
+
+        // Determine Visible Range
+        // We want to show 'visibleCandles' amount.
+        // End index is currentCandleIndex. Start is max(0, current - visible).
+        // Plus maybe some space for the future? No, just the active one.
+
+        let endIndex = currentCandleIndex;
+        let startIndex = Math.max(0, endIndex - visibleCandles + 1);
+        let numCandles = endIndex - startIndex + 1;
+
+        // X Axis Scale
+        const candleWidth = width / visibleCandles;
+        const gap = candleWidth * 0.2;
+        const barWidth = candleWidth - gap;
+
+        // Y Axis Scale
+        // Find min/max in visible range
+        let minPrice = Infinity;
+        let maxPrice = -Infinity;
+
+        for (let i = startIndex; i <= endIndex; i++) {
+            let c = candles[i];
+            let h = c.high;
+            let l = c.low;
+            // For current candle, use developed high/low so far?
+            // Or just use the pre-known high/low for stability?
+            // If we use currentPrice, the scale might jump.
+            // Let's use the actual high/low of the candle from data to keep scale stable
+            // (simulating we know the scale or just auto-scaling to what's "there" even if invisible yet?
+            // No, that's cheating. We should scale to what has been seen.
+            // But for this sim, auto-scaling to the candle's full range prevents jittery Y-axis.)
+
+            // Actually, for the current candle, we only "know" what happened so far.
+            // But to avoid seizure-inducing UI, let's include the full current candle range if we can,
+            // OR just scale to historical max/min + current price.
+            if (i === endIndex) {
+                // Approximate 'seen' high/low for current candle
+                // This is hard. Let's just use the current price vs open.
+                h = Math.max(c.open, currentPrice);
+                l = Math.min(c.open, currentPrice);
+                // Also check past prices in this candle? Too complex.
+                // Let's just use the candle's defined High/Low for stability.
+                h = c.high;
+                l = c.low;
+            }
+            if (h > maxPrice) maxPrice = h;
+            if (l < minPrice) minPrice = l;
+        }
+
+        // Padding
+        let range = maxPrice - minPrice;
+        if (range === 0) range = 0.0001;
+        maxPrice += range * 0.1;
+        minPrice -= range * 0.1;
+
+        function getY(price) {
+            return height - ((price - minPrice) / (maxPrice - minPrice)) * height;
+        }
+
+        // Draw Candles
+        for (let i = startIndex; i <= endIndex; i++) {
+            const c = candles[i];
+            const x = (i - startIndex) * candleWidth + gap / 2;
+
+            let open = c.open;
+            let close = (i === endIndex) ? currentPrice : c.close;
+            let high = (i === endIndex) ? Math.max(open, close) : c.high; // Simplified for current
+            let low = (i === endIndex) ? Math.min(open, close) : c.low;
+
+            // Wick
+            ctx.beginPath();
+            ctx.moveTo(x + barWidth / 2, getY(high));
+            ctx.lineTo(x + barWidth / 2, getY(low));
+            ctx.strokeStyle = (close >= open) ? '#00e676' : '#ff1744';
+            ctx.stroke();
+
+            // Body
+            const yOpen = getY(open);
+            const yClose = getY(close);
+            const bodyHeight = Math.abs(yOpen - yClose);
+
+            ctx.fillStyle = (close >= open) ? '#00e676' : '#ff1744';
+            ctx.fillRect(x, Math.min(yOpen, yClose), barWidth, Math.max(1, bodyHeight)); // Ensure at least 1px
+        }
+
+        // Current Price Line
+        const yPrice = getY(currentPrice);
+        ctx.beginPath();
+        ctx.moveTo(0, yPrice);
+        ctx.lineTo(width, yPrice);
+        ctx.strokeStyle = '#2196f3';
+        ctx.setLineDash([5, 5]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Price Label
+        ctx.fillStyle = '#2196f3';
+        ctx.fillText(currentPrice.toFixed(5), width - 50, yPrice - 5);
+    }
+
+    // --- Trading Logic ---
+    function updateTradingCalculations() {
+        // Update Equity
+        let floatingPL = 0;
+        trades.forEach(t => {
+            if (t.status === 'open') {
+                // 100x leverage, size $100 -> Position Value $10000.
+                // EURUSD -> 1 lot = 100,000 units. $10,000 is 0.1 lot.
+                // 1 pip (0.0001) on 0.1 lot ($1/pip).
+                // Formula: (Current - Open) * Direction * (Size * Leverage) / CurrentPrice?
+                // No, standard forex calc: (Current - Open) * Direction * Units.
+                // Units = $100 * 100 / OpenPrice (if Base currency) or just fixed dollar amount?
+                // "Trade with 100$" usually means Margin.
+                // If I buy $10,000 worth of EURUSD.
+                // PnL = (Close - Open) * 10,000 (if quote is USD).
+                // Yes, EURUSD quote is USD.
+
+                const units = 10000;
+                const direction = t.type === 'buy' ? 1 : -1;
+                const pnl = (currentPrice - t.openPrice) * direction * units;
+                t.pnl = pnl;
+                floatingPL += pnl;
+            }
+        });
+
+        const equity = balance + floatingPL;
+
+        document.getElementById('disp-balance').innerText = balance.toFixed(2);
+        document.getElementById('disp-equity').innerText = equity.toFixed(2);
+        document.getElementById('disp-pnl').innerText = floatingPL.toFixed(2);
+        document.getElementById('disp-price').innerText = currentPrice.toFixed(5);
+
+        // Color PnL
+        const pnlEl = document.getElementById('disp-pnl');
+        pnlEl.className = floatingPL >= 0 ? 'pnl-positive' : 'pnl-negative';
+
+        // Update Trade List UI live values
+        updateTradeListUI();
+    }
+
+    function openTrade(type) {
+        if (currentCandleIndex >= candles.length) return;
+
+        // Deduct Fee
+        balance -= 5;
+        feesPaid += 5;
+
+        const trade = {
+            id: tradeIdCounter++,
+            type: type,
+            openPrice: currentPrice,
+            timeOpen: candles[currentCandleIndex].time, // Approx time
+            status: 'open',
+            closePrice: null,
+            timeClose: null,
+            pnl: 0,
+            fee: 5
+        };
+        trades.unshift(trade);
+        renderTradeList();
+    }
+
+    function closeTrade(id) {
+        const trade = trades.find(t => t.id === id);
+        if (trade && trade.status === 'open') {
+            trade.status = 'closed';
+            trade.closePrice = currentPrice;
+            trade.timeClose = candles[currentCandleIndex].time; // Approx
+            // Finalize PnL
+            // Calculation is already in trade.pnl from update loop, but recalculate to be precise
+            const units = 10000;
+            const direction = trade.type === 'buy' ? 1 : -1;
+            trade.pnl = (currentPrice - trade.openPrice) * direction * units;
+
+            balance += trade.pnl;
+            renderTradeList();
+        }
+    }
+
+    // --- UI Rendering ---
+    function renderTradeList() {
+        const tbody = document.getElementById('open-trades-body');
+        tbody.innerHTML = '';
+
+        trades.forEach(t => {
+            if (t.status === 'open') {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${t.id}</td>
+                    <td style="color: ${t.type === 'buy' ? 'var(--green-color)' : 'var(--red-color)'}">${t.type.toUpperCase()}</td>
+                    <td>${t.openPrice.toFixed(5)}</td>
+                    <td>${currentPrice.toFixed(5)}</td>
+                    <td class="${t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${t.pnl.toFixed(2)}</td>
+                    <td><button class="close-btn" onclick="closeTrade(${t.id})">Close</button></td>
+                `;
+                tbody.appendChild(tr);
+            }
+        });
+    }
+
+    function updateTradeListUI() {
+        const rows = document.getElementById('open-trades-body').rows;
+        let openTradeIdx = 0;
+        for (let t of trades) {
+            if (t.status === 'open') {
+                if (openTradeIdx < rows.length) {
+                    const tr = rows[openTradeIdx];
+                    tr.cells[3].innerText = currentPrice.toFixed(5);
+                    tr.cells[4].innerText = t.pnl.toFixed(2);
+                    tr.cells[4].className = t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
+                }
+                openTradeIdx++;
+            }
+        }
+    }
+
+    function generateReport() {
+        document.getElementById('report-username').innerText += username;
+
+        const closedTrades = trades.filter(t => t.status === 'closed');
+        const totalTrades = closedTrades.length;
+        const totalPnL = closedTrades.reduce((acc, t) => acc + t.pnl, 0) - feesPaid;
+        const wins = closedTrades.filter(t => t.pnl > 0);
+        const losses = closedTrades.filter(t => t.pnl <= 0);
+        const winrate = totalTrades > 0 ? (wins.length / totalTrades) * 100 : 0;
+
+        const avgWin = wins.length > 0 ? wins.reduce((a, t) => a + t.pnl, 0) / wins.length : 0;
+        const avgLoss = losses.length > 0 ? losses.reduce((a, t) => a + t.pnl, 0) / losses.length : 0;
+
+        document.getElementById('stat-total-trades').innerText = totalTrades;
+        document.getElementById('stat-total-pnl').innerText = totalPnL.toFixed(2);
+        document.getElementById('stat-winrate').innerText = winrate.toFixed(1) + '%';
+        document.getElementById('stat-fees').innerText = feesPaid.toFixed(2);
+        document.getElementById('stat-avg-win').innerText = avgWin.toFixed(2);
+        document.getElementById('stat-avg-loss').innerText = avgLoss.toFixed(2);
+
+        const tbody = document.getElementById('history-body');
+        trades.forEach(t => { // Show all, including closed
+             if(t.status === 'closed') {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${t.id}</td>
+                    <td>${t.type.toUpperCase()}</td>
+                    <td>${t.openPrice.toFixed(5)}</td>
+                    <td>${t.closePrice.toFixed(5)}</td>
+                    <td>${t.timeOpen}</td>
+                    <td>${t.timeClose}</td>
+                    <td class="${t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${t.pnl.toFixed(2)}</td>
+                `;
+                tbody.appendChild(tr);
+             }
+        });
+    }
+
+    // --- Event Listeners ---
+    document.getElementById('btn-start').addEventListener('click', () => {
+        const u = document.getElementById('username').value;
+        if (u) {
+            username = u;
+            startSimulation();
+        } else {
+            alert("Please enter a username");
+        }
+    });
+
+    document.getElementById('btn-buy').addEventListener('click', () => openTrade('buy'));
+    document.getElementById('btn-sell').addEventListener('click', () => openTrade('sell'));
+
+    document.getElementById('btn-zoom-in').addEventListener('click', () => {
+        if (visibleCandles > 10) visibleCandles -= 5;
+        drawChart();
+    });
+
+    document.getElementById('btn-zoom-out').addEventListener('click', () => {
+        if (visibleCandles < 200) visibleCandles += 5;
+        drawChart();
+    });
+
+    window.addEventListener('resize', drawChart);
+
+</script>
+</body>
+</html>
