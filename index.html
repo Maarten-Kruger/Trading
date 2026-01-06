@@ -264,6 +264,7 @@
                 <div>Equity: <span id="modal-equity">0.00</span></div>
             </div>
             <div style="text-align: right;">
+                <button id="btn-export-csv" style="float: left;">Export CSV</button>
                 <button id="btn-close-stats">Close</button>
             </div>
         </div>
@@ -1240,6 +1241,38 @@
     document.getElementById('btn-close-stats').addEventListener('click', () => {
         document.getElementById('stats-overlay').style.display = 'none';
     });
+
+    function exportTradesCSV() {
+        const headers = ["ID", "Type", "Open Price", "Close Price", "Time Open", "Time Close", "P/L", "Fee", "Status"];
+        const rows = [headers.join(",")];
+
+        trades.forEach(t => {
+            const row = [
+                t.id,
+                t.type,
+                t.openPrice.toFixed(5),
+                t.closePrice ? t.closePrice.toFixed(5) : "",
+                t.timeOpen,
+                t.timeClose || "",
+                t.pnl.toFixed(2),
+                t.fee.toFixed(2),
+                t.status
+            ];
+            rows.push(row.join(","));
+        });
+
+        const csvContent = "data:text/csv;charset=utf-8," + rows.join("\n");
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "trades_export.csv");
+        document.body.appendChild(link); // Required for FF
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    document.getElementById('btn-export-csv').addEventListener('click', exportTradesCSV);
+
     document.getElementById('btn-save-game').addEventListener('click', () => saveGame(false));
     document.getElementById('btn-reset-game').addEventListener('click', resetGame);
 
