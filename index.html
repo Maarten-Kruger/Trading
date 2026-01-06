@@ -217,6 +217,8 @@
             <div id="zoom-controls">
                 <button id="btn-zoom-out">-</button>
                 <button id="btn-zoom-in">+</button>
+                <button id="btn-fee" style="font-size: 14px; width: 40px;">Fee</button>
+                <button id="btn-lev" style="font-size: 14px; width: 40px;">Lev</button>
             </div>
             <div style="position: absolute; top: 10px; left: 10px; font-family: monospace;">EURUSD</div>
         </div>
@@ -417,14 +419,16 @@
 2026/01/06 10:00;1.17126;1.17126;1.17102;1.17103`;
 
     // --- State ---
-    const CANDLE_DURATION = 30000; // 30s
-    const FPS = 60;
+    const CANDLE_DURATION = 60000; // 60s
+    const FPS = 30;
     const TICKS_PER_CANDLE = (CANDLE_DURATION / 1000) * FPS;
 
     let candles = [];
     let currentCandleIndex = 0;
     let currentTick = 0;
     let currentPrice = 0;
+    let currentCandleHigh = -Infinity;
+    let currentCandleLow = Infinity;
     let currentPath = []; // Precomputed price path for the current candle
 
     let username = "";
@@ -433,6 +437,14 @@
     let trades = []; // { id, type: 'buy'|'sell', openPrice, timeOpen, status: 'open'|'closed', closePrice, timeClose, pnl, fee }
     let tradeIdCounter = 1;
     let visibleCandles = 60;
+
+    let tradingFee = 5;
+    let tradingUnits = 10000;
+
+    let viewOffset = 0; // 0 = follow live, >0 = look back
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartOffset = 0;
 
     // --- Parse Data ---
     function parseData() {
@@ -552,6 +564,15 @@
             currentPrice = candles[currentCandleIndex].close; // Ensure close is exact
         }
 
+        // Track High/Low for the current forming candle
+        if (currentTick === 0) {
+            currentCandleHigh = currentPrice;
+            currentCandleLow = currentPrice;
+        } else {
+            if (currentPrice > currentCandleHigh) currentCandleHigh = currentPrice;
+            if (currentPrice < currentCandleLow) currentCandleLow = currentPrice;
+        }
+
         // Update UI
         updateTradingCalculations();
         drawChart();
@@ -595,7 +616,8 @@
         // End index is currentCandleIndex. Start is max(0, current - visible).
         // Plus maybe some space for the future? No, just the active one.
 
-        let endIndex = currentCandleIndex;
+        let endIndex = currentCandleIndex - viewOffset;
+        if (endIndex < 0) endIndex = 0;
         let startIndex = Math.max(0, endIndex - visibleCandles + 1);
         let numCandles = endIndex - startIndex + 1;
 
@@ -687,6 +709,50 @@
         // Price Label
         ctx.fillStyle = '#2196f3';
         ctx.fillText(currentPrice.toFixed(5), width - 50, yPrice - 5);
+
+        // Trailing High/Low Lines (only if we are looking at the current live candle)
+        if (viewOffset === 0) {
+            // Draw only if valid
+            if (currentCandleHigh > -Infinity) {
+                const yHigh = getY(currentCandleHigh);
+                ctx.beginPath();
+                ctx.moveTo(0, yHigh);
+                ctx.lineTo(width, yHigh);
+                ctx.strokeStyle = 'rgba(0, 230, 118, 0.5)'; // Faint green
+                ctx.setLineDash([2, 2]);
+                ctx.stroke();
+            }
+            if (currentCandleLow < Infinity) {
+                const yLow = getY(currentCandleLow);
+                ctx.beginPath();
+                ctx.moveTo(0, yLow);
+                ctx.lineTo(width, yLow);
+                ctx.strokeStyle = 'rgba(255, 23, 68, 0.5)'; // Faint red
+                ctx.setLineDash([2, 2]);
+                ctx.stroke();
+            }
+            ctx.setLineDash([]);
+        }
+
+        // Trade Lines and IDs
+        trades.forEach(t => {
+            if (t.status === 'open') {
+                 const y = getY(t.openPrice);
+
+                 // Line
+                 ctx.beginPath();
+                 ctx.moveTo(0, y);
+                 ctx.lineTo(width, y);
+                 ctx.strokeStyle = t.type === 'buy' ? '#00e676' : '#ff1744';
+                 ctx.lineWidth = 1;
+                 ctx.stroke();
+
+                 // ID Label on the right
+                 ctx.fillStyle = t.type === 'buy' ? '#00e676' : '#ff1744';
+                 ctx.font = '12px monospace';
+                 ctx.fillText(`ID: ${t.id}`, width - 60, y - 5);
+            }
+        });
     }
 
     // --- Trading Logic ---
@@ -706,7 +772,7 @@
                 // PnL = (Close - Open) * 10,000 (if quote is USD).
                 // Yes, EURUSD quote is USD.
 
-                const units = 10000;
+                const units = tradingUnits;
                 const direction = t.type === 'buy' ? 1 : -1;
                 const pnl = (currentPrice - t.openPrice) * direction * units;
                 t.pnl = pnl;
@@ -733,8 +799,8 @@
         if (currentCandleIndex >= candles.length) return;
 
         // Deduct Fee
-        balance -= 5;
-        feesPaid += 5;
+        balance -= tradingFee;
+        feesPaid += tradingFee;
 
         const trade = {
             id: tradeIdCounter++,
@@ -745,7 +811,7 @@
             closePrice: null,
             timeClose: null,
             pnl: 0,
-            fee: 5
+            fee: tradingFee
         };
         trades.unshift(trade);
         renderTradeList();
@@ -759,7 +825,7 @@
             trade.timeClose = candles[currentCandleIndex].time; // Approx
             // Finalize PnL
             // Calculation is already in trade.pnl from update loop, but recalculate to be precise
-            const units = 10000;
+            const units = tradingUnits;
             const direction = trade.type === 'buy' ? 1 : -1;
             trade.pnl = (currentPrice - trade.openPrice) * direction * units;
 
@@ -867,7 +933,66 @@
         drawChart();
     });
 
+    document.getElementById('btn-fee').addEventListener('click', () => {
+        const pw = prompt("Enter Password to change fee:");
+        if (pw === "Maarten281") {
+            const f = parseFloat(prompt("Enter new fee:", tradingFee));
+            if (!isNaN(f) && f >= 0) {
+                tradingFee = f;
+                alert("Fee updated to " + f);
+            }
+        } else {
+            alert("Incorrect password.");
+        }
+    });
+
+    document.getElementById('btn-lev').addEventListener('click', () => {
+        const u = parseFloat(prompt("Enter new leverage units (currently " + tradingUnits + "):", tradingUnits));
+        if (!isNaN(u) && u > 0) {
+            tradingUnits = u;
+            alert("Leverage units updated to " + u);
+        }
+    });
+
     window.addEventListener('resize', drawChart);
+
+    // Drag to scroll
+    canvas.addEventListener('mousedown', e => {
+        isDragging = true;
+        dragStartX = e.clientX;
+        dragStartOffset = viewOffset;
+        canvas.style.cursor = 'grabbing';
+    });
+
+    window.addEventListener('mousemove', e => {
+        if (!isDragging) return;
+        const width = canvas.parentElement.clientWidth;
+        const candleWidth = width / visibleCandles;
+        const dx = e.clientX - dragStartX;
+        const candlesShift = Math.round(dx / candleWidth);
+
+        // Dragging right (dx > 0) -> we want to see history (move view left relative to data? No.)
+        // Dragging right usually means "pulling" the chart to the right, revealing left (history).
+        // So viewOffset increases?
+        // Let's trace:
+        // viewOffset increases -> endIndex decreases (looks at history).
+        // So dragging right -> dx > 0 -> should increase viewOffset?
+        // Drag right -> moving content right -> seeing content that was on the left.
+        // Yes, viewOffset increases.
+
+        viewOffset = dragStartOffset + candlesShift;
+
+        // Clamp
+        if (viewOffset < 0) viewOffset = 0; // Can't see future
+        if (viewOffset > currentCandleIndex) viewOffset = currentCandleIndex;
+
+        drawChart();
+    });
+
+    window.addEventListener('mouseup', () => {
+        isDragging = false;
+        canvas.style.cursor = 'default';
+    });
 
 </script>
 </body>
