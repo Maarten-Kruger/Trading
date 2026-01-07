@@ -246,6 +246,8 @@
         }
 
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
 </head>
 <body>
 
@@ -265,6 +267,7 @@
             </div>
             <div style="text-align: right;">
                 <button id="btn-export-csv" style="float: left;">Export CSV</button>
+                <button id="btn-export-pdf-modal" style="float: left; margin-left: 10px;">Export PDF</button>
                 <button id="btn-close-stats">Close</button>
             </div>
         </div>
@@ -286,6 +289,8 @@
                     <canvas id="chart"></canvas>
                     <div id="zoom-controls">
                         <button id="btn-home">Home</button>
+                        <button id="btn-zoom-in-both">Zoom +</button>
+                        <button id="btn-zoom-out-both">Zoom -</button>
                         <button id="btn-zoom-in-h">H+</button>
                         <button id="btn-zoom-out-h">H-</button>
                         <button id="btn-zoom-in-v">V+</button>
@@ -342,6 +347,10 @@
     <div id="report-screen" class="screen">
         <h1>Simulation Report</h1>
         <h2 id="report-username">User: </h2>
+
+        <div style="margin-bottom: 20px;">
+             <button id="btn-export-pdf-report">Export PDF Report</button>
+        </div>
 
         <div id="report-stats">
             <div>Total Trades: <span id="stat-total-trades">0</span></div>
@@ -1273,6 +1282,94 @@
     }
 
     document.getElementById('btn-export-csv').addEventListener('click', exportTradesCSV);
+
+    // --- PDF Export ---
+    async function exportPDF() {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+
+        // Title
+        doc.setFontSize(20);
+        doc.text("Trading Simulation Report", 14, 20);
+
+        // User Info
+        doc.setFontSize(12);
+        doc.text(`User: ${username || 'Guest'}`, 14, 30);
+        doc.text(`Date: ${new Date().toLocaleString()}`, 14, 36);
+
+        // Statistics
+        // Calculate current stats
+        const closedTrades = trades.filter(t => t.status === 'closed');
+        const totalTrades = closedTrades.length;
+        const totalPnL = closedTrades.reduce((acc, t) => acc + t.pnl, 0) - feesPaid;
+        const wins = closedTrades.filter(t => t.pnl > 0);
+        const winrate = totalTrades > 0 ? (wins.length / totalTrades) * 100 : 0;
+
+        let floatingPL = 0;
+        trades.filter(t => t.status === 'open').forEach(t => floatingPL += t.pnl);
+        const equity = balance + floatingPL;
+
+        const statsData = [
+            ['Total Trades', totalTrades],
+            ['Win Rate', winrate.toFixed(1) + '%'],
+            ['Total P/L', totalPnL.toFixed(2)],
+            ['Total Fees', feesPaid.toFixed(2)],
+            ['Final Balance', balance.toFixed(2)],
+            ['Equity', equity.toFixed(2)]
+        ];
+
+        doc.autoTable({
+            startY: 45,
+            head: [['Statistic', 'Value']],
+            body: statsData,
+            theme: 'striped',
+            headStyles: { fillColor: [33, 150, 243] }
+        });
+
+        // Trades Table
+        const tradeRows = trades.map(t => [
+            t.id,
+            t.type.toUpperCase(),
+            t.openPrice.toFixed(5),
+            t.closePrice ? t.closePrice.toFixed(5) : "-",
+            t.timeOpen,
+            t.timeClose || "-",
+            t.pnl.toFixed(2),
+            t.status
+        ]);
+
+        doc.text("Trade History", 14, doc.lastAutoTable.finalY + 10);
+
+        doc.autoTable({
+            startY: doc.lastAutoTable.finalY + 15,
+            head: [['ID', 'Type', 'Open', 'Close', 'Time Open', 'Time Close', 'P/L', 'Status']],
+            body: tradeRows,
+            theme: 'striped',
+            headStyles: { fillColor: [33, 150, 243] }
+        });
+
+        doc.save(`Trading_Report_${username || 'User'}.pdf`);
+    }
+
+    document.getElementById('btn-export-pdf-modal').addEventListener('click', exportPDF);
+    document.getElementById('btn-export-pdf-report').addEventListener('click', exportPDF);
+
+    // --- Uniform Zoom ---
+    document.getElementById('btn-zoom-in-both').addEventListener('click', () => {
+        // Zoom in H (fewer candles)
+        if (visibleCandles > 10) visibleCandles = Math.max(10, visibleCandles * 0.8);
+        // Zoom in V (smaller range)
+        applyVerticalZoom(0.8);
+        drawChart();
+    });
+
+    document.getElementById('btn-zoom-out-both').addEventListener('click', () => {
+        // Zoom out H (more candles)
+        if (visibleCandles < 500) visibleCandles = Math.min(500, visibleCandles * 1.25);
+        // Zoom out V (larger range)
+        applyVerticalZoom(1.25);
+        drawChart();
+    });
 
     document.getElementById('btn-save-game').addEventListener('click', () => saveGame(false));
     document.getElementById('btn-reset-game').addEventListener('click', resetGame);
