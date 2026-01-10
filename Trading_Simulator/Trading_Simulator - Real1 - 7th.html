@@ -1,0 +1,1389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Simulator</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --panel-color: #1e1e1e;
+            --text-color: #e0e0e0;
+            --accent-color: #2196f3;
+            --green-color: #00e676;
+            --red-color: #ff1744;
+            --border-color: #333;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Screens */
+        .screen {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            width: 100%;
+        }
+
+        .screen.active {
+            display: flex;
+        }
+
+        /* Start Screen */
+        #start-screen input {
+            padding: 10px;
+            font-size: 16px;
+            margin-bottom: 20px;
+            background: var(--panel-color);
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            border-radius: 4px;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        /* Simulation Screen */
+        #simulation-screen {
+            justify-content: flex-start;
+        }
+
+        #chart-container {
+            width: 100%;
+            height: 60%;
+            position: relative;
+            background-color: var(--bg-color);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+        }
+
+        #chart-flex-wrapper {
+            flex: 1;
+            display: flex;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #canvas-wrapper {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #controls-container {
+            width: 100%;
+            height: 40%;
+            display: flex;
+            flex-direction: row;
+            background-color: var(--panel-color);
+        }
+
+        #trading-panel {
+            width: 300px;
+            padding: 20px;
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        #stats-display {
+            font-family: 'Courier New', monospace;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+
+        .pnl-positive { color: var(--green-color); }
+        .pnl-negative { color: var(--red-color); }
+
+        #order-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        #btn-buy {
+            flex: 1;
+            background-color: var(--green-color);
+        }
+
+        #btn-sell {
+            flex: 1;
+            background-color: var(--red-color);
+        }
+
+        #trades-list-container {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            color: var(--accent-color);
+        }
+
+        .close-btn {
+            background-color: var(--panel-color);
+            border: 1px solid var(--border-color);
+            padding: 2px 8px;
+            font-size: 12px;
+        }
+
+        .close-btn:hover {
+            background-color: var(--border-color);
+        }
+
+        /* Report Screen */
+        #report-screen {
+            overflow-y: auto;
+            justify-content: flex-start;
+            padding: 40px;
+        }
+
+        #report-stats {
+            margin-bottom: 40px;
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            background: var(--panel-color);
+            padding: 20px;
+            border-radius: 8px;
+        }
+
+        #report-history {
+            width: 100%;
+            max-width: 800px;
+        }
+
+        #zoom-controls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            gap: 5px;
+        }
+
+        #zoom-controls button {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 5px 10px;
+            font-size: 14px;
+        }
+
+        #btn-home {
+            font-size: 14px !important;
+        }
+
+        /* Stats Modal */
+        #stats-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        #stats-modal {
+            background: var(--panel-color);
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            width: 90%;
+            max-width: 500px;
+            color: var(--text-color);
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+</head>
+<body>
+
+    <!-- Stats Overlay -->
+    <div id="stats-overlay">
+        <div id="stats-modal">
+            <h2>Current Statistics</h2>
+            <div class="stats-grid">
+                <div>Total Trades: <span id="modal-trades">0</span></div>
+                <div>Win Rate: <span id="modal-winrate">0%</span></div>
+                <div>Total P/L: <span id="modal-pnl">0.00</span></div>
+                <div>Total Fees: <span id="modal-fees">0.00</span></div>
+                <div>Avg Win: <span id="modal-avg-win">0.00</span></div>
+                <div>Avg Loss: <span id="modal-avg-loss">0.00</span></div>
+                <div>Balance: <span id="modal-balance">0.00</span></div>
+                <div>Equity: <span id="modal-equity">0.00</span></div>
+            </div>
+            <div style="text-align: right;">
+                <button id="btn-export-csv" style="float: left;">Export CSV</button>
+                <button id="btn-export-pdf-modal" style="float: left; margin-left: 10px;">Export PDF</button>
+                <button id="btn-close-stats">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Start Screen -->
+    <div id="start-screen" class="screen active">
+        <h1>Trading Experiment</h1>
+        <p>Please enter your participant ID or username to begin.</p>
+        <input type="text" id="username" placeholder="Username" />
+        <button id="btn-start">Start Simulation</button>
+    </div>
+
+    <!-- Simulation Screen -->
+    <div id="simulation-screen" class="screen">
+        <div id="chart-container">
+            <div id="chart-flex-wrapper">
+                <div id="canvas-wrapper">
+                    <canvas id="chart"></canvas>
+                    <div id="zoom-controls">
+                        <button id="btn-home">Home</button>
+                        <button id="btn-zoom-in-both">Zoom +</button>
+                        <button id="btn-zoom-out-both">Zoom -</button>
+                        <button id="btn-zoom-in-h">H+</button>
+                        <button id="btn-zoom-out-h">H-</button>
+                        <button id="btn-zoom-in-v">V+</button>
+                        <button id="btn-zoom-out-v">V-</button>
+                        <button id="btn-fee" style="font-size: 14px; width: 40px;">Fee</button>
+                        <button id="btn-lev" style="font-size: 14px; width: 40px;">Lev</button>
+                        <span style="border-left: 1px solid #555; margin: 0 5px;"></span>
+                        <button id="btn-stats-open">Stats</button>
+                        <button id="btn-save-game">Save</button>
+                        <button id="btn-reset-game" style="background-color: var(--red-color);">Reset</button>
+                    </div>
+                    <div style="position: absolute; top: 10px; left: 10px; font-family: monospace;">EURUSD</div>
+                </div>
+            </div>
+        </div>
+        <div id="controls-container">
+            <div id="trading-panel">
+                <div id="stats-display">
+                    <div class="stat-row"><span>Balance:</span> <span id="disp-balance">10000.00</span></div>
+                    <div class="stat-row"><span>Equity:</span> <span id="disp-equity">10000.00</span></div>
+                    <div class="stat-row"><span>P/L:</span> <span id="disp-pnl">0.00</span></div>
+                    <div class="stat-row"><span>Price:</span> <span id="disp-price">0.00000</span></div>
+                    <div class="stat-row"><span>Candle:</span> <span id="disp-candle">0/120</span></div>
+                </div>
+                <div id="order-buttons">
+                    <button id="btn-buy">Buy</button>
+                    <button id="btn-sell">Sell</button>
+                </div>
+                <div id="info-text" style="font-size: 12px; color: #888; text-align: center;">
+                    Fee: $5 | Size: $100 (1:100 Lev)
+                </div>
+            </div>
+            <div id="trades-list-container">
+                <h3>Open Trades</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Type</th>
+                            <th>Open Price</th>
+                            <th>Current Price</th>
+                            <th>P/L</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="open-trades-body">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Report Screen -->
+    <div id="report-screen" class="screen">
+        <h1>Simulation Report</h1>
+        <h2 id="report-username">User: </h2>
+
+        <div style="margin-bottom: 20px;">
+             <button id="btn-export-pdf-report">Export PDF Report</button>
+        </div>
+
+        <div id="report-stats">
+            <div>Total Trades: <span id="stat-total-trades">0</span></div>
+            <div>Total P/L: <span id="stat-total-pnl">0.00</span></div>
+            <div>Winrate: <span id="stat-winrate">0%</span></div>
+            <div>Total Fees: <span id="stat-fees">0.00</span></div>
+            <div>Avg Win Size: <span id="stat-avg-win">0.00</span></div>
+            <div>Avg Loss Size: <span id="stat-avg-loss">0.00</span></div>
+        </div>
+
+        <h3>Trade History</h3>
+        <div id="report-history">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Type</th>
+                        <th>Open Price</th>
+                        <th>Close Price</th>
+                        <th>Time Open</th>
+                        <th>Time Close</th>
+                        <th>P/L</th>
+                    </tr>
+                </thead>
+                <tbody id="history-body">
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+<script>
+    // --- Configuration ---
+    const JITTER_SPEED = 0.05; // Adjustable: Lower = slower/smoother jitter.
+    const CANDLE_DURATION = 30000; // 30s per candle
+
+
+    // --- Data ---
+    const rawCSV = `Time;Open;High;Low;Close
+09:00:00;1.16856;1.16863;1.16843;1.16844
+09:00:30;1.16844;1.16867;1.16844;1.16857
+09:01:00;1.16856;1.16865;1.16853;1.16858
+09:01:30;1.1686;1.16867;1.1686;1.16866
+09:02:00;1.16866;1.16868;1.16862;1.16862
+09:02:30;1.16863;1.16863;1.16846;1.16848
+09:03:00;1.16849;1.16853;1.16821;1.16821
+09:03:30;1.1682;1.16836;1.1682;1.16831
+09:04:00;1.16831;1.16837;1.16829;1.16835
+09:04:30;1.16836;1.16859;1.16833;1.16858
+09:05:00;1.16859;1.16863;1.16852;1.16854
+09:05:30;1.16852;1.16852;1.16835;1.16843
+09:06:00;1.16845;1.16845;1.16832;1.16833
+09:06:30;1.16836;1.16836;1.16826;1.16828
+09:07:00;1.1683;1.16836;1.16821;1.16836
+09:07:30;1.16834;1.16835;1.16825;1.16828
+09:08:00;1.16829;1.1684;1.16819;1.16832
+09:08:30;1.16832;1.16836;1.16827;1.16827
+09:09:00;1.16826;1.16833;1.16816;1.16821
+09:09:30;1.16822;1.16822;1.16814;1.16819
+09:10:00;1.16819;1.16823;1.16815;1.16821
+09:10:30;1.16822;1.16822;1.16813;1.16818
+09:11:00;1.16819;1.16827;1.16816;1.16827
+09:11:30;1.16828;1.16831;1.16823;1.1683
+09:12:00;1.16831;1.16836;1.16831;1.16833
+09:12:30;1.16834;1.16836;1.16817;1.16817
+09:13:00;1.16817;1.16818;1.16813;1.16813
+09:13:30;1.16814;1.16827;1.16814;1.16826
+09:14:00;1.16824;1.16825;1.16819;1.16825
+09:14:30;1.16824;1.16841;1.16822;1.16841
+09:15:00;1.16844;1.16853;1.16832;1.16832
+09:15:30;1.16832;1.16832;1.16816;1.16817
+09:16:00;1.16816;1.16824;1.16811;1.16822
+09:16:30;1.16821;1.16826;1.16818;1.16823
+09:17:00;1.16824;1.16828;1.16821;1.16827
+09:17:30;1.16827;1.1683;1.1682;1.1683
+09:18:00;1.16829;1.16842;1.16822;1.16842
+09:18:30;1.16842;1.16842;1.16829;1.16831
+09:19:00;1.16832;1.16832;1.16824;1.16831
+09:19:30;1.16832;1.16842;1.16829;1.16841
+09:20:00;1.16841;1.16843;1.16839;1.16842
+09:20:30;1.16843;1.16849;1.16841;1.16848
+09:21:00;1.16849;1.16858;1.16849;1.16853
+09:21:30;1.16853;1.16864;1.16852;1.16863
+09:22:00;1.16863;1.16867;1.16855;1.16855
+09:22:30;1.16855;1.16856;1.16848;1.16851
+09:23:00;1.16851;1.16851;1.16832;1.16835
+09:23:30;1.16837;1.16855;1.16835;1.16855
+09:24:00;1.16853;1.16866;1.16852;1.16862
+09:24:30;1.16863;1.16867;1.16856;1.16859
+09:25:00;1.16859;1.16859;1.16844;1.16846
+09:25:30;1.16847;1.1685;1.16831;1.1684
+09:26:00;1.16839;1.16839;1.1683;1.16836
+09:26:30;1.16835;1.16861;1.16834;1.16857
+09:27:00;1.16857;1.16858;1.16846;1.16846
+09:27:30;1.16846;1.16851;1.16835;1.16843
+09:28:00;1.16841;1.16843;1.16831;1.16832
+09:28:30;1.1683;1.16835;1.16828;1.16833
+09:29:00;1.16835;1.16844;1.16835;1.16843
+09:29:30;1.16843;1.16846;1.16833;1.1684
+09:30:00;1.16841;1.16862;1.16832;1.16858
+09:30:30;1.16857;1.16871;1.16851;1.16856
+09:31:00;1.16858;1.16892;1.16856;1.16886
+09:31:30;1.16887;1.16888;1.16847;1.16861
+09:32:00;1.16863;1.16865;1.16849;1.16856
+09:32:30;1.16859;1.16863;1.1685;1.16858
+09:33:00;1.16855;1.16872;1.16855;1.16867
+09:33:30;1.16869;1.16879;1.16861;1.16879
+09:34:00;1.16879;1.16891;1.16877;1.16888
+09:34:30;1.16889;1.16892;1.16879;1.1688
+09:35:00;1.16881;1.16884;1.16874;1.16874
+09:35:30;1.16873;1.16879;1.16867;1.16867
+09:36:00;1.16865;1.16878;1.16865;1.16877
+09:36:30;1.16877;1.16889;1.16875;1.16883
+09:37:00;1.16881;1.1689;1.16878;1.16882
+09:37:30;1.16882;1.16888;1.16874;1.16875
+09:38:00;1.16876;1.16882;1.16869;1.16882
+09:38:30;1.1688;1.16886;1.16872;1.16886
+09:39:00;1.16888;1.16895;1.16884;1.16892
+09:39:30;1.16893;1.16899;1.16892;1.16896
+09:40:00;1.16896;1.16911;1.16896;1.16909
+09:40:30;1.1691;1.16921;1.1691;1.16911
+09:41:00;1.16912;1.16919;1.16906;1.16919
+09:41:30;1.16917;1.16921;1.16915;1.16921
+09:42:00;1.16919;1.16919;1.16902;1.16902
+09:42:30;1.16904;1.16909;1.16902;1.16908
+09:43:00;1.16908;1.16923;1.16906;1.16923
+09:43:30;1.16923;1.16925;1.16911;1.16915
+09:44:00;1.16917;1.16924;1.16913;1.16924
+09:44:30;1.16924;1.16928;1.16918;1.16918
+09:45:00;1.16918;1.16918;1.16906;1.16906
+09:45:30;1.16908;1.16919;1.16906;1.16917
+09:46:00;1.16917;1.16923;1.16916;1.1692
+09:46:30;1.16921;1.16923;1.16917;1.1692
+09:47:00;1.16919;1.16927;1.16917;1.1692
+09:47:30;1.16921;1.16928;1.16915;1.16918
+09:48:00;1.16917;1.16938;1.16917;1.16928
+09:48:30;1.16926;1.16928;1.16916;1.16927
+09:49:00;1.16927;1.1693;1.16914;1.16916
+09:49:30;1.16915;1.16929;1.16915;1.16928
+09:50:00;1.16928;1.16931;1.16921;1.16931
+09:50:30;1.16932;1.16939;1.16931;1.16934
+09:51:00;1.16935;1.16937;1.1692;1.16924
+09:51:30;1.16922;1.16923;1.16907;1.16908
+09:52:00;1.16906;1.16911;1.16906;1.16911
+09:52:30;1.16908;1.16916;1.16906;1.16914
+09:53:00;1.16914;1.16932;1.1691;1.16931
+09:53:30;1.1693;1.1693;1.16916;1.1692
+09:54:00;1.16921;1.16921;1.16905;1.16905
+09:54:30;1.16906;1.16912;1.16905;1.16906
+09:55:00;1.16905;1.16917;1.16905;1.16908
+09:55:30;1.16908;1.16922;1.16908;1.16921
+09:56:00;1.16917;1.16918;1.1691;1.16911
+09:56:30;1.16914;1.1692;1.16905;1.16907
+09:57:00;1.16906;1.16907;1.16884;1.16885
+09:57:30;1.16886;1.16888;1.16877;1.1688
+09:58:00;1.16881;1.1689;1.16879;1.16887
+09:58:30;1.16885;1.16886;1.16875;1.16876
+09:59:00;1.16875;1.16877;1.16869;1.16874
+09:59:30;1.16873;1.16882;1.16871;1.16882
+10:00:00;1.16883;1.16887;1.16876;1.16876`;
+
+    // --- State ---
+    const FPS = 30;
+    const TICKS_PER_CANDLE = (CANDLE_DURATION / 1000) * FPS;
+
+    let candles = [];
+    let currentCandleIndex = 0;
+    let currentTick = 0;
+    let currentPrice = 0;
+    let currentCandleHigh = -Infinity;
+    let currentCandleLow = Infinity;
+    let currentPath = []; // Precomputed price path for the current candle
+
+    let username = "";
+    let balance = 10000;
+    let feesPaid = 0;
+    let trades = []; // { id, type: 'buy'|'sell', openPrice, timeOpen, status: 'open'|'closed', closePrice, timeClose, pnl, fee }
+    let tradeIdCounter = 1;
+    let visibleCandles = 60;
+
+    let tradingFee = 5;
+    let tradingUnits = 100000;
+
+    let viewOffset = 0; // 0 = follow live, >0 = look back
+
+    // Vertical View State
+    // If yMin/yMax are null, we auto-scale.
+    // If set, we use them (manual infinite canvas).
+    let yMin = null;
+    let yMax = null;
+
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let dragStartOffset = 0;
+    let dragStartYMin = 0;
+    let dragStartYMax = 0;
+
+    // --- Parse Data ---
+    function parseData() {
+        const lines = rawCSV.split('\n');
+        // Skip header
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            const parts = line.split(';');
+            candles.push({
+                time: parts[0],
+                open: parseFloat(parts[1]),
+                high: parseFloat(parts[2]),
+                low: parseFloat(parts[3]),
+                close: parseFloat(parts[4])
+            });
+        }
+    }
+
+    // --- Path Generation ---
+    function generateCandlePath(candle) {
+        // Generate a jittery path from Open to Close that touches High and Low
+        let path = new Array(Math.floor(TICKS_PER_CANDLE));
+        let points = [];
+
+        // Decide order: 0 = Open->High->Low->Close, 1 = Open->Low->High->Close
+        let order = Math.random() > 0.5 ? 0 : 1;
+
+        const T = TICKS_PER_CANDLE;
+        const padding = T * 0.1;
+        let t1 = Math.floor(padding + Math.random() * (T * 0.4));
+        let t2 = Math.floor(t1 + padding + Math.random() * (T - t1 - 2*padding));
+
+        if (t2 >= T) t2 = T - 1;
+
+        let p1, p2;
+        if (order === 0) {
+            p1 = candle.high;
+            p2 = candle.low;
+        } else {
+            p1 = candle.low;
+            p2 = candle.high;
+        }
+
+        // We use a smoothed noise generator.
+        let currentNoise = 0;
+
+        function interpolate(startVal, endVal, steps) {
+            let seg = [];
+            for (let i = 0; i < steps; i++) {
+                let ratio = i / steps;
+
+                // Jitter logic:
+                // We drift currentNoise towards a random target.
+                // The range of noise is proportional to candle range.
+                const range = (candle.high - candle.low) * 0.5; // reduced range for smoother look?
+                const targetNoise = (Math.random() - 0.5) * range;
+
+                // Move currentNoise towards targetNoise by JITTER_SPEED
+                currentNoise += (targetNoise - currentNoise) * JITTER_SPEED;
+
+                let val = startVal + (endVal - startVal) * ratio + currentNoise;
+                seg.push(val);
+            }
+            return seg;
+        }
+
+        let seg1 = interpolate(candle.open, p1, t1);
+        let seg2 = interpolate(p1, p2, t2 - t1);
+        let seg3 = interpolate(p2, candle.close, T - t2);
+
+        // Stitch
+        for (let i = 0; i < t1; i++) path[i] = seg1[i];
+        for (let i = t1; i < t2; i++) path[i] = seg2[i - t1];
+        for (let i = t2; i < T; i++) path[i] = seg3[i - t2];
+
+        return path;
+    }
+
+    // --- Simulation Loop ---
+    let animationFrameId;
+
+    function startSimulation() {
+        document.getElementById('start-screen').classList.remove('active');
+        document.getElementById('simulation-screen').classList.add('active');
+
+        parseData();
+        prepareNextCandle();
+        renderLoop();
+    }
+
+    function prepareNextCandle() {
+        if (currentCandleIndex >= candles.length) {
+            endSimulation();
+            return;
+        }
+        currentTick = 0;
+        currentPath = generateCandlePath(candles[currentCandleIndex]);
+
+        // Update display of total candles
+        document.getElementById('disp-candle').innerText = `${currentCandleIndex + 1}/${candles.length}`;
+    }
+
+    function renderLoop() {
+        if (currentCandleIndex >= candles.length) return;
+
+        // Logic
+        if (currentTick < currentPath.length) {
+            currentPrice = currentPath[currentTick];
+        } else {
+            currentPrice = candles[currentCandleIndex].close;
+        }
+
+        // Track High/Low for the current forming candle
+        if (currentTick === 0) {
+            currentCandleHigh = currentPrice;
+            currentCandleLow = currentPrice;
+        } else {
+            if (currentPrice > currentCandleHigh) currentCandleHigh = currentPrice;
+            if (currentPrice < currentCandleLow) currentCandleLow = currentPrice;
+        }
+
+        // Update UI
+        updateTradingCalculations();
+        drawChart();
+
+        // Advance
+        currentTick++;
+        if (currentTick >= TICKS_PER_CANDLE) {
+            currentCandleIndex++;
+            prepareNextCandle();
+            // updateScrollbarMax(); // Scrollbar logic removed
+        }
+
+        animationFrameId = requestAnimationFrame(renderLoop);
+    }
+
+    function endSimulation() {
+        cancelAnimationFrame(animationFrameId);
+        trades.forEach(t => {
+            if (t.status === 'open') closeTrade(t.id);
+        });
+
+        document.getElementById('simulation-screen').classList.remove('active');
+        document.getElementById('report-screen').classList.add('active');
+        generateReport();
+    }
+
+    // --- Charting ---
+    const canvas = document.getElementById('chart');
+    const ctx = canvas.getContext('2d');
+
+    // Helper to get auto range
+    function getAutoRange() {
+        let endIndex = currentCandleIndex - viewOffset;
+        if (endIndex < 0) endIndex = 0;
+        let startIndex = Math.max(0, endIndex - visibleCandles + 1);
+
+        let rightEdgeIndex = currentCandleIndex - viewOffset;
+        let windowStart = Math.floor(rightEdgeIndex - visibleCandles + 1);
+        if (windowStart < 0) windowStart = 0;
+
+        let minPrice = Infinity;
+        let maxPrice = -Infinity;
+
+        // Scan from windowStart to rightEdgeIndex
+        // Note: loop end should be rightEdgeIndex.
+        // We scan what will be drawn.
+
+        // Loop range:
+        let loopStart = Math.floor(windowStart);
+        let loopEnd = Math.ceil(rightEdgeIndex);
+
+        for (let i = loopStart; i <= loopEnd; i++) {
+            if (i >= candles.length) break;
+            if (i < 0) continue;
+
+            let c = candles[i];
+            let h = c.high;
+            let l = c.low;
+            if (i === currentCandleIndex) {
+                h = currentCandleHigh;
+                l = currentCandleLow;
+                if (h === -Infinity) h = Math.max(c.open, currentPrice);
+                if (l === Infinity) l = Math.min(c.open, currentPrice);
+            }
+            if (h > maxPrice) maxPrice = h;
+            if (l < minPrice) minPrice = l;
+        }
+
+        if (minPrice === Infinity) { minPrice = 0; maxPrice = 1; }
+
+        let range = maxPrice - minPrice;
+        if (range === 0) range = 0.0001;
+        maxPrice += range * 0.1;
+        minPrice -= range * 0.1;
+
+        return { min: minPrice, max: maxPrice };
+    }
+
+    function drawChart() {
+        const width = canvas.parentElement.clientWidth;
+        const height = canvas.parentElement.clientHeight;
+        canvas.width = width;
+        canvas.height = height;
+
+        ctx.clearRect(0, 0, width, height);
+
+        // Determine Scale
+        let effectiveMin, effectiveMax;
+
+        if (yMin !== null && yMax !== null) {
+            effectiveMin = yMin;
+            effectiveMax = yMax;
+        } else {
+            const auto = getAutoRange();
+            effectiveMin = auto.min;
+            effectiveMax = auto.max;
+        }
+
+        // Determine Visible Range (X Axis) and Left Alignment
+        // We use a simple clamp logic: windowStart cannot be < 0.
+        // This keeps the chart left-aligned when data is sparse.
+
+        let rightEdgeIndex = currentCandleIndex - viewOffset;
+        let windowStart = rightEdgeIndex - visibleCandles + 1;
+
+        if (windowStart < 0) windowStart = 0;
+
+        const candleWidth = width / visibleCandles;
+        const gap = candleWidth * 0.2;
+        const barWidth = candleWidth - gap;
+
+        function getY(price) {
+            // "Infinite canvas": Don't clamp
+            return height - ((price - effectiveMin) / (effectiveMax - effectiveMin)) * height;
+        }
+
+        // Draw loop
+        let loopStart = Math.floor(windowStart);
+        let loopEnd = Math.floor(rightEdgeIndex + 1);
+
+        if (loopStart < 0) loopStart = 0;
+        if (loopEnd > currentCandleIndex) loopEnd = currentCandleIndex;
+
+        for (let i = loopStart; i <= loopEnd; i++) {
+            const c = candles[i];
+
+            // x = (i - windowStart) * candleWidth
+            const x = (i - windowStart) * candleWidth + gap / 2;
+
+            let open = c.open;
+            let close = (i === currentCandleIndex) ? currentPrice : c.close;
+            let high = c.high;
+            let low = c.low;
+
+            if (i === currentCandleIndex) {
+                 high = currentCandleHigh;
+                 low = currentCandleLow;
+                 if (high === -Infinity) high = Math.max(open, close);
+                 if (low === Infinity) low = Math.min(open, close);
+            }
+
+            // Wick
+            ctx.beginPath();
+            ctx.moveTo(x + barWidth / 2, getY(high));
+            ctx.lineTo(x + barWidth / 2, getY(low));
+            ctx.strokeStyle = (close >= open) ? '#00e676' : '#ff1744';
+            ctx.stroke();
+
+            // Body
+            const yOpen = getY(open);
+            const yClose = getY(close);
+            const bodyHeight = Math.abs(yOpen - yClose);
+
+            ctx.fillStyle = (close >= open) ? '#00e676' : '#ff1744';
+            ctx.fillRect(x, Math.min(yOpen, yClose), barWidth, Math.max(1, bodyHeight));
+        }
+
+        // Current Price Line
+        const yPrice = getY(currentPrice);
+        ctx.beginPath();
+        ctx.moveTo(0, yPrice);
+        ctx.lineTo(width, yPrice);
+        ctx.strokeStyle = '#2196f3';
+        ctx.setLineDash([5, 5]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = '#2196f3';
+        ctx.fillText(currentPrice.toFixed(5), width - 50, yPrice - 5);
+
+        // Trade Lines
+        trades.forEach(t => {
+            if (t.status === 'open') {
+                 const y = getY(t.openPrice);
+                 ctx.beginPath();
+                 ctx.moveTo(0, y);
+                 ctx.lineTo(width, y);
+                 ctx.strokeStyle = t.type === 'buy' ? '#00e676' : '#ff1744';
+                 ctx.lineWidth = 1;
+                 ctx.stroke();
+
+                 ctx.fillStyle = t.type === 'buy' ? '#00e676' : '#ff1744';
+                 ctx.font = '12px monospace';
+                 ctx.fillText(`ID: ${t.id}`, width - 60, y - 5);
+            }
+        });
+    }
+
+    // --- Trading Logic ---
+    function updateTradingCalculations() {
+        let floatingPL = 0;
+        trades.forEach(t => {
+            if (t.status === 'open') {
+                const units = tradingUnits;
+                const direction = t.type === 'buy' ? 1 : -1;
+                const pnl = (currentPrice - t.openPrice) * direction * units;
+                t.pnl = pnl;
+                floatingPL += pnl;
+            }
+        });
+
+        const equity = balance + floatingPL;
+        document.getElementById('disp-balance').innerText = balance.toFixed(2);
+        document.getElementById('disp-equity').innerText = equity.toFixed(2);
+        document.getElementById('disp-pnl').innerText = floatingPL.toFixed(2);
+        document.getElementById('disp-price').innerText = currentPrice.toFixed(5);
+        document.getElementById('disp-pnl').className = floatingPL >= 0 ? 'pnl-positive' : 'pnl-negative';
+
+        updateTradeListUI();
+    }
+
+    function openTrade(type) {
+        if (currentCandleIndex >= candles.length) return;
+        balance -= tradingFee;
+        feesPaid += tradingFee;
+
+        const trade = {
+            id: tradeIdCounter++,
+            type: type,
+            openPrice: currentPrice,
+            timeOpen: candles[currentCandleIndex].time,
+            status: 'open',
+            closePrice: null,
+            timeClose: null,
+            pnl: 0,
+            fee: tradingFee
+        };
+        trades.unshift(trade);
+        renderTradeList();
+    }
+
+    function closeTrade(id) {
+        const trade = trades.find(t => t.id === id);
+        if (trade && trade.status === 'open') {
+            trade.status = 'closed';
+            trade.closePrice = currentPrice;
+            trade.timeClose = candles[currentCandleIndex].time;
+            const units = tradingUnits;
+            const direction = trade.type === 'buy' ? 1 : -1;
+            trade.pnl = (currentPrice - trade.openPrice) * direction * units;
+            balance += trade.pnl;
+            renderTradeList();
+        }
+    }
+
+    // --- UI Rendering ---
+    function renderTradeList() {
+        const tbody = document.getElementById('open-trades-body');
+        tbody.innerHTML = '';
+        trades.forEach(t => {
+            if (t.status === 'open') {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${t.id}</td>
+                    <td style="color: ${t.type === 'buy' ? 'var(--green-color)' : 'var(--red-color)'}">${t.type.toUpperCase()}</td>
+                    <td>${t.openPrice.toFixed(5)}</td>
+                    <td>${currentPrice.toFixed(5)}</td>
+                    <td class="${t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${t.pnl.toFixed(2)}</td>
+                    <td><button class="close-btn" onclick="closeTrade(${t.id})">Close</button></td>
+                `;
+                tbody.appendChild(tr);
+            }
+        });
+    }
+
+    function updateTradeListUI() {
+        const rows = document.getElementById('open-trades-body').rows;
+        let openTradeIdx = 0;
+        for (let t of trades) {
+            if (t.status === 'open') {
+                if (openTradeIdx < rows.length) {
+                    const tr = rows[openTradeIdx];
+                    tr.cells[3].innerText = currentPrice.toFixed(5);
+                    tr.cells[4].innerText = t.pnl.toFixed(2);
+                    tr.cells[4].className = t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
+                }
+                openTradeIdx++;
+            }
+        }
+    }
+
+    function generateReport() {
+        document.getElementById('report-username').innerText += username;
+        const closedTrades = trades.filter(t => t.status === 'closed');
+        const totalTrades = closedTrades.length;
+        const totalPnL = closedTrades.reduce((acc, t) => acc + t.pnl, 0) - feesPaid;
+        const wins = closedTrades.filter(t => t.pnl > 0);
+        const losses = closedTrades.filter(t => t.pnl <= 0);
+        const winrate = totalTrades > 0 ? (wins.length / totalTrades) * 100 : 0;
+        const avgWin = wins.length > 0 ? wins.reduce((a, t) => a + t.pnl, 0) / wins.length : 0;
+        const avgLoss = losses.length > 0 ? losses.reduce((a, t) => a + t.pnl, 0) / losses.length : 0;
+
+        document.getElementById('stat-total-trades').innerText = totalTrades;
+        document.getElementById('stat-total-pnl').innerText = totalPnL.toFixed(2);
+        document.getElementById('stat-winrate').innerText = winrate.toFixed(1) + '%';
+        document.getElementById('stat-fees').innerText = feesPaid.toFixed(2);
+        document.getElementById('stat-avg-win').innerText = avgWin.toFixed(2);
+        document.getElementById('stat-avg-loss').innerText = avgLoss.toFixed(2);
+
+        const tbody = document.getElementById('history-body');
+        trades.forEach(t => {
+             if(t.status === 'closed') {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${t.id}</td>
+                    <td>${t.type.toUpperCase()}</td>
+                    <td>${t.openPrice.toFixed(5)}</td>
+                    <td>${t.closePrice.toFixed(5)}</td>
+                    <td>${t.timeOpen}</td>
+                    <td>${t.timeClose}</td>
+                    <td class="${t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${t.pnl.toFixed(2)}</td>
+                `;
+                tbody.appendChild(tr);
+             }
+        });
+    }
+
+    // --- Event Listeners ---
+    document.getElementById('btn-start').addEventListener('click', () => {
+        const u = document.getElementById('username').value;
+        if (u) {
+            username = u;
+            startSimulation();
+        } else {
+            alert("Please enter a username");
+        }
+    });
+
+    document.getElementById('btn-buy').addEventListener('click', () => openTrade('buy'));
+    document.getElementById('btn-sell').addEventListener('click', () => openTrade('sell'));
+
+    document.getElementById('btn-zoom-in-h').addEventListener('click', () => {
+        if (visibleCandles > 10) visibleCandles -= 5;
+        drawChart();
+    });
+
+    document.getElementById('btn-zoom-out-h').addEventListener('click', () => {
+        if (visibleCandles < 200) visibleCandles += 5;
+        drawChart();
+    });
+
+    // Vertical Zoom
+    function applyVerticalZoom(factor) {
+        // If not in manual mode, switch to manual with current auto range
+        if (yMin === null || yMax === null) {
+            const auto = getAutoRange();
+            yMin = auto.min;
+            yMax = auto.max;
+        }
+
+        let range = yMax - yMin;
+        let center = (yMin + yMax) / 2;
+
+        let newRange = range * factor;
+        yMin = center - newRange / 2;
+        yMax = center + newRange / 2;
+
+        drawChart();
+    }
+
+    document.getElementById('btn-zoom-in-v').addEventListener('click', () => {
+        applyVerticalZoom(0.8); // Zoom In = Smaller Range
+    });
+
+    document.getElementById('btn-zoom-out-v').addEventListener('click', () => {
+        applyVerticalZoom(1.25); // Zoom Out = Larger Range
+    });
+
+    document.getElementById('btn-fee').addEventListener('click', () => {
+        const pw = prompt("Enter Password to change fee:");
+        if (pw === "Maarten281") {
+            const f = parseFloat(prompt("Enter new fee:", tradingFee));
+            if (!isNaN(f) && f >= 0) {
+                tradingFee = f;
+                updateInfoText();
+                alert("Fee updated to " + f);
+            }
+        } else {
+            alert("Incorrect password.");
+        }
+    });
+
+    function updateInfoText() {
+         document.getElementById('info-text').innerText = `Fee: $${tradingFee} | Units: ${tradingUnits}`;
+    }
+
+    document.getElementById('btn-lev').addEventListener('click', () => {
+        const pw = prompt("Enter Password to change leverage:");
+        if (pw === "Maarten281") {
+            const u = parseFloat(prompt("Enter new leverage units (currently " + tradingUnits + "):", tradingUnits));
+            if (!isNaN(u) && u > 0) {
+                tradingUnits = u;
+                updateInfoText();
+                alert("Leverage units updated to " + u);
+            }
+        } else {
+            alert("Incorrect password.");
+        }
+    });
+
+    // Home Button
+    document.getElementById('btn-home').addEventListener('click', () => {
+        viewOffset = 0;
+        visibleCandles = 5; // Fits most recent 5 bars
+        yMin = null; // Auto scale
+        yMax = null;
+        drawChart();
+    });
+
+    window.addEventListener('resize', drawChart);
+
+    // Drag to scroll
+    canvas.addEventListener('mousedown', e => {
+        isDragging = true;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        dragStartOffset = viewOffset;
+
+        // Initializing Manual Mode on drag if not already
+        if (yMin === null || yMax === null) {
+            const auto = getAutoRange();
+            yMin = auto.min;
+            yMax = auto.max;
+        }
+        dragStartYMin = yMin;
+        dragStartYMax = yMax;
+
+        canvas.style.cursor = 'grabbing';
+    });
+
+    window.addEventListener('mousemove', e => {
+        if (!isDragging) return;
+        const width = canvas.parentElement.clientWidth;
+        const height = canvas.parentElement.clientHeight;
+
+        // Horizontal
+        const candleWidth = width / visibleCandles;
+        const dx = e.clientX - dragStartX;
+        const candlesShift = dx / candleWidth;
+
+        // Dragging right -> viewOffset increases (look back)
+        viewOffset = dragStartOffset + candlesShift;
+        if (viewOffset < 0) viewOffset = 0;
+        if (viewOffset > currentCandleIndex) viewOffset = currentCandleIndex;
+
+        // Vertical
+        const dy = e.clientY - dragStartY; // Drag down (+y)
+        const pricePerPixel = (dragStartYMax - dragStartYMin) / height;
+        const priceShift = dy * pricePerPixel;
+
+        yMin = dragStartYMin + priceShift;
+        yMax = dragStartYMax + priceShift;
+
+        drawChart();
+    });
+
+    window.addEventListener('mouseup', () => {
+        isDragging = false;
+        canvas.style.cursor = 'default';
+    });
+
+    // --- Save/Load System ---
+    function saveGame(silent = false) {
+        if (!document.getElementById('simulation-screen').classList.contains('active')) return;
+
+        const state = {
+            username,
+            balance,
+            feesPaid,
+            trades,
+            tradeIdCounter,
+            visibleCandles,
+            tradingFee,
+            tradingUnits,
+            currentCandleIndex,
+            currentTick,
+            viewOffset,
+            yMin, yMax,
+            currentCandleHigh,
+            currentCandleLow,
+            candlesLength: candles.length
+        };
+        localStorage.setItem('tradingSimSave', JSON.stringify(state));
+        if (!silent) alert("Game Saved!");
+    }
+
+    function loadGame() {
+        const saved = localStorage.getItem('tradingSimSave');
+        if (!saved) return false;
+
+        try {
+            const state = JSON.parse(saved);
+            // Basic validation
+            if (!state.username || state.candlesLength === undefined) return false;
+
+            username = state.username;
+            balance = state.balance;
+            feesPaid = state.feesPaid;
+            trades = state.trades;
+            tradeIdCounter = state.tradeIdCounter;
+            visibleCandles = state.visibleCandles;
+            tradingFee = state.tradingFee;
+            tradingUnits = state.tradingUnits;
+            currentCandleIndex = state.currentCandleIndex;
+            currentTick = state.currentTick;
+            viewOffset = state.viewOffset;
+            yMin = state.yMin;
+            yMax = state.yMax;
+            currentCandleHigh = state.currentCandleHigh;
+            currentCandleLow = state.currentCandleLow;
+
+            // Initialize UI
+            document.getElementById('start-screen').classList.remove('active');
+            document.getElementById('simulation-screen').classList.add('active');
+            document.getElementById('username').value = username;
+
+            parseData();
+
+            // Generate path for current candle
+            if (currentCandleIndex < candles.length) {
+                currentPath = generateCandlePath(candles[currentCandleIndex]);
+            }
+
+            // Restore prices
+            if (currentTick < currentPath.length) {
+                currentPrice = currentPath[currentTick];
+            } else if (currentCandleIndex < candles.length) {
+                currentPrice = candles[currentCandleIndex].close;
+            }
+
+            updateTradingCalculations();
+            updateInfoText();
+            renderTradeList();
+
+            // Start loop
+            renderLoop();
+            return true;
+        } catch (e) {
+            console.error("Failed to load save", e);
+            return false;
+        }
+    }
+
+    function resetGame() {
+        if (confirm("Are you sure you want to reset? All progress will be lost.")) {
+            localStorage.removeItem('tradingSimSave');
+            location.reload();
+        }
+    }
+
+    // --- Statistics Menu ---
+    function showStats() {
+        // Calculate stats
+        const closedTrades = trades.filter(t => t.status === 'closed');
+        const totalTrades = closedTrades.length;
+        const totalPnL = closedTrades.reduce((acc, t) => acc + t.pnl, 0) - feesPaid;
+        const wins = closedTrades.filter(t => t.pnl > 0);
+        const losses = closedTrades.filter(t => t.pnl <= 0);
+        const winrate = totalTrades > 0 ? (wins.length / totalTrades) * 100 : 0;
+        const avgWin = wins.length > 0 ? wins.reduce((a, t) => a + t.pnl, 0) / wins.length : 0;
+        const avgLoss = losses.length > 0 ? losses.reduce((a, t) => a + t.pnl, 0) / losses.length : 0;
+
+        let floatingPL = 0;
+        trades.filter(t => t.status === 'open').forEach(t => floatingPL += t.pnl);
+        const equity = balance + floatingPL;
+
+        document.getElementById('modal-trades').innerText = totalTrades;
+        document.getElementById('modal-winrate').innerText = winrate.toFixed(1) + '%';
+        document.getElementById('modal-pnl').innerText = totalPnL.toFixed(2);
+        document.getElementById('modal-fees').innerText = feesPaid.toFixed(2);
+        document.getElementById('modal-avg-win').innerText = avgWin.toFixed(2);
+        document.getElementById('modal-avg-loss').innerText = avgLoss.toFixed(2);
+        document.getElementById('modal-balance').innerText = balance.toFixed(2);
+        document.getElementById('modal-equity').innerText = equity.toFixed(2);
+
+        document.getElementById('stats-overlay').style.display = 'flex';
+    }
+
+    document.getElementById('btn-stats-open').addEventListener('click', showStats);
+    document.getElementById('btn-close-stats').addEventListener('click', () => {
+        document.getElementById('stats-overlay').style.display = 'none';
+    });
+
+    function exportTradesCSV() {
+        const headers = ["ID", "Type", "Open Price", "Close Price", "Time Open", "Time Close", "P/L", "Fee", "Status"];
+        const rows = [headers.join(",")];
+
+        trades.forEach(t => {
+            const row = [
+                t.id,
+                t.type,
+                t.openPrice.toFixed(5),
+                t.closePrice ? t.closePrice.toFixed(5) : "",
+                t.timeOpen,
+                t.timeClose || "",
+                t.pnl.toFixed(2),
+                t.fee.toFixed(2),
+                t.status
+            ];
+            rows.push(row.join(","));
+        });
+
+        const csvContent = "data:text/csv;charset=utf-8," + rows.join("\n");
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "trades_export.csv");
+        document.body.appendChild(link); // Required for FF
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    document.getElementById('btn-export-csv').addEventListener('click', exportTradesCSV);
+
+    // --- PDF Export ---
+    async function exportPDF() {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+
+        // Title
+        doc.setFontSize(20);
+        doc.text("Trading Simulation Report", 14, 20);
+
+        // User Info
+        doc.setFontSize(12);
+        doc.text(`User: ${username || 'Guest'}`, 14, 30);
+        doc.text(`Date: ${new Date().toLocaleString()}`, 14, 36);
+
+        // Statistics
+        // Calculate current stats
+        const closedTrades = trades.filter(t => t.status === 'closed');
+        const totalTrades = closedTrades.length;
+        const totalPnL = closedTrades.reduce((acc, t) => acc + t.pnl, 0) - feesPaid;
+        const wins = closedTrades.filter(t => t.pnl > 0);
+        const winrate = totalTrades > 0 ? (wins.length / totalTrades) * 100 : 0;
+
+        let floatingPL = 0;
+        trades.filter(t => t.status === 'open').forEach(t => floatingPL += t.pnl);
+        const equity = balance + floatingPL;
+
+        const statsData = [
+            ['Total Trades', totalTrades],
+            ['Win Rate', winrate.toFixed(1) + '%'],
+            ['Total P/L', totalPnL.toFixed(2)],
+            ['Total Fees', feesPaid.toFixed(2)],
+            ['Final Balance', balance.toFixed(2)],
+            ['Equity', equity.toFixed(2)]
+        ];
+
+        doc.autoTable({
+            startY: 45,
+            head: [['Statistic', 'Value']],
+            body: statsData,
+            theme: 'striped',
+            headStyles: { fillColor: [33, 150, 243] }
+        });
+
+        // Trades Table
+        const tradeRows = trades.map(t => [
+            t.id,
+            t.type.toUpperCase(),
+            t.openPrice.toFixed(5),
+            t.closePrice ? t.closePrice.toFixed(5) : "-",
+            t.timeOpen,
+            t.timeClose || "-",
+            t.pnl.toFixed(2),
+            t.status
+        ]);
+
+        doc.text("Trade History", 14, doc.lastAutoTable.finalY + 10);
+
+        doc.autoTable({
+            startY: doc.lastAutoTable.finalY + 15,
+            head: [['ID', 'Type', 'Open', 'Close', 'Time Open', 'Time Close', 'P/L', 'Status']],
+            body: tradeRows,
+            theme: 'striped',
+            headStyles: { fillColor: [33, 150, 243] }
+        });
+
+        doc.save(`Trading_Report_${username || 'User'}.pdf`);
+    }
+
+    document.getElementById('btn-export-pdf-modal').addEventListener('click', exportPDF);
+    document.getElementById('btn-export-pdf-report').addEventListener('click', exportPDF);
+
+    // --- Uniform Zoom ---
+    document.getElementById('btn-zoom-in-both').addEventListener('click', () => {
+        // Zoom in H (fewer candles)
+        if (visibleCandles > 10) visibleCandles = Math.max(10, visibleCandles * 0.8);
+        // Zoom in V (smaller range)
+        applyVerticalZoom(0.8);
+        drawChart();
+    });
+
+    document.getElementById('btn-zoom-out-both').addEventListener('click', () => {
+        // Zoom out H (more candles)
+        if (visibleCandles < 500) visibleCandles = Math.min(500, visibleCandles * 1.25);
+        // Zoom out V (larger range)
+        applyVerticalZoom(1.25);
+        drawChart();
+    });
+
+    document.getElementById('btn-save-game').addEventListener('click', () => saveGame(false));
+    document.getElementById('btn-reset-game').addEventListener('click', resetGame);
+
+    // Auto-save
+    setInterval(() => saveGame(true), 10000);
+
+    // Auto-load on startup
+    window.addEventListener('load', () => {
+        if (localStorage.getItem('tradingSimSave')) {
+            loadGame();
+        }
+    });
+
+</script>
+</body>
+</html>
