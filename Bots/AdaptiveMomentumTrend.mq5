@@ -36,18 +36,18 @@ double Wsr = 15.0;   // Weight for Sharpe Ratio
 double Wemd = 10.0;  // Weight for Risk of Ruin (Le)
 
 //--- Sigmoid Parameters (Steepness k, Midpoint m)
-double PrK = 0.5;    // Payoff Ratio Steepness
-double PrM = 2.0;    // Payoff Ratio Midpoint
-double MrK = 0.01;   // Monthly Return Steepness
-double MrM = 500.0;  // Monthly Return Midpoint
-double NpK = 0.005;  // Negative Penalty Steepness
-double NpM = 500.0;  // Negative Penalty Midpoint
-double TcK = 0.1;    // Trade Count Steepness
-double TcM = 20.0;   // Trade Count Midpoint
-double SrK = 0.5;    // Sharpe Ratio Steepness
-double SrM = 1.0;    // Sharpe Ratio Midpoint
-double LeK = 0.1;    // Risk of Ruin Steepness
-double LeM = 10.0;   // Risk of Ruin Midpoint
+double PrK = 0.585927;    // Payoff Ratio Steepness
+double PrM = 4.25;    // Payoff Ratio Midpoint
+double MrK = 0.005859;   // Monthly Return Steepness
+double MrM = 425.0;  // Monthly Return Midpoint
+double NpK = 0.005493;  // Negative Penalty Steepness
+double NpM = 600.0;  // Negative Penalty Midpoint
+double TcK = 0.079899;    // Trade Count Steepness
+double TcM = 42.5;   // Trade Count Midpoint
+double SrK = 0.87889;    // Sharpe Ratio Steepness
+double SrM = 2.5;    // Sharpe Ratio Midpoint
+double LeK = 0.046257;    // Risk of Ruin Steepness
+double LeM = 52.5;   // Risk of Ruin Midpoint
 
 //--- Global Objects and Variables
 CTrade trade;
