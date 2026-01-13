@@ -1,6 +1,6 @@
 #property copyright "Jules"
 #property link      "https://github.com/Maarten-Kruger/Trading"
-#property version   "1.0"
+#property version   "1.1"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -308,19 +308,6 @@ void CheckEntry()
 
             if (close > g_band_high)
             {
-               double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-               double sl = price - InpSLPoints * _Point;
-               double tp = price + InpTPPoints * _Point;
-               if (trade.Buy(lot, _Symbol, price, sl, tp, "LondonBreakout"))
-               {
-                  g_has_broken_out = true;
-                  g_breakout_dir = 1;
-                  g_last_volume = vol;
-                  g_momentum_stopped = false;
-               }
-            }
-            else if (close < g_band_low)
-            {
                double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
                double sl = price + InpSLPoints * _Point; // Sell SL is above
                double tp = price - InpTPPoints * _Point; // Sell TP is below
@@ -328,6 +315,19 @@ void CheckEntry()
                {
                   g_has_broken_out = true;
                   g_breakout_dir = -1;
+                  g_last_volume = vol;
+                  g_momentum_stopped = false;
+               }
+            }
+            else if (close < g_band_low)
+            {
+               double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+               double sl = price - InpSLPoints * _Point;
+               double tp = price + InpTPPoints * _Point;
+               if (trade.Buy(lot, _Symbol, price, sl, tp, "LondonBreakout"))
+               {
+                  g_has_broken_out = true;
+                  g_breakout_dir = 1;
                   g_last_volume = vol;
                   g_momentum_stopped = false;
                }
