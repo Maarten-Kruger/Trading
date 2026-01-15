@@ -12,7 +12,8 @@ input double InpTPPoints       = 400;    // Take profit distance in points
 input double InpSLPoints       = 200;    // Stop loss distance in points
 input double InpRiskPercent    = 1.0;    // Risk percentage of equity per trade
 input int    InpMaxBarsOpen    = 5;      // Maximum bars to keep position open
-input double InpMinDailyProfit = 1.0;    // Minimum daily profit to count as profitable day
+input double InpMinDailyProfit = 1.0;    // Minimum period profit to count as profitable period
+input int    InpPeriodDays     = 1;      // Number of days in each profit tracking period
 uint   InpSlippage       = 5;      // Slippage in points
 ulong  InpMagicNumber    = 1300001;// Magic number for HoverBreakout trades
 
@@ -254,20 +255,28 @@ double OnTester()
    HistorySelect(0, TimeCurrent());
    int total_deals = HistoryDealsTotal();
 
-   double profitable_days_count = 0.0;
+   double profitable_periods_count = 0.0;
 
    if (total_deals == 0) return 0.0;
 
-   // Identify the first day
+   // Identify the first deal time
    long first_ticket = HistoryDealGetTicket(0);
    datetime first_time = (datetime)HistoryDealGetInteger(first_ticket, DEAL_TIME);
-   MqlDateTime current_date;
-   TimeToStruct(first_time, current_date);
 
-   int current_day_of_year = current_date.day_of_year;
-   int current_year = current_date.year;
+   // Normalize start time to the beginning of that day (00:00:00)
+   MqlDateTime dt_struct;
+   TimeToStruct(first_time, dt_struct);
+   dt_struct.hour = 0;
+   dt_struct.min = 0;
+   dt_struct.sec = 0;
+   datetime anchor_time = StructToTime(dt_struct);
 
-   double current_day_profit = 0.0;
+   // Calculate period length in seconds
+   long period_seconds = (long)InpPeriodDays * 86400;
+   if(period_seconds <= 0) period_seconds = 86400; // Fallback to 1 day if invalid
+
+   double current_period_profit = 0.0;
+   long current_period_index = 0;
 
    for(int i = 0; i < total_deals; i++)
    {
@@ -276,38 +285,36 @@ double OnTester()
       long type = HistoryDealGetInteger(ticket, DEAL_TYPE);
       if (type == DEAL_TYPE_BALANCE) continue; // Skip deposits/withdrawals
 
-      datetime time = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
-      MqlDateTime dt;
-      TimeToStruct(time, dt);
+      datetime deal_time = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
 
-      bool is_same_day = (dt.day_of_year == current_day_of_year && dt.year == current_year);
+      // Calculate which period this deal belongs to
+      long deal_period_index = (long)(deal_time - anchor_time) / period_seconds;
 
-      if (!is_same_day)
+      if (deal_period_index != current_period_index)
       {
-         // Day changed. Process previous day.
-         if (current_day_profit > InpMinDailyProfit)
+         // Period changed. Check profit of the completed period.
+         if (current_period_profit > InpMinDailyProfit)
          {
-            profitable_days_count += 1.0;
+            profitable_periods_count += 1.0;
          }
 
-         // Reset for new day
-         current_day_profit = 0.0;
-         current_day_of_year = dt.day_of_year;
-         current_year = dt.year;
+         // Reset for new period
+         current_period_profit = 0.0;
+         current_period_index = deal_period_index;
       }
 
       double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
       double swap = HistoryDealGetDouble(ticket, DEAL_SWAP);
       double comm = HistoryDealGetDouble(ticket, DEAL_COMMISSION);
 
-      current_day_profit += (profit + swap + comm);
+      current_period_profit += (profit + swap + comm);
    }
 
-   // Process the last day
-   if (current_day_profit > InpMinDailyProfit)
+   // Process the final period
+   if (current_period_profit > InpMinDailyProfit)
    {
-      profitable_days_count += 1.0;
+      profitable_periods_count += 1.0;
    }
 
-   return profitable_days_count;
+   return profitable_periods_count;
 }
