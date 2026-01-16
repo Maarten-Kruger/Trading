@@ -6,8 +6,8 @@ import math
 from itertools import product
 
 # Configuration
-INPUT_DIR = "OptimizationResults"  # Relative to this script, or absolute
-REQUIRED_GRID_SIDE = 3  # Corresponds to Radius = 1 (1 step up, 1 step down) -> 3 points total per axis
+INPUT_DIR = "C:\\Users\\Maarten\\OneDrive\\Desktop\\Excel"  # Relative to this script, or absolute
+REQUIRED_GRID_SIDE = 5  # Corresponds to Radius = 1 (1 step up, 1 step down) -> 3 points total per axis
 
 def main():
     # Determine the directory relative to the script
