@@ -9,7 +9,7 @@ import io
 import base64
 
 # Configuration
-INPUT_DIR = "OptimizationResults"  # Relative to this script, or absolute
+INPUT_DIR = "C:\\Users\\Maarten\\OneDrive\\Desktop\\Excel"  # Relative to this script, or absolute
 REQUIRED_GRID_SIDE = 5  # Corresponds to Radius = 1 (1 step up, 1 step down) -> 3 points total per axis
 
 def main():
