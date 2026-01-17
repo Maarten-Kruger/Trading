@@ -3,7 +3,7 @@ import numpy as np
 import os
 import glob
 import math
-from itertools import product
+from itertools import product, combinations
 import matplotlib.pyplot as plt
 import io
 import base64
@@ -59,7 +59,7 @@ def main():
         best_res = f"{res['result']:.2f}"
         profit = f"{res['profit']:.2f}"
 
-        if res['radius_inc'] != "N/A":
+        if res.get('radius_inc') != "N/A":
              inc_dec = f"+{res['radius_inc']}/-{res['radius_dec']}"
         else:
              inc_dec = "N/A"
@@ -310,77 +310,108 @@ def process_file(file_path, results_table):
         print("  No suitable data found.")
         return
 
-    # 2. Plotting: Robustness Graph (1D Slices)
-    robustness_b64 = None
+    # 2. Plotting: Heatmaps (Replacing 1D Slices)
+    heatmaps_b64 = []
 
-    if varying_cols:
-        num_vars = len(varying_cols)
-        cols = min(num_vars, 3)
-        rows = math.ceil(num_vars / cols)
+    if varying_cols and len(varying_cols) >= 2:
+        pairs = list(combinations(varying_cols, 2))
 
-        # Robustness Plots
-        fig_rob, axes_rob = plt.subplots(rows, cols, figsize=(5*cols, 4*rows))
-        if num_vars == 1: axes_rob = [axes_rob]
-        elif isinstance(axes_rob, np.ndarray): axes_rob = axes_rob.flatten()
-        else: axes_rob = [axes_rob]
+        # Limit number of plots if too many variables?
+        # For now, plot all combinations as requested.
 
-        center = best_candidate.get('center_coord', ())
-        coord_map = best_candidate.get('coord_map', {})
-        robust_1d = best_candidate.get('robustness_1d', {})
+        for col1, col2 in pairs:
+            # Create a dedicated figure for each heatmap
+            fig, ax = plt.subplots(figsize=(6, 5))
 
-        for i, col in enumerate(varying_cols):
-            ax = axes_rob[i]
-
-            # Extract 1D slice data
-            x_vals = []
-            y_vals = []
-
-            # Filter criteria
+            # Filter DF: other cols fixed to best params
             mask = np.ones(len(df), dtype=bool)
             for other_col in varying_cols:
-                if other_col == col: continue
+                if other_col in [col1, col2]: continue
                 target_val = best_candidate['params'][other_col]
+                # Use isclose for float comparison safety
                 mask = mask & (np.isclose(df[other_col], target_val))
 
-            slice_df = df[mask].sort_values(by=col)
+            slice_df = df[mask]
 
             if not slice_df.empty:
-                x_vals = slice_df[col].values
-                y_vals = slice_df['Profit'].values
+                # Create Pivot Table
+                try:
+                    # Drop duplicates if any (though typically shouldn't be for fixed params)
+                    # Use mean aggregation just in case
+                    pivot = slice_df.pivot_table(index=col2, columns=col1, values='Profit', aggfunc='mean')
 
-                # Plot the curve
-                ax.plot(x_vals, y_vals, marker='o', markersize=4, linestyle='-', color='royalblue')
+                    # Sort index/columns to ensure correct plotting
+                    pivot = pivot.sort_index(axis=0, ascending=True) # Y-axis (col2)
+                    pivot = pivot.sort_index(axis=1, ascending=True) # X-axis (col1)
 
-                # Highlight best point
-                best_val = best_candidate['params'][col]
-                best_profit = best_candidate['profit']
-                ax.plot(best_val, best_profit, marker='*', markersize=10, color='gold', markeredgecolor='black', zorder=5)
+                    x_vals = pivot.columns.values
+                    y_vals = pivot.index.values
 
-                # Shading Logic: Use 1D calculated Robustness
-                inc_steps = robust_1d.get(col, {}).get('inc', 0)
-                dec_steps = robust_1d.get(col, {}).get('dec', 0)
-                step_size = step_sizes[col]
+                    # Plot Heatmap
+                    im = ax.imshow(pivot.values, cmap='RdYlGn', origin='lower', aspect='auto')
 
-                x_start = best_val - dec_steps * step_size
-                x_end = best_val + inc_steps * step_size
+                    # Set ticks and labels
+                    ax.set_xticks(np.arange(len(x_vals)))
+                    ax.set_yticks(np.arange(len(y_vals)))
+                    ax.set_xticklabels([f"{v:g}" for v in x_vals], rotation=45, ha='right')
+                    ax.set_yticklabels([f"{v:g}" for v in y_vals])
 
-                ax.axvspan(x_start, x_end, color='green', alpha=0.15, label='Robust Region')
+                    ax.set_xlabel(col1)
+                    ax.set_ylabel(col2)
+                    ax.set_title(f"Profit Heatmap: {col1} vs {col2}")
 
-                # Annotate
-                ax.text(best_val, best_profit, f" +{inc_steps}\n -{dec_steps}",
-                        ha='left', va='bottom', fontsize=9, fontweight='bold', color='darkgreen')
+                    # Add colorbar
+                    plt.colorbar(im, ax=ax, label='Profit')
 
-                ax.set_title(f"Robustness: {col}")
-                ax.set_xlabel(col)
-                ax.set_ylabel("Profit")
-                ax.grid(True, linestyle=':', alpha=0.6)
+                    # Highlight Best Point
+                    best_x = best_candidate['params'][col1]
+                    best_y = best_candidate['params'][col2]
+
+                    # Find indices
+                    try:
+                        x_idx = np.where(np.isclose(x_vals, best_x))[0][0]
+                        y_idx = np.where(np.isclose(y_vals, best_y))[0][0]
+
+                        # Draw a rectangle or marker around the best cell
+                        # rect = plt.Rectangle((x_idx - 0.5, y_idx - 0.5), 1, 1, fill=False, edgecolor='blue', lw=2)
+                        # ax.add_patch(rect)
+                        # Or simple marker
+                        ax.plot(x_idx, y_idx, marker='*', color='blue', markersize=10, markeredgecolor='white')
+                    except IndexError:
+                        pass # Should typically not happen if data is consistent
+
+                except Exception as e:
+                    ax.text(0.5, 0.5, f"Error: {str(e)}", ha='center', va='center')
             else:
-                ax.text(0.5, 0.5, "No Slice Data", ha='center')
+                ax.text(0.5, 0.5, "No Data for Slice", ha='center', va='center')
 
-        for j in range(i+1, len(axes_rob)): axes_rob[j].axis('off')
+            plt.tight_layout()
+            heatmaps_b64.append(plot_to_base64(fig))
+            plt.close(fig)
+
+    elif varying_cols and len(varying_cols) == 1:
+        # Fallback for 1 variable: Keep the 1D plot or similar?
+        # User requested replacing "Robustness Analysis (1D Slices)" with heatmaps.
+        # But if only 1 variable, can't make heatmap.
+        # I'll re-implement a simple 1D plot just for this case, or leave it empty/note.
+        # Let's re-implement the 1D plot logic JUST for the single variable case.
+        col = varying_cols[0]
+        fig, ax = plt.subplots(figsize=(6, 4))
+        slice_df = df.sort_values(by=col)
+        ax.plot(slice_df[col], slice_df['Profit'], marker='o')
+        best_val = best_candidate['params'][col]
+        best_profit = best_candidate['profit']
+        ax.plot(best_val, best_profit, marker='*', markersize=12, color='gold', markeredgecolor='black')
+        ax.set_title(f"Profit vs {col}")
+        ax.set_xlabel(col)
+        ax.set_ylabel("Profit")
+        ax.grid(True)
         plt.tight_layout()
-        robustness_b64 = plot_to_base64(fig_rob)
-        plt.close(fig_rob)
+        heatmaps_b64.append(plot_to_base64(fig))
+        plt.close(fig)
+
+    best_candidate['heatmaps'] = heatmaps_b64
+    best_candidate['robustness_plot'] = None # Replaced
 
     # Violin Plot (Unchanged)
     violin_b64 = None
@@ -420,7 +451,6 @@ def process_file(file_path, results_table):
         except Exception as e:
             print(f"Error generating violin plot: {e}")
 
-    best_candidate['robustness_plot'] = robustness_b64
     best_candidate['violin_plot'] = violin_b64
 
     # Remove large objects
@@ -635,13 +665,16 @@ def export_to_html(results_table, filename="Optimization_Report.html"):
                 <h3>{file_name}</h3>
                 <div class="plot-container">
         """
-        if res['robustness_plot']:
-            html_content += f"""
+
+        # HEATMAPS
+        if res.get('heatmaps'):
+            for hm_b64 in res['heatmaps']:
+                 html_content += f"""
                     <div class="plot-box">
-                        <h4>Robustness Analysis (1D Slices)</h4>
-                        <img src="data:image/png;base64,{res['robustness_plot']}" alt="Robustness Plot for {file_name}">
+                        <img src="data:image/png;base64,{hm_b64}" alt="Heatmap for {file_name}">
                     </div>
-            """
+                """
+
         if res['violin_plot']:
              html_content += f"""
                     <div class="plot-box">
