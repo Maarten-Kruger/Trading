@@ -40,13 +40,63 @@ def main():
 
     excel_files.sort(key=sort_key)
 
-    results_table = []
+    # PHASE 1: Load all files and determine Global Parameter Ranges
+    files_data = []
+    global_param_values = {} # {col_name: sorted_unique_values_list}
 
+    print("Loading files and scanning parameter ranges...")
     for file_path in excel_files:
         try:
-            process_file(file_path, results_table)
+            # Load Data
+            try:
+                df = pd.read_excel(file_path)
+            except Exception:
+                df = pd.read_excel(file_path, engine='openpyxl')
+
+            # Clean numeric columns
+            for col in df.columns:
+                if df[col].dtype == 'object':
+                    try:
+                        df[col] = df[col].astype(str).str.replace(',', '.').astype(float)
+                    except ValueError:
+                        pass
+
+            # Identify Variables
+            try:
+                trades_idx = df.columns.get_loc("Trades")
+                var_cols = df.columns[trades_idx+1:].tolist()
+            except KeyError:
+                print(f"Skipping {os.path.basename(file_path)}: 'Trades' column not found.")
+                continue
+
+            # Update Global Params
+            for col in var_cols:
+                unique_vals = df[col].dropna().unique()
+                if col not in global_param_values:
+                    global_param_values[col] = set()
+                global_param_values[col].update(unique_vals)
+
+            files_data.append({
+                'path': file_path,
+                'df': df,
+                'var_cols': var_cols
+            })
+
         except Exception as e:
-            print(f"Error processing {file_path}: {e}")
+            print(f"Error loading {file_path}: {e}")
+
+    # Sort global param values
+    for col in global_param_values:
+        global_param_values[col] = sorted(list(global_param_values[col]))
+
+    # PHASE 2: Process each file using Global Ranges
+    results_table = []
+
+    for fdata in files_data:
+        try:
+            process_file_data(fdata, global_param_values, results_table)
+        except Exception as e:
+            print(f"Error processing {fdata['path']}: {e}")
             import traceback
             traceback.print_exc()
 
@@ -83,7 +133,7 @@ def main():
         print(f"{file_name[:29]:<30} | {best_res:<11} | {profit:<10} | {inc_dec:<8} | {neigh_prof:<18} | {vars_str}")
     print("="*120 + "\n")
 
-    export_to_html(results_table)
+    export_to_html(results_table, global_param_values)
 
 def plot_to_base64(fig):
     buf = io.BytesIO()
@@ -129,35 +179,18 @@ def calculate_1d_robustness(center_coord, varying_cols, coord_map):
 
     return robustness
 
-def process_file(file_path, results_table):
-    print(f"Processing {file_path}...")
+def process_file_data(file_data, global_param_values, results_table):
+    file_path = file_data['path']
+    df = file_data['df']
+    var_cols = file_data['var_cols']
 
-    try:
-        df = pd.read_excel(file_path)
-    except Exception:
-        df = pd.read_excel(file_path, engine='openpyxl')
-
-    # Convert comma decimals to float
-    for col in df.columns:
-        if df[col].dtype == 'object':
-            try:
-                df[col] = df[col].astype(str).str.replace(',', '.').astype(float)
-            except ValueError:
-                pass
-
-    # Identify variable columns
-    try:
-        trades_idx = df.columns.get_loc("Trades")
-        var_cols = df.columns[trades_idx+1:].tolist()
-    except KeyError:
-        print("Column 'Trades' not found. Skipping file.")
-        return
+    print(f"Processing {os.path.basename(file_path)}...")
 
     if not var_cols:
         print("No variable columns found.")
         return
 
-    # Determine step sizes and identify varying columns
+    # Determine step sizes and identify varying columns (local check)
     step_sizes = {}
     varying_cols = []
 
@@ -198,7 +231,6 @@ def process_file(file_path, results_table):
             'robustness_1d': {},
             'coord_map': {},
             'center_coord': (),
-            'df': df,
             'varying_cols': varying_cols
         }
     else:
@@ -247,7 +279,6 @@ def process_file(file_path, results_table):
                     'robustness_1d': robust_1d,
                     'coord_map': coord_map,
                     'center_coord': coord,
-                    'df': df,
                     'varying_cols': varying_cols
                 }
                 break
@@ -280,7 +311,6 @@ def process_file(file_path, results_table):
                         'robustness_1d': robust_1d,
                         'coord_map': coord_map,
                         'center_coord': coord,
-                        'df': df,
                         'varying_cols': varying_cols
                     }
                 elif min_dim == max_found_min_dim and best_fallback is None:
@@ -301,7 +331,6 @@ def process_file(file_path, results_table):
                         'robustness_1d': robust_1d,
                         'coord_map': coord_map,
                         'center_coord': coord,
-                        'df': df,
                         'varying_cols': varying_cols
                     }
             best_candidate = best_fallback
@@ -310,14 +339,11 @@ def process_file(file_path, results_table):
         print("  No suitable data found.")
         return
 
-    # 2. Plotting: Heatmaps (Replacing 1D Slices)
+    # 2. Plotting: Heatmaps (Using Global Ranges)
     heatmaps_b64 = []
 
     if varying_cols and len(varying_cols) >= 2:
         pairs = list(combinations(varying_cols, 2))
-
-        # Limit number of plots if too many variables?
-        # For now, plot all combinations as requested.
 
         for col1, col2 in pairs:
             # Create a dedicated figure for each heatmap
@@ -328,33 +354,30 @@ def process_file(file_path, results_table):
             for other_col in varying_cols:
                 if other_col in [col1, col2]: continue
                 target_val = best_candidate['params'][other_col]
-                # Use isclose for float comparison safety
                 mask = mask & (np.isclose(df[other_col], target_val))
 
             slice_df = df[mask]
 
             if not slice_df.empty:
-                # Create Pivot Table
                 try:
-                    # Drop duplicates if any (though typically shouldn't be for fixed params)
-                    # Use mean aggregation just in case
+                    # Global Axis Ranges
+                    x_vals_global = global_param_values.get(col1, sorted(df[col1].unique()))
+                    y_vals_global = global_param_values.get(col2, sorted(df[col2].unique()))
+
+                    # Create Pivot Table
                     pivot = slice_df.pivot_table(index=col2, columns=col1, values='Profit', aggfunc='mean')
 
-                    # Sort index/columns to ensure correct plotting
-                    pivot = pivot.sort_index(axis=0, ascending=True) # Y-axis (col2)
-                    pivot = pivot.sort_index(axis=1, ascending=True) # X-axis (col1)
-
-                    x_vals = pivot.columns.values
-                    y_vals = pivot.index.values
+                    # REINDEX to Global Range
+                    pivot = pivot.reindex(index=y_vals_global, columns=x_vals_global)
 
                     # Plot Heatmap
                     im = ax.imshow(pivot.values, cmap='RdYlGn', origin='lower', aspect='auto')
 
                     # Set ticks and labels
-                    ax.set_xticks(np.arange(len(x_vals)))
-                    ax.set_yticks(np.arange(len(y_vals)))
-                    ax.set_xticklabels([f"{v:g}" for v in x_vals], rotation=45, ha='right')
-                    ax.set_yticklabels([f"{v:g}" for v in y_vals])
+                    ax.set_xticks(np.arange(len(x_vals_global)))
+                    ax.set_yticks(np.arange(len(y_vals_global)))
+                    ax.set_xticklabels([f"{v:g}" for v in x_vals_global], rotation=45, ha='right')
+                    ax.set_yticklabels([f"{v:g}" for v in y_vals_global])
 
                     ax.set_xlabel(col1)
                     ax.set_ylabel(col2)
@@ -367,18 +390,15 @@ def process_file(file_path, results_table):
                     best_x = best_candidate['params'][col1]
                     best_y = best_candidate['params'][col2]
 
-                    # Find indices
                     try:
-                        x_idx = np.where(np.isclose(x_vals, best_x))[0][0]
-                        y_idx = np.where(np.isclose(y_vals, best_y))[0][0]
+                        # Find indices in the GLOBAL list
+                        x_idx = x_vals_global.index(best_x) if best_x in x_vals_global else -1
+                        y_idx = y_vals_global.index(best_y) if best_y in y_vals_global else -1
 
-                        # Draw a rectangle or marker around the best cell
-                        # rect = plt.Rectangle((x_idx - 0.5, y_idx - 0.5), 1, 1, fill=False, edgecolor='blue', lw=2)
-                        # ax.add_patch(rect)
-                        # Or simple marker
-                        ax.plot(x_idx, y_idx, marker='*', color='blue', markersize=10, markeredgecolor='white')
-                    except IndexError:
-                        pass # Should typically not happen if data is consistent
+                        if x_idx != -1 and y_idx != -1:
+                            ax.plot(x_idx, y_idx, marker='*', color='blue', markersize=10, markeredgecolor='white')
+                    except ValueError:
+                        pass
 
                 except Exception as e:
                     ax.text(0.5, 0.5, f"Error: {str(e)}", ha='center', va='center')
@@ -390,15 +410,22 @@ def process_file(file_path, results_table):
             plt.close(fig)
 
     elif varying_cols and len(varying_cols) == 1:
-        # Fallback for 1 variable: Keep the 1D plot or similar?
-        # User requested replacing "Robustness Analysis (1D Slices)" with heatmaps.
-        # But if only 1 variable, can't make heatmap.
-        # I'll re-implement a simple 1D plot just for this case, or leave it empty/note.
-        # Let's re-implement the 1D plot logic JUST for the single variable case.
+        # Fallback 1D Plot for single variable (Using Global Range)
         col = varying_cols[0]
         fig, ax = plt.subplots(figsize=(6, 4))
         slice_df = df.sort_values(by=col)
-        ax.plot(slice_df[col], slice_df['Profit'], marker='o')
+
+        # Get Global Range
+        x_vals_global = global_param_values.get(col, sorted(slice_df[col].unique()))
+
+        ax.plot(slice_df[col], slice_df['Profit'], marker='o', linestyle='-')
+
+        # Set Global Limits
+        if x_vals_global:
+            min_x, max_x = min(x_vals_global), max(x_vals_global)
+            margin = (max_x - min_x) * 0.05 if max_x > min_x else 1
+            ax.set_xlim(min_x - margin, max_x + margin)
+
         best_val = best_candidate['params'][col]
         best_profit = best_candidate['profit']
         ax.plot(best_val, best_profit, marker='*', markersize=12, color='gold', markeredgecolor='black')
@@ -411,9 +438,9 @@ def process_file(file_path, results_table):
         plt.close(fig)
 
     best_candidate['heatmaps'] = heatmaps_b64
-    best_candidate['robustness_plot'] = None # Replaced
+    best_candidate['robustness_plot'] = None
 
-    # Violin Plot (Unchanged)
+    # Violin Plot (Using Global Ranges)
     violin_b64 = None
     if varying_cols:
         num_vars = len(varying_cols)
@@ -428,17 +455,42 @@ def process_file(file_path, results_table):
 
             for i, col in enumerate(varying_cols):
                 ax = axes_violin[i]
-                unique_vals = sorted(df[col].unique())
-                data_to_plot = [df[df[col] == val]['Profit'].values for val in unique_vals]
 
-                parts = ax.violinplot(data_to_plot, showmeans=False, showmedians=True)
-                for pc in parts['bodies']:
-                    pc.set_facecolor('indianred')
-                    pc.set_edgecolor('black')
-                    pc.set_alpha(0.7)
+                # Use GLOBAL Unique Values for Axis
+                global_vals = global_param_values.get(col, sorted(df[col].unique()))
 
-                ax.set_xticks(range(1, len(unique_vals) + 1))
-                ax.set_xticklabels([str(v) for v in unique_vals], rotation=45, ha='right')
+                data_to_plot = []
+                for val in global_vals:
+                    # Get profit distribution for this value
+                    subset = df[df[col] == val]['Profit'].values
+                    if len(subset) > 0:
+                        data_to_plot.append(subset)
+                    else:
+                        data_to_plot.append([]) # Empty for missing data
+
+                # Violinplot doesn't like empty lists inside the data list nicely usually,
+                # but let's try or filter index
+                # Actually, filtering out empty ones but keeping positions is better
+
+                valid_data = []
+                valid_positions = []
+                for idx, d in enumerate(data_to_plot):
+                    if len(d) > 0:
+                        valid_data.append(d)
+                        valid_positions.append(idx + 1) # 1-based index
+
+                if valid_data:
+                    parts = ax.violinplot(valid_data, positions=valid_positions, showmeans=False, showmedians=True)
+                    for pc in parts['bodies']:
+                        pc.set_facecolor('indianred')
+                        pc.set_edgecolor('black')
+                        pc.set_alpha(0.7)
+
+                # Set ticks for ALL global values
+                ax.set_xticks(range(1, len(global_vals) + 1))
+                ax.set_xticklabels([str(v) for v in global_vals], rotation=45, ha='right')
+                ax.set_xlim(0.5, len(global_vals) + 0.5)
+
                 ax.set_title(f"Profit Dist. by {col}")
                 ax.set_xlabel(col)
                 ax.set_ylabel("Profit")
@@ -450,12 +502,15 @@ def process_file(file_path, results_table):
             plt.close(fig_violin)
         except Exception as e:
             print(f"Error generating violin plot: {e}")
+            import traceback
+            traceback.print_exc()
 
     best_candidate['violin_plot'] = violin_b64
 
     # Remove large objects
-    if 'df' in best_candidate: del best_candidate['df']
     if 'coord_map' in best_candidate: del best_candidate['coord_map']
+    # keep 'df' only if needed, usually not needed after plotting
+    # del best_candidate['df']
 
     results_table.append(best_candidate)
 
@@ -501,16 +556,13 @@ def get_box_stats(center_coord, inc, dec, coord_map):
     if not profits: return None, None
     return min(profits), max(profits)
 
-def export_to_html(results_table, filename="Optimization_Report.html"):
+def export_to_html(results_table, global_param_values, filename="Optimization_Report.html"):
     if not results_table:
         print("No results to export.")
         return
 
     # 1. Generate Evolution Plot (Overall)
-    all_vars = set()
-    for res in results_table:
-        all_vars.update(res['params'].keys())
-    all_vars = sorted(list(all_vars))
+    all_vars = sorted(list(global_param_values.keys()))
 
     evolution_plot_b64 = None
     if all_vars:
@@ -529,12 +581,23 @@ def export_to_html(results_table, filename="Optimization_Report.html"):
         for i, var in enumerate(all_vars):
             ax = axes[i]
             values, lower_bounds, upper_bounds, valid_indices = [], [], [], []
+
+            # Global Y-Limits for consistency?
+            # User asked for Heatmap/Violin alignment.
+            # Evolution plot is separate, but having consistent Y might be nice.
+            # But the value IS the Y axis here.
+            # Let's keep it auto-scaled or loosely bounded by global min/max of that var.
+            global_vals = global_param_values[var]
+            if global_vals:
+                min_g, max_g = min(global_vals), max(global_vals)
+                margin = (max_g - min_g) * 0.1 if max_g != min_g else 1
+                ax.set_ylim(min_g - margin, max_g + margin)
+
             for idx, res in enumerate(results_table):
                 if var in res['params']:
                     val = res['params'][var]
                     step = res['step_sizes'].get(var, 0)
 
-                    # Use per-variable robustness if available, else global box, else 0
                     if 'robustness_1d' in res and var in res['robustness_1d']:
                         inc = res['robustness_1d'][var]['inc']
                         dec = res['robustness_1d'][var]['dec']
