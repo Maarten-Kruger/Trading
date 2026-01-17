@@ -340,14 +340,14 @@ def process_file_data(file_data, global_param_values, results_table):
         return
 
     # 2. Plotting: Heatmaps (Using Global Ranges)
-    heatmaps_b64 = []
+    heatmaps_dict = {}
 
     if varying_cols and len(varying_cols) >= 2:
         pairs = list(combinations(varying_cols, 2))
 
         for col1, col2 in pairs:
             # Create a dedicated figure for each heatmap
-            fig, ax = plt.subplots(figsize=(6, 5))
+            fig, ax = plt.subplots(figsize=(5, 4))
 
             # Filter DF: other cols fixed to best params
             mask = np.ones(len(df), dtype=bool)
@@ -406,56 +406,23 @@ def process_file_data(file_data, global_param_values, results_table):
                 ax.text(0.5, 0.5, "No Data for Slice", ha='center', va='center')
 
             plt.tight_layout()
-            heatmaps_b64.append(plot_to_base64(fig))
+
+            # Store by pair tuple
+            # Key should be sorted tuple for consistency or just as iterated
+            # We'll stick to (col1, col2) as keys
+            heatmaps_dict[(col1, col2)] = plot_to_base64(fig)
             plt.close(fig)
 
-    elif varying_cols and len(varying_cols) == 1:
-        # Fallback 1D Plot for single variable (Using Global Range)
-        col = varying_cols[0]
-        fig, ax = plt.subplots(figsize=(6, 4))
-        slice_df = df.sort_values(by=col)
+    best_candidate['heatmaps_dict'] = heatmaps_dict
 
-        # Get Global Range
-        x_vals_global = global_param_values.get(col, sorted(slice_df[col].unique()))
+    # Violin Plot (Individual Plots per Variable)
+    violin_plots_dict = {}
 
-        ax.plot(slice_df[col], slice_df['Profit'], marker='o', linestyle='-')
-
-        # Set Global Limits
-        if x_vals_global:
-            min_x, max_x = min(x_vals_global), max(x_vals_global)
-            margin = (max_x - min_x) * 0.05 if max_x > min_x else 1
-            ax.set_xlim(min_x - margin, max_x + margin)
-
-        best_val = best_candidate['params'][col]
-        best_profit = best_candidate['profit']
-        ax.plot(best_val, best_profit, marker='*', markersize=12, color='gold', markeredgecolor='black')
-        ax.set_title(f"Profit vs {col}")
-        ax.set_xlabel(col)
-        ax.set_ylabel("Profit")
-        ax.grid(True)
-        plt.tight_layout()
-        heatmaps_b64.append(plot_to_base64(fig))
-        plt.close(fig)
-
-    best_candidate['heatmaps'] = heatmaps_b64
-    best_candidate['robustness_plot'] = None
-
-    # Violin Plot (Using Global Ranges)
-    violin_b64 = None
     if varying_cols:
-        num_vars = len(varying_cols)
-        cols = min(num_vars, 3)
-        rows = math.ceil(num_vars / cols)
+        for col in varying_cols:
+            fig, ax = plt.subplots(figsize=(5, 4))
 
-        try:
-            fig_violin, axes_violin = plt.subplots(rows, cols, figsize=(6*cols, 5*rows))
-            if num_vars == 1: axes_violin = [axes_violin]
-            elif isinstance(axes_violin, np.ndarray): axes_violin = axes_violin.flatten()
-            else: axes_violin = [axes_violin]
-
-            for i, col in enumerate(varying_cols):
-                ax = axes_violin[i]
-
+            try:
                 # Use GLOBAL Unique Values for Axis
                 global_vals = global_param_values.get(col, sorted(df[col].unique()))
 
@@ -466,11 +433,7 @@ def process_file_data(file_data, global_param_values, results_table):
                     if len(subset) > 0:
                         data_to_plot.append(subset)
                     else:
-                        data_to_plot.append([]) # Empty for missing data
-
-                # Violinplot doesn't like empty lists inside the data list nicely usually,
-                # but let's try or filter index
-                # Actually, filtering out empty ones but keeping positions is better
+                        data_to_plot.append([]) # Empty
 
                 valid_data = []
                 valid_positions = []
@@ -496,21 +459,17 @@ def process_file_data(file_data, global_param_values, results_table):
                 ax.set_ylabel("Profit")
                 ax.grid(True, axis='y', linestyle=':', alpha=0.6)
 
-            for j in range(i+1, len(axes_violin)): axes_violin[j].axis('off')
-            plt.tight_layout()
-            violin_b64 = plot_to_base64(fig_violin)
-            plt.close(fig_violin)
-        except Exception as e:
-            print(f"Error generating violin plot: {e}")
-            import traceback
-            traceback.print_exc()
+            except Exception as e:
+                ax.text(0.5, 0.5, f"Error: {str(e)}", ha='center', va='center')
 
-    best_candidate['violin_plot'] = violin_b64
+            plt.tight_layout()
+            violin_plots_dict[col] = plot_to_base64(fig)
+            plt.close(fig)
+
+    best_candidate['violin_plots_dict'] = violin_plots_dict
 
     # Remove large objects
     if 'coord_map' in best_candidate: del best_candidate['coord_map']
-    # keep 'df' only if needed, usually not needed after plotting
-    # del best_candidate['df']
 
     results_table.append(best_candidate)
 
@@ -582,11 +541,6 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
             ax = axes[i]
             values, lower_bounds, upper_bounds, valid_indices = [], [], [], []
 
-            # Global Y-Limits for consistency?
-            # User asked for Heatmap/Violin alignment.
-            # Evolution plot is separate, but having consistent Y might be nice.
-            # But the value IS the Y axis here.
-            # Let's keep it auto-scaled or loosely bounded by global min/max of that var.
             global_vals = global_param_values[var]
             if global_vals:
                 min_g, max_g = min(global_vals), max(global_vals)
@@ -646,8 +600,9 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
             tr:nth-child(even) {{ background-color: #f9f9f9; }}
             .section {{ margin-bottom: 40px; border-bottom: 2px solid #eee; padding-bottom: 20px; }}
             img {{ max-width: 100%; height: auto; border: 1px solid #ddd; padding: 5px; box-shadow: 2px 2px 5px rgba(0,0,0,0.1); }}
-            .plot-container {{ display: flex; flex-wrap: wrap; gap: 20px; }}
-            .plot-box {{ flex: 1 1 45%; min-width: 400px; }}
+            .plot-container {{ display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }}
+            .plot-box {{ flex: 0 0 auto; margin-bottom: 20px; border: 1px solid #eee; padding: 10px; }}
+            .plot-box h4 {{ text-align: center; margin: 5px 0; font-size: 0.9em; }}
             .variables {{ white-space: pre-wrap; font-family: monospace; font-size: 0.9em; }}
         </style>
     </head>
@@ -718,37 +673,71 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
         </div>
 
         <div class="section">
-            <h2>Detailed Analysis per File</h2>
+            <h2>Detailed Analysis: Grouped by Variable</h2>
     """
 
-    for res in results_table:
-        file_name = os.path.basename(res['file'])
-        html_content += f"""
-            <div class="section">
-                <h3>{file_name}</h3>
-                <div class="plot-container">
-        """
+    # SECTION 3: Variable Distributions (Violin Plots)
+    # Group by Variable
+    html_content += "<h3>Distribution Analysis (Violin Plots)</h3>"
 
-        # HEATMAPS
-        if res.get('heatmaps'):
-            for hm_b64 in res['heatmaps']:
-                 html_content += f"""
+    for var in all_vars:
+        html_content += f"<h4>Variable: {var}</h4>"
+        html_content += '<div class="plot-container">'
+
+        has_plots = False
+        for res in results_table:
+            file_name = os.path.basename(res['file'])
+            # Check if this file has a plot for this variable
+            if 'violin_plots_dict' in res and var in res['violin_plots_dict']:
+                img_b64 = res['violin_plots_dict'][var]
+                html_content += f"""
                     <div class="plot-box">
-                        <img src="data:image/png;base64,{hm_b64}" alt="Heatmap for {file_name}">
+                        <h4>{file_name}</h4>
+                        <img src="data:image/png;base64,{img_b64}" alt="Violin {var} {file_name}">
                     </div>
                 """
+                has_plots = True
 
-        if res['violin_plot']:
-             html_content += f"""
-                    <div class="plot-box">
-                        <h4>Profit Distribution (Violin)</h4>
-                        <img src="data:image/png;base64,{res['violin_plot']}" alt="Violin Plot for {file_name}">
-                    </div>
-            """
-        html_content += """
-                </div>
-            </div>
-        """
+        if not has_plots:
+            html_content += "<p>No distribution data for this variable.</p>"
+
+        html_content += '</div>' # End plot-container
+
+    # SECTION 4: 2D Heatmaps
+    # Collect all pairs found across all files
+    all_pairs = set()
+    for res in results_table:
+        if 'heatmaps_dict' in res:
+            all_pairs.update(res['heatmaps_dict'].keys())
+
+    # Sort pairs for consistent order
+    sorted_pairs = sorted(list(all_pairs))
+
+    if sorted_pairs:
+        html_content += "<h3>Interaction Analysis (2D Heatmaps)</h3>"
+
+        for pair in sorted_pairs:
+            var1, var2 = pair
+            html_content += f"<h4>Interaction: {var1} vs {var2}</h4>"
+            html_content += '<div class="plot-container">'
+
+            has_plots = False
+            for res in results_table:
+                file_name = os.path.basename(res['file'])
+                if 'heatmaps_dict' in res and pair in res['heatmaps_dict']:
+                    img_b64 = res['heatmaps_dict'][pair]
+                    html_content += f"""
+                        <div class="plot-box">
+                            <h4>{file_name}</h4>
+                            <img src="data:image/png;base64,{img_b64}" alt="Heatmap {var1}v{var2} {file_name}">
+                        </div>
+                    """
+                    has_plots = True
+
+            if not has_plots:
+                html_content += "<p>No interaction data for this pair.</p>"
+
+            html_content += '</div>'
 
     html_content += """
         </div>
