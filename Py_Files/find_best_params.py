@@ -4,9 +4,11 @@ import os
 import glob
 import math
 from itertools import product
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 # Configuration
-INPUT_DIR = "C:\\Users\\Maarten\\OneDrive\\Desktop\\Excel"  # Relative to this script, or absolute
+INPUT_DIR = "OptimizationResults"  # Relative to this script, or absolute
 REQUIRED_GRID_SIDE = 5  # Corresponds to Radius = 1 (1 step up, 1 step down) -> 3 points total per axis
 
 def main():
@@ -59,6 +61,133 @@ def main():
         vars_str = ", ".join(vars_parts)
         print(f"{file_name[:29]:<30} | {best_res:<11} | {profit:<10} | {radius:<6} | {neigh_prof:<18} | {vars_str}")
     print("="*120 + "\n")
+
+    export_to_pdf(results_table)
+
+def export_to_pdf(results_table, filename="Optimization_Report.pdf"):
+    if not results_table:
+        print("No results to export.")
+        return
+
+    # Sort results by filename (assuming chronological order)
+    results_table.sort(key=lambda x: os.path.basename(x['file']))
+
+    with PdfPages(filename) as pdf:
+        # --- Page 1: Table ---
+        fig, ax = plt.subplots(figsize=(11.69, 8.27)) # A4 Landscape
+        ax.axis('tight')
+        ax.axis('off')
+
+        # Prepare table data
+        columns = ["File", "Best Result", "Profit", "Radius", "Neighbor Profits", "Variables"]
+        table_data = []
+
+        for res in results_table:
+            file_name = os.path.basename(res['file'])
+            best_res = f"{res['result']:.2f}"
+            profit = f"{res['profit']:.2f}"
+            radius = str(res['radius'])
+
+            if res['radius'] != "N/A (Fixed)" and res['min_neigh_profit'] is not None:
+                 neigh_prof = f"{res['min_neigh_profit']:.0f} - {res['max_neigh_profit']:.0f}"
+            else:
+                 neigh_prof = "N/A"
+
+            vars_parts = []
+            for k, v in res['params'].items():
+                step = res['step_sizes'].get(k, 0)
+                if step > 0:
+                    vars_parts.append(f"{k}={v} (±{step:.0f})")
+                else:
+                    vars_parts.append(f"{k}={v}")
+            vars_str = "\n".join(vars_parts) # Use newline for better fit
+
+            table_data.append([file_name, best_res, profit, radius, neigh_prof, vars_str])
+
+        the_table = ax.table(cellText=table_data, colLabels=columns, loc='center', cellLoc='left')
+        the_table.auto_set_font_size(False)
+        the_table.set_fontsize(8)
+        the_table.scale(1, 1.5)
+
+        # Adjust column widths
+        # File: 0.2, Result: 0.1, Profit: 0.1, Radius: 0.1, Neigh: 0.15, Vars: 0.35
+        col_widths = [0.2, 0.1, 0.1, 0.1, 0.15, 0.35]
+        for i, width in enumerate(col_widths):
+            for row in range(len(table_data) + 1):
+                cell = the_table[row, i]
+                cell.set_width(width)
+
+        plt.title("Optimization Results Summary", fontsize=14, fontweight='bold')
+        pdf.savefig(fig, bbox_inches='tight')
+        plt.close()
+
+        # --- Page 2+: Variable Visualization ---
+
+        # Collect all unique variable names across all files
+        all_vars = set()
+        for res in results_table:
+            all_vars.update(res['params'].keys())
+        all_vars = sorted(list(all_vars))
+
+        if not all_vars:
+            return
+
+        # Create subplots
+        num_vars = len(all_vars)
+        cols = 2
+        rows = (num_vars + 1) // 2
+
+        fig, axes = plt.subplots(rows, cols, figsize=(11.69, rows * 4))
+        axes = axes.flatten() if num_vars > 1 else [axes]
+
+        file_names = [os.path.basename(res['file']) for res in results_table]
+        x_indices = range(len(file_names))
+
+        for i, var in enumerate(all_vars):
+            ax = axes[i]
+
+            values = []
+            lower_bounds = []
+            upper_bounds = []
+            valid_indices = []
+
+            for idx, res in enumerate(results_table):
+                if var in res['params']:
+                    val = res['params'][var]
+                    step = res['step_sizes'].get(var, 0)
+                    radius = res['radius']
+
+                    if isinstance(radius, (int, float)):
+                        r = radius
+                    else:
+                        r = 0 # N/A case
+
+                    values.append(val)
+                    lower_bounds.append(val - r * step)
+                    upper_bounds.append(val + r * step)
+                    valid_indices.append(idx)
+
+            if valid_indices:
+                ax.plot(valid_indices, values, marker='o', label='Best Value', color='blue')
+                ax.fill_between(valid_indices, lower_bounds, upper_bounds, color='blue', alpha=0.2, label='Robust Region')
+
+                ax.set_xticks(valid_indices)
+                ax.set_xticklabels([file_names[j] for j in valid_indices], rotation=45, ha='right', fontsize=8)
+                ax.set_title(f"Variable: {var}")
+                ax.legend()
+                ax.grid(True, linestyle='--', alpha=0.6)
+            else:
+                ax.text(0.5, 0.5, "No Data", ha='center', va='center')
+
+        # Hide unused subplots
+        for j in range(i + 1, len(axes)):
+            axes[j].axis('off')
+
+        plt.tight_layout()
+        pdf.savefig(fig)
+        plt.close()
+
+    print(f"PDF exported to {filename}")
 
 def process_file(file_path, results_table):
     print(f"Processing {file_path}...")
