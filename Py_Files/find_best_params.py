@@ -69,9 +69,6 @@ def export_to_pdf(results_table, filename="Optimization_Report.pdf"):
         print("No results to export.")
         return
 
-    # Sort results by filename (assuming chronological order)
-    results_table.sort(key=lambda x: os.path.basename(x['file']))
-
     with PdfPages(filename) as pdf:
         # --- Page 1: Table ---
         fig, ax = plt.subplots(figsize=(11.69, 8.27)) # A4 Landscape
@@ -109,13 +106,20 @@ def export_to_pdf(results_table, filename="Optimization_Report.pdf"):
         the_table.set_fontsize(8)
         the_table.scale(1, 1.5)
 
-        # Adjust column widths
-        # File: 0.2, Result: 0.1, Profit: 0.1, Radius: 0.1, Neigh: 0.15, Vars: 0.35
+        # Adjust column widths and row heights
         col_widths = [0.2, 0.1, 0.1, 0.1, 0.15, 0.35]
         for i, width in enumerate(col_widths):
             for row in range(len(table_data) + 1):
                 cell = the_table[row, i]
                 cell.set_width(width)
+
+                # Dynamic row height for variable list
+                if row > 0: # Skip header
+                    cell_text = table_data[row-1][i]
+                    if i == 5: # Variables column
+                        num_lines = str(cell_text).count('\n') + 1
+                        current_height = cell.get_height()
+                        cell.set_height(max(current_height, num_lines * 0.04)) # Base height + per line
 
         plt.title("Optimization Results Summary", fontsize=14, fontweight='bold')
         pdf.savefig(fig, bbox_inches='tight')
@@ -138,7 +142,12 @@ def export_to_pdf(results_table, filename="Optimization_Report.pdf"):
         rows = (num_vars + 1) // 2
 
         fig, axes = plt.subplots(rows, cols, figsize=(11.69, rows * 4))
-        axes = axes.flatten() if num_vars > 1 else [axes]
+
+        # Ensure axes is always iterable (flatten if array, wrap if single)
+        if isinstance(axes, np.ndarray):
+            axes = axes.flatten()
+        else:
+            axes = [axes]
 
         file_names = [os.path.basename(res['file']) for res in results_table]
         x_indices = range(len(file_names))
