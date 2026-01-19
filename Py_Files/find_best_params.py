@@ -342,11 +342,13 @@ def process_file_data(file_data, global_param_values, results_table):
 
     # 2. Plotting: Heatmaps (Using Global Ranges)
     heatmaps_dict = {}
+    result_heatmaps_dict = {}
 
     if varying_cols and len(varying_cols) >= 2:
         pairs = list(combinations(varying_cols, 2))
 
         for col1, col2 in pairs:
+            # --- PROFIT HEATMAP ---
             # Create a dedicated figure for each heatmap
             fig, ax = plt.subplots(figsize=(5, 4))
 
@@ -407,41 +409,89 @@ def process_file_data(file_data, global_param_values, results_table):
                 ax.text(0.5, 0.5, "No Data for Slice", ha='center', va='center')
 
             plt.tight_layout()
-
-            # Store by pair tuple
-            # Key should be sorted tuple for consistency or just as iterated
-            # We'll stick to (col1, col2) as keys
             heatmaps_dict[(col1, col2)] = plot_to_base64(fig)
             plt.close(fig)
 
+            # --- RESULT HEATMAP ---
+            fig, ax = plt.subplots(figsize=(5, 4))
+
+            # (We can reuse slice_df from above as the filter logic is identical)
+
+            if not slice_df.empty:
+                try:
+                    # Global Axis Ranges (Same as above)
+                    x_vals_global = global_param_values.get(col1, sorted(df[col1].unique()))
+                    y_vals_global = global_param_values.get(col2, sorted(df[col2].unique()))
+
+                    # Create Pivot Table for RESULT
+                    pivot = slice_df.pivot_table(index=col2, columns=col1, values='Result', aggfunc='mean')
+
+                    # REINDEX to Global Range
+                    pivot = pivot.reindex(index=y_vals_global, columns=x_vals_global)
+
+                    # Plot Heatmap
+                    im = ax.imshow(pivot.values, cmap='RdYlGn', origin='lower', aspect='auto')
+
+                    # Set ticks and labels
+                    ax.set_xticks(np.arange(len(x_vals_global)))
+                    ax.set_yticks(np.arange(len(y_vals_global)))
+                    ax.set_xticklabels([f"{v:g}" for v in x_vals_global], rotation=45, ha='right')
+                    ax.set_yticklabels([f"{v:g}" for v in y_vals_global])
+
+                    ax.set_xlabel(col1)
+                    ax.set_ylabel(col2)
+                    ax.set_title(f"Result Heatmap: {col1} vs {col2}")
+
+                    # Add colorbar
+                    plt.colorbar(im, ax=ax, label='Result')
+
+                    # Highlight Best Point (Same as above)
+                    best_x = best_candidate['params'][col1]
+                    best_y = best_candidate['params'][col2]
+
+                    try:
+                        x_idx = x_vals_global.index(best_x) if best_x in x_vals_global else -1
+                        y_idx = y_vals_global.index(best_y) if best_y in y_vals_global else -1
+
+                        if x_idx != -1 and y_idx != -1:
+                            ax.plot(x_idx, y_idx, marker='*', color='blue', markersize=10, markeredgecolor='white')
+                    except ValueError:
+                        pass
+
+                except Exception as e:
+                    ax.text(0.5, 0.5, f"Error: {str(e)}", ha='center', va='center')
+            else:
+                ax.text(0.5, 0.5, "No Data for Slice", ha='center', va='center')
+
+            plt.tight_layout()
+            result_heatmaps_dict[(col1, col2)] = plot_to_base64(fig)
+            plt.close(fig)
+
+
     best_candidate['heatmaps_dict'] = heatmaps_dict
+    best_candidate['result_heatmaps_dict'] = result_heatmaps_dict
 
     # Violin Plot (Individual Plots per Variable)
     violin_plots_dict = {}
+    result_violin_plots_dict = {}
 
     if varying_cols:
         for col in varying_cols:
+            # --- PROFIT VIOLIN ---
             fig, ax = plt.subplots(figsize=(5, 4))
-
             try:
-                # Use GLOBAL Unique Values for Axis
                 global_vals = global_param_values.get(col, sorted(df[col].unique()))
-
                 data_to_plot = []
                 for val in global_vals:
-                    # Get profit distribution for this value
                     subset = df[df[col] == val]['Profit'].values
-                    if len(subset) > 0:
-                        data_to_plot.append(subset)
-                    else:
-                        data_to_plot.append([]) # Empty
+                    data_to_plot.append(subset if len(subset) > 0 else [])
 
                 valid_data = []
                 valid_positions = []
                 for idx, d in enumerate(data_to_plot):
                     if len(d) > 0:
                         valid_data.append(d)
-                        valid_positions.append(idx + 1) # 1-based index
+                        valid_positions.append(idx + 1)
 
                 if valid_data:
                     parts = ax.violinplot(valid_data, positions=valid_positions, showmeans=False, showmedians=True)
@@ -450,24 +500,57 @@ def process_file_data(file_data, global_param_values, results_table):
                         pc.set_edgecolor('black')
                         pc.set_alpha(0.7)
 
-                # Set ticks for ALL global values
                 ax.set_xticks(range(1, len(global_vals) + 1))
                 ax.set_xticklabels([str(v) for v in global_vals], rotation=45, ha='right')
                 ax.set_xlim(0.5, len(global_vals) + 0.5)
-
                 ax.set_title(f"Profit Dist. by {col}")
                 ax.set_xlabel(col)
                 ax.set_ylabel("Profit")
                 ax.grid(True, axis='y', linestyle=':', alpha=0.6)
-
             except Exception as e:
                 ax.text(0.5, 0.5, f"Error: {str(e)}", ha='center', va='center')
-
             plt.tight_layout()
             violin_plots_dict[col] = plot_to_base64(fig)
             plt.close(fig)
 
+            # --- RESULT VIOLIN ---
+            fig, ax = plt.subplots(figsize=(5, 4))
+            try:
+                global_vals = global_param_values.get(col, sorted(df[col].unique()))
+                data_to_plot = []
+                for val in global_vals:
+                    subset = df[df[col] == val]['Result'].values # <--- Result
+                    data_to_plot.append(subset if len(subset) > 0 else [])
+
+                valid_data = []
+                valid_positions = []
+                for idx, d in enumerate(data_to_plot):
+                    if len(d) > 0:
+                        valid_data.append(d)
+                        valid_positions.append(idx + 1)
+
+                if valid_data:
+                    parts = ax.violinplot(valid_data, positions=valid_positions, showmeans=False, showmedians=True)
+                    for pc in parts['bodies']:
+                        pc.set_facecolor('cornflowerblue') # Change color for Results to distinguish?
+                        pc.set_edgecolor('black')
+                        pc.set_alpha(0.7)
+
+                ax.set_xticks(range(1, len(global_vals) + 1))
+                ax.set_xticklabels([str(v) for v in global_vals], rotation=45, ha='right')
+                ax.set_xlim(0.5, len(global_vals) + 0.5)
+                ax.set_title(f"Result Dist. by {col}")
+                ax.set_xlabel(col)
+                ax.set_ylabel("Result")
+                ax.grid(True, axis='y', linestyle=':', alpha=0.6)
+            except Exception as e:
+                ax.text(0.5, 0.5, f"Error: {str(e)}", ha='center', va='center')
+            plt.tight_layout()
+            result_violin_plots_dict[col] = plot_to_base64(fig)
+            plt.close(fig)
+
     best_candidate['violin_plots_dict'] = violin_plots_dict
+    best_candidate['result_violin_plots_dict'] = result_violin_plots_dict
 
     # Remove large objects
     if 'coord_map' in best_candidate: del best_candidate['coord_map']
@@ -674,12 +757,12 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
         </div>
 
         <div class="section">
-            <h2>Detailed Analysis: Grouped by Variable</h2>
+            <h2>Detailed Analysis: Profit</h2>
     """
 
-    # SECTION 3: Variable Distributions (Violin Plots)
+    # SECTION 3: Variable Distributions (Violin Plots - PROFIT)
     # Group by Variable
-    html_content += "<h3>Distribution Analysis (Violin Plots)</h3>"
+    html_content += "<h3>Distribution Analysis (Profit Violin Plots)</h3>"
 
     for var in all_vars:
         html_content += f"<h4>Variable: {var}</h4>"
@@ -694,7 +777,7 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
                 html_content += f"""
                     <div class="plot-box">
                         <h4>{file_name}</h4>
-                        <img src="data:image/png;base64,{img_b64}" alt="Violin {var} {file_name}">
+                        <img src="data:image/png;base64,{img_b64}" alt="Profit Violin {var} {file_name}">
                     </div>
                 """
                 has_plots = True
@@ -704,7 +787,7 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
 
         html_content += '</div>' # End plot-container
 
-    # SECTION 4: 2D Heatmaps
+    # SECTION 4: 2D Heatmaps (PROFIT)
     # Collect all pairs found across all files
     all_pairs = set()
     for res in results_table:
@@ -715,7 +798,7 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
     sorted_pairs = sorted(list(all_pairs))
 
     if sorted_pairs:
-        html_content += "<h3>Interaction Analysis (2D Heatmaps)</h3>"
+        html_content += "<h3>Interaction Analysis (Profit 2D Heatmaps)</h3>"
 
         for pair in sorted_pairs:
             var1, var2 = pair
@@ -730,7 +813,67 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
                     html_content += f"""
                         <div class="plot-box">
                             <h4>{file_name}</h4>
-                            <img src="data:image/png;base64,{img_b64}" alt="Heatmap {var1}v{var2} {file_name}">
+                            <img src="data:image/png;base64,{img_b64}" alt="Profit Heatmap {var1}v{var2} {file_name}">
+                        </div>
+                    """
+                    has_plots = True
+
+            if not has_plots:
+                html_content += "<p>No interaction data for this pair.</p>"
+
+            html_content += '</div>'
+
+    html_content += """
+        </div>
+
+        <div class="section">
+            <h2>Detailed Analysis: Results</h2>
+    """
+
+    # SECTION 5: Variable Distributions (Violin Plots - RESULTS)
+    html_content += "<h3>Distribution Analysis (Result Violin Plots)</h3>"
+
+    for var in all_vars:
+        html_content += f"<h4>Variable: {var}</h4>"
+        html_content += '<div class="plot-container">'
+
+        has_plots = False
+        for res in results_table:
+            file_name = os.path.basename(res['file'])
+            if 'result_violin_plots_dict' in res and var in res['result_violin_plots_dict']:
+                img_b64 = res['result_violin_plots_dict'][var]
+                html_content += f"""
+                    <div class="plot-box">
+                        <h4>{file_name}</h4>
+                        <img src="data:image/png;base64,{img_b64}" alt="Result Violin {var} {file_name}">
+                    </div>
+                """
+                has_plots = True
+
+        if not has_plots:
+            html_content += "<p>No distribution data for this variable.</p>"
+
+        html_content += '</div>'
+
+    # SECTION 6: 2D Heatmaps (RESULTS)
+    # We can reuse sorted_pairs as the pairs are the same (based on variables)
+    if sorted_pairs:
+        html_content += "<h3>Interaction Analysis (Result 2D Heatmaps)</h3>"
+
+        for pair in sorted_pairs:
+            var1, var2 = pair
+            html_content += f"<h4>Interaction: {var1} vs {var2}</h4>"
+            html_content += '<div class="plot-container">'
+
+            has_plots = False
+            for res in results_table:
+                file_name = os.path.basename(res['file'])
+                if 'result_heatmaps_dict' in res and pair in res['result_heatmaps_dict']:
+                    img_b64 = res['result_heatmaps_dict'][pair]
+                    html_content += f"""
+                        <div class="plot-box">
+                            <h4>{file_name}</h4>
+                            <img src="data:image/png;base64,{img_b64}" alt="Result Heatmap {var1}v{var2} {file_name}">
                         </div>
                     """
                     has_plots = True
