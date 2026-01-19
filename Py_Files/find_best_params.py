@@ -24,9 +24,9 @@ def main():
              print(f"Directory {target_dir} not found. Please check configuration.")
              return
 
-    excel_files = glob.glob(os.path.join(target_dir, "*.xlsx"))
-    if not excel_files:
-        print(f"No Excel files found in {target_dir}")
+    csv_files = glob.glob(os.path.join(target_dir, "*.csv"))
+    if not csv_files:
+        print(f"No CSV files found in {target_dir}")
         return
 
     # Sort files by integer prefix
@@ -38,20 +38,21 @@ def main():
         except (ValueError, IndexError):
             return (float('inf'), base)
 
-    excel_files.sort(key=sort_key)
+    csv_files.sort(key=sort_key)
 
     # PHASE 1: Load all files and determine Global Parameter Ranges
     files_data = []
     global_param_values = {} # {col_name: sorted_unique_values_list}
 
     print("Loading files and scanning parameter ranges...")
-    for file_path in excel_files:
+    for file_path in csv_files:
         try:
             # Load Data
             try:
-                df = pd.read_excel(file_path)
-            except Exception:
-                df = pd.read_excel(file_path, engine='openpyxl')
+                df = pd.read_csv(file_path, sep=None, engine='python')
+            except Exception as e:
+                print(f"Error reading {file_path}: {e}")
+                continue
 
             # Clean numeric columns
             for col in df.columns:
