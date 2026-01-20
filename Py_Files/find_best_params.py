@@ -5,6 +5,7 @@ import glob
 import math
 from itertools import product, combinations
 import matplotlib.pyplot as plt
+from matplotlib.colors import TwoSlopeNorm
 import io
 import base64
 
@@ -373,8 +374,19 @@ def process_file_data(file_data, global_param_values, results_table):
                     # REINDEX to Global Range
                     pivot = pivot.reindex(index=y_vals_global, columns=x_vals_global)
 
+                    # Determine norm for Profit (center=0)
+                    data_min = np.nanmin(pivot.values)
+                    data_max = np.nanmax(pivot.values)
+                    center = 0
+
+                    # Ensure vmin < center < vmax
+                    vmin = min(data_min, center - 1e-9)
+                    vmax = max(data_max, center + 1e-9)
+
+                    norm = TwoSlopeNorm(vmin=vmin, vcenter=center, vmax=vmax)
+
                     # Plot Heatmap
-                    im = ax.imshow(pivot.values, cmap='RdYlGn', origin='lower', aspect='auto')
+                    im = ax.imshow(pivot.values, cmap='RdYlGn', origin='lower', aspect='auto', norm=norm)
 
                     # Set ticks and labels
                     ax.set_xticks(np.arange(len(x_vals_global)))
@@ -429,8 +441,19 @@ def process_file_data(file_data, global_param_values, results_table):
                     # REINDEX to Global Range
                     pivot = pivot.reindex(index=y_vals_global, columns=x_vals_global)
 
+                    # Determine norm for Result (center=30)
+                    data_min = np.nanmin(pivot.values)
+                    data_max = np.nanmax(pivot.values)
+                    center = 30
+
+                    # Ensure vmin < center < vmax
+                    vmin = min(data_min, center - 1e-9)
+                    vmax = max(data_max, center + 1e-9)
+
+                    norm = TwoSlopeNorm(vmin=vmin, vcenter=center, vmax=vmax)
+
                     # Plot Heatmap
-                    im = ax.imshow(pivot.values, cmap='RdYlGn', origin='lower', aspect='auto')
+                    im = ax.imshow(pivot.values, cmap='RdYlGn', origin='lower', aspect='auto', norm=norm)
 
                     # Set ticks and labels
                     ax.set_xticks(np.arange(len(x_vals_global)))
