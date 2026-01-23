@@ -10,20 +10,19 @@ import io
 import base64
 
 # Configuration
-INPUT_DIR = "C:\\Users\\Maarten\\OneDrive\\Desktop\\1.5 Hoverbreakout Full Analysis\\CSV" # Default directory
 REQUIRED_GRID_SIDE = 5  # Corresponds to Radius = 1 (1 step up, 1 step down) -> 3 points total per axis
 
 def main():
-    # Determine the directory relative to the script
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    target_dir = os.path.join(script_dir, INPUT_DIR)
+    # Ask for the path to the folder with the CSV files
+    target_dir = input("Please enter the path to the folder with the CSV files: ").strip()
+
+    if not target_dir:
+        print("No directory provided.")
+        return
 
     if not os.path.exists(target_dir):
-        if os.path.exists("OptimizationResults"):
-             target_dir = "OptimizationResults"
-        else:
-             print(f"Directory {target_dir} not found. Please check configuration.")
-             return
+        print(f"Directory {target_dir} not found. Please check configuration.")
+        return
 
     csv_files = glob.glob(os.path.join(target_dir, "*.csv"))
     if not csv_files:
@@ -135,7 +134,7 @@ def main():
         print(f"{file_name[:29]:<30} | {best_res:<11} | {profit:<10} | {inc_dec:<8} | {neigh_prof:<18} | {vars_str}")
     print("="*120 + "\n")
 
-    export_to_html(results_table, global_param_values)
+    export_to_html(results_table, global_param_values, filename=os.path.join(target_dir, "Optimization_Report.html"))
 
 def plot_to_base64(fig):
     buf = io.BytesIO()
