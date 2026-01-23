@@ -181,6 +181,111 @@ def calculate_1d_robustness(center_coord, varying_cols, coord_map):
 
     return robustness
 
+def calculate_multidim_robustness(center_coord, varying_cols, coord_map):
+    """
+    Calculates robustness based on Power Sets of increments for different dimensionalities.
+    Returns: { dim: { 'loss': max_steps, 'avg': max_steps, 'result': max_steps } }
+    """
+    num_vars = len(varying_cols)
+    robustness = {d: {'loss': 0, 'avg': 0, 'result': 0} for d in range(1, num_vars + 1)}
+
+    # Safe limit for step search
+    MAX_RADIUS = 10
+
+    # Pre-calculate combinations of indices for each dimensionality
+    indices = range(num_vars)
+    dim_combinations = {d: list(combinations(indices, d)) for d in range(1, num_vars + 1)}
+
+    for d in range(1, num_vars + 1):
+        # For this dimensionality, we want to find the Max Radius (Step Size)
+        # that satisfies the 3 conditions.
+
+        limit_loss = 0
+        limit_avg = 0
+        limit_result = 0
+
+        failed_loss = False
+        failed_avg = False
+        failed_result = False
+
+        # Track previous set size to detect if we ran out of grid
+        prev_set_size = 0
+
+        for R in range(1, MAX_RADIUS + 1):
+            points_at_R = []
+
+            # Generate points for Radius R
+            # Definition: "Set of all possible combinations of x increments"
+            # For dimensionality d, we select d variables.
+            # We vary these d variables in range [-R, R] excluding 0 (to ensure strictly d active vars).
+            # Note: User example "2 increments space" includes (1,0,0) and (2,0,0).
+            # This implies the set includes all steps s such that 1 <= |s| <= R.
+
+            for active_idxs in dim_combinations[d]:
+                # Generate ranges: [-R...R] excluding 0
+                ranges = [ [x for x in range(-R, R+1) if x != 0] for _ in range(d) ]
+
+                for p_vals in product(*ranges):
+                    # Construct coord
+                    test_coord = list(center_coord)
+                    valid_point = True
+                    for i, idx in enumerate(active_idxs):
+                        test_coord[idx] += p_vals[i]
+
+                    coord_tuple = tuple(test_coord)
+
+                    if coord_tuple in coord_map:
+                        points_at_R.append(coord_map[coord_tuple])
+                    else:
+                        # Missing point implies Loss/Failure in a robust region
+                        points_at_R.append({'Profit': -99999, 'Result': 0, 'Missing': True})
+
+            current_set_size = len(points_at_R)
+            if current_set_size == 0 or current_set_size == prev_set_size:
+                 # No new points found or no points at all. Stop expanding.
+                 # Wait, if current_set_size == prev_set_size, it means R added nothing?
+                 # My generation logic [-R, R] ensures growth if grid allows.
+                 # If grid bounds reached, points won't be in coord_map (or added as Missing).
+                 # Wait, if added as Missing, set size GROWS.
+                 # So we will hit failure quickly.
+                 pass
+
+            # Check Condition 1: No Losing Sets
+            # "If you find a power set... that contain a losing set then that is the upper limit"
+            if not failed_loss:
+                any_loss = any(p['Profit'] < 0 for p in points_at_R)
+                if not any_loss:
+                    limit_loss = R
+                else:
+                    failed_loss = True
+
+            # Check Condition 2: Average Profit > 0
+            # "Check the average of the power set until the average is losing"
+            if not failed_avg:
+                avg_profit = np.mean([p['Profit'] for p in points_at_R]) if points_at_R else 0
+                if avg_profit > 0:
+                    limit_avg = R
+                else:
+                    failed_avg = True
+
+            # Check Condition 3: Result >= 30
+            # "Check for a set that has less than 30 Result"
+            if not failed_result:
+                any_bad_res = any(p['Result'] < 30 for p in points_at_R)
+                if not any_bad_res:
+                    limit_result = R
+                else:
+                    failed_result = True
+
+            if failed_loss and failed_avg and failed_result:
+                break
+
+        robustness[d]['loss'] = limit_loss
+        robustness[d]['avg'] = limit_avg
+        robustness[d]['result'] = limit_result
+
+    return robustness
+
 def process_file_data(file_data, global_param_values, results_table):
     file_path = file_data['path']
     df = file_data['df']
@@ -231,6 +336,7 @@ def process_file_data(file_data, global_param_values, results_table):
             'min_neigh_profit': None,
             'max_neigh_profit': None,
             'robustness_1d': {},
+            'multidim_robustness': {},
             'coord_map': {},
             'center_coord': (),
             'varying_cols': varying_cols
@@ -267,6 +373,7 @@ def process_file_data(file_data, global_param_values, results_table):
             if min(inc, dec) >= target_radius:
                 min_p, max_p = get_box_stats(coord, inc, dec, coord_map)
                 robust_1d = calculate_1d_robustness(coord, varying_cols, coord_map)
+                robust_md = calculate_multidim_robustness(coord, varying_cols, coord_map)
 
                 best_candidate = {
                     'file': file_path,
@@ -279,6 +386,7 @@ def process_file_data(file_data, global_param_values, results_table):
                     'min_neigh_profit': min_p,
                     'max_neigh_profit': max_p,
                     'robustness_1d': robust_1d,
+                    'multidim_robustness': robust_md,
                     'coord_map': coord_map,
                     'center_coord': coord,
                     'varying_cols': varying_cols
@@ -299,6 +407,7 @@ def process_file_data(file_data, global_param_values, results_table):
                     max_found_min_dim = min_dim
                     min_p, max_p = get_box_stats(coord, inc, dec, coord_map)
                     robust_1d = calculate_1d_robustness(coord, varying_cols, coord_map)
+                    robust_md = calculate_multidim_robustness(coord, varying_cols, coord_map)
 
                     best_fallback = {
                         'file': file_path,
@@ -311,6 +420,7 @@ def process_file_data(file_data, global_param_values, results_table):
                         'min_neigh_profit': min_p,
                         'max_neigh_profit': max_p,
                         'robustness_1d': robust_1d,
+                        'multidim_robustness': robust_md,
                         'coord_map': coord_map,
                         'center_coord': coord,
                         'varying_cols': varying_cols
@@ -319,6 +429,7 @@ def process_file_data(file_data, global_param_values, results_table):
                      # Keep first one found (highest result)
                     min_p, max_p = get_box_stats(coord, inc, dec, coord_map)
                     robust_1d = calculate_1d_robustness(coord, varying_cols, coord_map)
+                    robust_md = calculate_multidim_robustness(coord, varying_cols, coord_map)
 
                     best_fallback = {
                         'file': file_path,
@@ -331,6 +442,7 @@ def process_file_data(file_data, global_param_values, results_table):
                         'min_neigh_profit': min_p,
                         'max_neigh_profit': max_p,
                         'robustness_1d': robust_1d,
+                        'multidim_robustness': robust_md,
                         'coord_map': coord_map,
                         'center_coord': coord,
                         'varying_cols': varying_cols
@@ -627,68 +739,48 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
         print("No results to export.")
         return
 
-    # 1. Generate Evolution Plot (Overall)
-    all_vars = sorted(list(global_param_values.keys()))
+    # Generate the Three Big Graphs for Multi-Dim Robustness
+    graph_loss_b64 = None
+    graph_avg_b64 = None
+    graph_result_b64 = None
 
-    evolution_plot_b64 = None
-    if all_vars:
-        num_vars = len(all_vars)
-        cols = 2
-        rows = (num_vars + 1) // 2
+    file_names = [os.path.basename(res['file']) for res in results_table]
+    x_indices = range(len(file_names))
 
-        fig, axes = plt.subplots(rows, cols, figsize=(10, rows * 3))
-        if num_vars == 1: axes = [axes]
-        elif isinstance(axes, np.ndarray): axes = axes.flatten()
-        else: axes = [axes]
+    # Collect max dimensions across all files to define consistent lines
+    max_dims = 0
+    for res in results_table:
+        if 'multidim_robustness' in res:
+             max_dims = max(max_dims, max(res['multidim_robustness'].keys(), default=0))
 
-        file_names = [os.path.basename(res['file']) for res in results_table]
-        x_indices = range(len(file_names))
+    if max_dims > 0:
+        # Common plot settings
+        def create_robustness_graph(metric_key, title):
+            fig, ax = plt.subplots(figsize=(10, 6))
 
-        for i, var in enumerate(all_vars):
-            ax = axes[i]
-            values, lower_bounds, upper_bounds, valid_indices = [], [], [], []
+            for d in range(1, max_dims + 1):
+                y_values = []
+                for res in results_table:
+                    val = 0
+                    if 'multidim_robustness' in res and d in res['multidim_robustness']:
+                        val = res['multidim_robustness'][d][metric_key]
+                    y_values.append(val)
 
-            global_vals = global_param_values[var]
-            if global_vals:
-                min_g, max_g = min(global_vals), max(global_vals)
-                margin = (max_g - min_g) * 0.1 if max_g != min_g else 1
-                ax.set_ylim(min_g - margin, max_g + margin)
+                label = f"{d} Variable{'s' if d>1 else ''}"
+                ax.plot(x_indices, y_values, marker='o', label=label)
 
-            for idx, res in enumerate(results_table):
-                if var in res['params']:
-                    val = res['params'][var]
-                    step = res['step_sizes'].get(var, 0)
+            ax.set_xticks(x_indices)
+            ax.set_xticklabels(file_names, rotation=45, ha='right', fontsize=8)
+            ax.set_title(title)
+            ax.set_ylabel("Max Robust Steps (Radius)")
+            ax.legend()
+            ax.grid(True, linestyle='--', alpha=0.6)
+            plt.tight_layout()
+            return plot_to_base64(fig)
 
-                    if 'robustness_1d' in res and var in res['robustness_1d']:
-                        inc = res['robustness_1d'][var]['inc']
-                        dec = res['robustness_1d'][var]['dec']
-                    elif isinstance(res.get('radius_inc'), int):
-                        inc = res['radius_inc']
-                        dec = res['radius_dec']
-                    else:
-                        inc = 0
-                        dec = 0
-
-                    values.append(val)
-                    lower_bounds.append(val - dec * step)
-                    upper_bounds.append(val + inc * step)
-                    valid_indices.append(idx)
-
-            if valid_indices:
-                ax.plot(valid_indices, values, marker='o', label='Best Value', color='blue')
-                ax.fill_between(valid_indices, lower_bounds, upper_bounds, color='blue', alpha=0.2, label='Robust Region')
-                ax.set_xticks(valid_indices)
-                ax.set_xticklabels([file_names[j] for j in valid_indices], rotation=45, ha='right', fontsize=8)
-                ax.set_title(f"Variable: {var}")
-                ax.legend()
-                ax.grid(True, linestyle='--', alpha=0.6)
-            else:
-                ax.text(0.5, 0.5, "No Data", ha='center', va='center')
-
-        for j in range(i + 1, len(axes)): axes[j].axis('off')
-        plt.tight_layout()
-        evolution_plot_b64 = plot_to_base64(fig)
-        plt.close(fig)
+        graph_loss_b64 = create_robustness_graph('loss', "Robustness Limit: No Loss (Power Set Check)")
+        graph_avg_b64 = create_robustness_graph('avg', "Robustness Limit: Average Profit > 0")
+        graph_result_b64 = create_robustness_graph('result', "Robustness Limit: Result >= 30")
 
     # 2. Build HTML
     html_content = f"""
@@ -768,13 +860,26 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
         </table>
 
         <div class="section">
-            <h2>Parameter Evolution (Robustness)</h2>
-            <p>Tracking the optimal parameter value (dot) and its robust profitability range (shaded) across files. Shading reflects the separate increment/decrement limits for each parameter.</p>
+            <h2>Multi-Dimensional Robustness Analysis</h2>
+            <p>These graphs show the maximum "Step Radius" for each dimensionality group (1 variable changing, 2 variables changing simultaneously, etc.) where the robustness condition holds.</p>
     """
-    if evolution_plot_b64:
-        html_content += f'<img src="data:image/png;base64,{evolution_plot_b64}" alt="Parameter Evolution Plot">'
+
+    if graph_loss_b64:
+        html_content += f"""
+            <h3>1. Loss Limit (No Losing Sets)</h3>
+            <p>Maximum radius where NO combination of parameter changes results in a loss.</p>
+            <img src="data:image/png;base64,{graph_loss_b64}" alt="Loss Robustness Graph">
+
+            <h3>2. Average Profit Limit</h3>
+            <p>Maximum radius where the average profit of all tested combinations remains positive.</p>
+            <img src="data:image/png;base64,{graph_avg_b64}" alt="Avg Robustness Graph">
+
+            <h3>3. Result Limit (Result >= 30)</h3>
+            <p>Maximum radius where all tested combinations yield a 'Result' score of at least 30.</p>
+            <img src="data:image/png;base64,{graph_result_b64}" alt="Result Robustness Graph">
+        """
     else:
-        html_content += "<p>No variable data available for evolution plot.</p>"
+        html_content += "<p>No multi-dimensional robustness data available.</p>"
 
     html_content += """
         </div>
@@ -785,6 +890,7 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
 
     # SECTION 3: Variable Distributions (Violin Plots - PROFIT)
     # Group by Variable
+    all_vars = sorted(list(global_param_values.keys()))
     html_content += "<h3>Distribution Analysis (Profit Violin Plots)</h3>"
 
     for var in all_vars:
