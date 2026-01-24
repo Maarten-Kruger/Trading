@@ -541,10 +541,10 @@ def main():
                         'stats': stats
                     })
                 else:
-                     results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'found': False}})
+                     results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
             except Exception as e:
                 print(f"  NF Error: {e}")
-                results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'found': False}})
+                results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
 
         # 3. Tsai
         if HAS_TSAI:
@@ -558,10 +558,10 @@ def main():
                         'stats': stats
                     })
                  else:
-                    results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'found': False}})
+                    results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
             except Exception as e:
                 print(f"  Tsai Error: {e}")
-                results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'found': False}})
+                results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
 
     # Generate Report
     generate_html_report(results, target_dir)
@@ -605,22 +605,38 @@ def generate_html_report(results, output_dir):
         profits = [d['stats']['Profit'] for d in data] # Actually predicted result stats
         found_flags = [d['stats']['found'] for d in data]
 
-        # Plot
-        fig, ax = plt.subplots(figsize=(10, 5))
+        # Plot 1: Result
+        fig1, ax1 = plt.subplots(figsize=(10, 5))
         x = range(len(labels))
-        ax.plot(x, actual_results, marker='o', label='Actual Result of Predicted Params')
-        ax.set_xticks(x)
-        ax.set_xticklabels(labels, rotation=45, ha='right')
-        ax.set_ylabel('Result')
-        ax.set_title(f'{title} Performance')
-        ax.legend()
-        ax.grid(True)
+        ax1.plot(x, actual_results, marker='o', color='blue', label='Actual Result')
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(labels, rotation=45, ha='right')
+        ax1.set_ylabel('Result')
+        ax1.set_title(f'{title}: Result Performance')
+        ax1.legend()
+        ax1.grid(True)
 
-        buf = io.BytesIO()
-        fig.savefig(buf, format='png', bbox_inches='tight')
-        buf.seek(0)
-        img_b64 = base64.b64encode(buf.read()).decode('utf-8')
-        plt.close(fig)
+        buf1 = io.BytesIO()
+        fig1.savefig(buf1, format='png', bbox_inches='tight')
+        buf1.seek(0)
+        img1_b64 = base64.b64encode(buf1.read()).decode('utf-8')
+        plt.close(fig1)
+
+        # Plot 2: Profit
+        fig2, ax2 = plt.subplots(figsize=(10, 5))
+        ax2.plot(x, profits, marker='o', color='green', label='Actual Profit')
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(labels, rotation=45, ha='right')
+        ax2.set_ylabel('Profit')
+        ax2.set_title(f'{title}: Profit Performance')
+        ax2.legend()
+        ax2.grid(True)
+
+        buf2 = io.BytesIO()
+        fig2.savefig(buf2, format='png', bbox_inches='tight')
+        buf2.seek(0)
+        img2_b64 = base64.b64encode(buf2.read()).decode('utf-8')
+        plt.close(fig2)
 
         # Calculate Avg
         avg_res = np.mean(actual_results) if actual_results else 0
@@ -631,7 +647,12 @@ def generate_html_report(results, output_dir):
             <h2>{title} Model</h2>
             <div class="metric">Average Result: {avg_res:.2f} | Hit Rate (Params Found): {hit_rate:.1f}%</div>
             <div class="img-container">
-                <img src="data:image/png;base64,{img_b64}" />
+                <h3>Result Graph</h3>
+                <img src="data:image/png;base64,{img1_b64}" />
+            </div>
+            <div class="img-container">
+                <h3>Profit Graph</h3>
+                <img src="data:image/png;base64,{img2_b64}" />
             </div>
             <table>
                 <thead>
