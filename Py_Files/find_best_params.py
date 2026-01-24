@@ -143,6 +143,84 @@ def plot_to_base64(fig):
     img_str = base64.b64encode(buf.read()).decode('utf-8')
     return img_str
 
+def check_square_region(center_coord, active_indices, coord_map, radius, direction, condition_type):
+    """
+    Checks if the defined 'bubble' (square region) meets the condition.
+    range: [0, R] for inc, [-R, 0] for dec. Excludes origin.
+    active_indices: list of indices in center_coord that are varying.
+    """
+    full_dim = len(center_coord)
+    ranges = []
+    active_set = set(active_indices)
+
+    for i in range(full_dim):
+        if i in active_set:
+            if direction == 'inc':
+                ranges.append(range(0, radius + 1))
+            else:
+                ranges.append(range(-radius, 1))
+        else:
+            ranges.append(range(0, 1))
+
+    points_in_bubble = []
+
+    # Iterate all combinations in the box
+    for steps in product(*ranges):
+        # Exclude origin (all zeros means we are at center)
+        if all(s == 0 for s in steps):
+            continue
+
+        # Calculate coordinate
+        test_coord = list(center_coord)
+        valid_point = True
+        for i, step in enumerate(steps):
+            test_coord[i] += step
+
+        test_coord = tuple(test_coord)
+
+        if test_coord not in coord_map:
+            # Missing point implies the square is broken
+            return False
+
+        points_in_bubble.append(coord_map[test_coord])
+
+    if not points_in_bubble:
+        # Should not happen if R >= 1 and active_indices is not empty
+        return True
+
+    # Check Condition
+    if condition_type == 'loss':
+        # No Losing Sets -> All Profit >= 0
+        for p in points_in_bubble:
+            if p['Profit'] < 0:
+                return False
+    elif condition_type == 'avg':
+        # Avg Profit > 0 (Condition applies to the Bubble Set)
+        avg_profit = np.mean([p['Profit'] for p in points_in_bubble])
+        if avg_profit <= 0:
+            return False
+    elif condition_type == 'result':
+        # Result >= 25 (User Requirement)
+        for p in points_in_bubble:
+            if p['Result'] < 25:
+                return False
+
+    return True
+
+def find_max_radius(center_coord, active_indices, coord_map, direction, condition_type):
+    radius = 0
+    # Safety limit to prevent infinite loops
+    MAX_SEARCH_RADIUS = 50
+
+    while radius < MAX_SEARCH_RADIUS:
+        next_r = radius + 1
+        if check_square_region(center_coord, active_indices, coord_map, next_r, direction, condition_type):
+            radius = next_r
+        else:
+            break
+
+    return radius
+
 def calculate_1d_robustness(center_coord, varying_cols, coord_map):
     """
     Calculates the max valid increment and decrement for each variable independently (1D slice),
@@ -180,110 +258,81 @@ def calculate_1d_robustness(center_coord, varying_cols, coord_map):
 
     return robustness
 
-def calculate_multidim_robustness(center_coord, varying_cols, coord_map):
+def calculate_robustness_stats(varying_cols, coord_map):
     """
-    Calculates robustness based on Power Sets of increments for different dimensionalities.
-    Returns: { dim: { 'loss': max_steps, 'avg': max_steps, 'result': max_steps } }
+    Calculates robustness based on the new logic:
+    1. Filter Positive Vectors (Result > 25)
+    2. Separate Inc/Dec bubbles.
+    3. Rank Top 100 by Inc Radius.
+    4. Find Max Sum (Inc + Dec) for the winner.
+    Returns: { dim: { 'loss': max_sum, 'avg': max_sum, 'result': max_sum } }
     """
     num_vars = len(varying_cols)
-    robustness = {d: {'loss': 0, 'avg': 0, 'result': 0} for d in range(1, num_vars + 1)}
+    robustness_results = {} # { d: { 'loss': val, 'avg': val, 'result': val } }
 
-    # Safe limit for step search
-    MAX_RADIUS = 10
-
-    # Pre-calculate combinations of indices for each dimensionality
+    # Pre-calculate combinations
     indices = range(num_vars)
     dim_combinations = {d: list(combinations(indices, d)) for d in range(1, num_vars + 1)}
 
+    # Filter Positive Vectors
+    positive_vectors = []
+    for coord, data in coord_map.items():
+        if data['Result'] > 25:
+             positive_vectors.append(coord)
+
+    if not positive_vectors:
+        return {d: {'loss': 0, 'avg': 0, 'result': 0} for d in range(1, num_vars + 1)}
+
+    conditions = ['loss', 'avg', 'result']
+
     for d in range(1, num_vars + 1):
-        # For this dimensionality, we want to find the Max Radius (Step Size)
-        # that satisfies the 3 conditions.
+        robustness_results[d] = {}
 
-        limit_loss = 0
-        limit_avg = 0
-        limit_result = 0
+        for cond in conditions:
+            # We need to find the Best Vector for this (Dimension, Condition) pair.
 
-        failed_loss = False
-        failed_avg = False
-        failed_result = False
-
-        # Track previous set size to detect if we ran out of grid
-        prev_set_size = 0
-
-        for R in range(1, MAX_RADIUS + 1):
-            points_at_R = []
-
-            # Generate points for Radius R
-            # Definition: "Set of all possible combinations of x increments"
-            # For dimensionality d, we select d variables.
-            # We vary these d variables in range [-R, R] excluding 0 (to ensure strictly d active vars).
-            # Note: User example "2 increments space" includes (1,0,0) and (2,0,0).
-            # This implies the set includes all steps s such that 1 <= |s| <= R.
+            candidates = []
+            # List of tuples: (inc_radius, result, coord, active_idxs)
 
             for active_idxs in dim_combinations[d]:
-                # Generate ranges: [-R...R] excluding 0
-                ranges = [ [x for x in range(-R, R+1) if x != 0] for _ in range(d) ]
+                for coord in positive_vectors:
+                    # Calculate Inc Radius
+                    r_inc = find_max_radius(coord, active_idxs, coord_map, 'inc', cond)
 
-                for p_vals in product(*ranges):
-                    # Construct coord
-                    test_coord = list(center_coord)
-                    valid_point = True
-                    for i, idx in enumerate(active_idxs):
-                        test_coord[idx] += p_vals[i]
+                    # Store candidate
+                    # We store Result for tie-breaking
+                    res_val = coord_map[coord]['Result']
+                    candidates.append({
+                        'r_inc': r_inc,
+                        'result': res_val,
+                        'coord': coord,
+                        'active_idxs': active_idxs
+                    })
 
-                    coord_tuple = tuple(test_coord)
+            # Rank: Sort by r_inc DESC, then result DESC
+            candidates.sort(key=lambda x: (x['r_inc'], x['result']), reverse=True)
 
-                    if coord_tuple in coord_map:
-                        points_at_R.append(coord_map[coord_tuple])
-                    else:
-                        # Missing point implies Loss/Failure in a robust region
-                        points_at_R.append({'Profit': -99999, 'Result': 0, 'Missing': True})
+            # Keep Top 100
+            top_100 = candidates[:100]
 
-            current_set_size = len(points_at_R)
-            if current_set_size == 0 or current_set_size == prev_set_size:
-                 # No new points found or no points at all. Stop expanding.
-                 # Wait, if current_set_size == prev_set_size, it means R added nothing?
-                 # My generation logic [-R, R] ensures growth if grid allows.
-                 # If grid bounds reached, points won't be in coord_map (or added as Missing).
-                 # Wait, if added as Missing, set size GROWS.
-                 # So we will hit failure quickly.
-                 pass
+            # Find Winner (Max Sum)
+            max_sum = 0
 
-            # Check Condition 1: No Losing Sets
-            # "If you find a power set... that contain a losing set then that is the upper limit"
-            if not failed_loss:
-                any_loss = any(p['Profit'] < 0 for p in points_at_R)
-                if not any_loss:
-                    limit_loss = R
-                else:
-                    failed_loss = True
+            for cand in top_100:
+                coord = cand['coord']
+                active_idxs = cand['active_idxs']
+                r_inc = cand['r_inc']
 
-            # Check Condition 2: Average Profit > 0
-            # "Check the average of the power set until the average is losing"
-            if not failed_avg:
-                avg_profit = np.mean([p['Profit'] for p in points_at_R]) if points_at_R else 0
-                if avg_profit > 0:
-                    limit_avg = R
-                else:
-                    failed_avg = True
+                # Calculate Dec Radius
+                r_dec = find_max_radius(coord, active_idxs, coord_map, 'dec', cond)
 
-            # Check Condition 3: Result >= 30
-            # "Check for a set that has less than 30 Result"
-            if not failed_result:
-                any_bad_res = any(p['Result'] < 30 for p in points_at_R)
-                if not any_bad_res:
-                    limit_result = R
-                else:
-                    failed_result = True
+                total_sum = r_inc + r_dec
+                if total_sum > max_sum:
+                    max_sum = total_sum
 
-            if failed_loss and failed_avg and failed_result:
-                break
+            robustness_results[d][cond] = max_sum
 
-        robustness[d]['loss'] = limit_loss
-        robustness[d]['avg'] = limit_avg
-        robustness[d]['result'] = limit_result
-
-    return robustness
+    return robustness_results
 
 def process_file_data(file_data, global_param_values, results_table):
     file_path = file_data['path']
@@ -372,7 +421,6 @@ def process_file_data(file_data, global_param_values, results_table):
             if min(inc, dec) >= target_radius:
                 min_p, max_p = get_box_stats(coord, inc, dec, coord_map)
                 robust_1d = calculate_1d_robustness(coord, varying_cols, coord_map)
-                robust_md = calculate_multidim_robustness(coord, varying_cols, coord_map)
 
                 best_candidate = {
                     'file': file_path,
@@ -385,7 +433,7 @@ def process_file_data(file_data, global_param_values, results_table):
                     'min_neigh_profit': min_p,
                     'max_neigh_profit': max_p,
                     'robustness_1d': robust_1d,
-                    'multidim_robustness': robust_md,
+                    # multidim_robustness calculated globally below
                     'coord_map': coord_map,
                     'center_coord': coord,
                     'varying_cols': varying_cols
@@ -406,7 +454,6 @@ def process_file_data(file_data, global_param_values, results_table):
                     max_found_min_dim = min_dim
                     min_p, max_p = get_box_stats(coord, inc, dec, coord_map)
                     robust_1d = calculate_1d_robustness(coord, varying_cols, coord_map)
-                    robust_md = calculate_multidim_robustness(coord, varying_cols, coord_map)
 
                     best_fallback = {
                         'file': file_path,
@@ -419,7 +466,6 @@ def process_file_data(file_data, global_param_values, results_table):
                         'min_neigh_profit': min_p,
                         'max_neigh_profit': max_p,
                         'robustness_1d': robust_1d,
-                        'multidim_robustness': robust_md,
                         'coord_map': coord_map,
                         'center_coord': coord,
                         'varying_cols': varying_cols
@@ -428,7 +474,6 @@ def process_file_data(file_data, global_param_values, results_table):
                      # Keep first one found (highest result)
                     min_p, max_p = get_box_stats(coord, inc, dec, coord_map)
                     robust_1d = calculate_1d_robustness(coord, varying_cols, coord_map)
-                    robust_md = calculate_multidim_robustness(coord, varying_cols, coord_map)
 
                     best_fallback = {
                         'file': file_path,
@@ -441,7 +486,6 @@ def process_file_data(file_data, global_param_values, results_table):
                         'min_neigh_profit': min_p,
                         'max_neigh_profit': max_p,
                         'robustness_1d': robust_1d,
-                        'multidim_robustness': robust_md,
                         'coord_map': coord_map,
                         'center_coord': coord,
                         'varying_cols': varying_cols
@@ -451,6 +495,10 @@ def process_file_data(file_data, global_param_values, results_table):
     if not best_candidate:
         print("  No suitable data found.")
         return
+
+    # Calculate Global Robustness Stats (New Logic)
+    print("  Calculating Multi-Dim Robustness Stats...")
+    best_candidate['multidim_robustness'] = calculate_robustness_stats(varying_cols, coord_map)
 
     # 2. Plotting: Heatmaps (Using Global Ranges)
     heatmaps_dict = {}
@@ -552,10 +600,10 @@ def process_file_data(file_data, global_param_values, results_table):
                     # REINDEX to Global Range
                     pivot = pivot.reindex(index=y_vals_global, columns=x_vals_global)
 
-                    # Determine norm for Result (center=30)
+                    # Determine norm for Result (center=25)
                     data_min = np.nanmin(pivot.values)
                     data_max = np.nanmax(pivot.values)
-                    center = 30
+                    center = 25
 
                     # Ensure vmin < center < vmax
                     vmin = min(data_min, center - 1e-9)
@@ -771,15 +819,15 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
             ax.set_xticks(x_indices)
             ax.set_xticklabels(file_names, rotation=45, ha='right', fontsize=8)
             ax.set_title(title)
-            ax.set_ylabel("Max Robust Steps (Radius)")
+            ax.set_ylabel("Max Sum (Inc + Dec Radius)")
             ax.legend()
             ax.grid(True, linestyle='--', alpha=0.6)
             plt.tight_layout()
             return plot_to_base64(fig)
 
-        graph_loss_b64 = create_robustness_graph('loss', "Robustness Limit: No Loss (Power Set Check)")
-        graph_avg_b64 = create_robustness_graph('avg', "Robustness Limit: Average Profit > 0")
-        graph_result_b64 = create_robustness_graph('result', "Robustness Limit: Result >= 30")
+        graph_loss_b64 = create_robustness_graph('loss', "Robustness Limit: No Loss (Max Sum Inc+Dec)")
+        graph_avg_b64 = create_robustness_graph('avg', "Robustness Limit: Average Profit > 0 (Max Sum Inc+Dec)")
+        graph_result_b64 = create_robustness_graph('result', "Robustness Limit: Result >= 25 (Max Sum Inc+Dec)")
 
     # 2. Build HTML
     html_content = f"""
