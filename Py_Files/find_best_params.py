@@ -516,7 +516,7 @@ def process_file_data(file_data, global_param_values, results_table):
         for col1, col2 in pairs:
             # --- PROFIT HEATMAP ---
             # Create a dedicated figure for each heatmap
-            fig, ax = plt.subplots(figsize=(8, 6))
+            fig, ax = plt.subplots(figsize=(5, 4))
 
             # Filter DF: other cols fixed to best params
             mask = np.ones(len(df), dtype=bool)
@@ -590,7 +590,7 @@ def process_file_data(file_data, global_param_values, results_table):
             plt.close(fig)
 
             # --- RESULT HEATMAP ---
-            fig, ax = plt.subplots(figsize=(8, 6))
+            fig, ax = plt.subplots(figsize=(5, 4))
 
             # (We can reuse slice_df from above as the filter logic is identical)
 
@@ -666,7 +666,7 @@ def process_file_data(file_data, global_param_values, results_table):
     if varying_cols:
         for col in varying_cols:
             # --- PROFIT VIOLIN ---
-            fig, ax = plt.subplots(figsize=(8, 6))
+            fig, ax = plt.subplots(figsize=(5, 4))
             try:
                 global_vals = global_param_values.get(col, sorted(df[col].unique()))
                 data_to_plot = []
@@ -702,7 +702,7 @@ def process_file_data(file_data, global_param_values, results_table):
             plt.close(fig)
 
             # --- RESULT VIOLIN ---
-            fig, ax = plt.subplots(figsize=(8, 6))
+            fig, ax = plt.subplots(figsize=(5, 4))
             try:
                 global_vals = global_param_values.get(col, sorted(df[col].unique()))
                 data_to_plot = []
