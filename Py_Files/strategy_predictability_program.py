@@ -44,9 +44,9 @@ except ImportError:
 try:
     from tsai.all import *
     HAS_TSAI = True
-except ImportError:
+except ImportError as e:
     HAS_TSAI = False
-    print("Warning: tsai not found.")
+    print(f"Warning: tsai not found. Error: {e}")
 
 # --- Helper Functions ---
 
