@@ -1,5 +1,16 @@
+
+# To run this, just type in the terminal:
+# .\venv\Scripts\activate  (when you are cd C:\trading_bot) and then
+# python strategy_predictability_program.py
+
+#or
+
+# .\venv\Scripts\python.exe strategy_predictability_program.py
+
 import pandas as pd
 import numpy as np
+import darts
+import sklearn
 import os
 import glob
 import sys
@@ -28,8 +39,8 @@ except ImportError:
     sys.exit(1)
 
 # Configuration Variables
-RESULT_CUTOFF = 25
-VECTOR_INPUT = 3
+RESULT_CUTOFF = 30
+VECTOR_INPUT = 10
 
 def main():
     print("--- Strategy Predictability Program ---")
