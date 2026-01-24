@@ -290,11 +290,14 @@ def calculate_robustness_stats(varying_cols, coord_map):
 
         for cond in conditions:
             # We need to find the Best Vector for this (Dimension, Condition) pair.
+            # We must check ALL combinations for this dimensionality and find the global max.
 
-            candidates = []
-            # List of tuples: (inc_radius, result, coord, active_idxs)
+            current_dim_max_sum = 0
 
             for active_idxs in dim_combinations[d]:
+                candidates = []
+                # List of tuples: (inc_radius, result, coord, active_idxs)
+
                 for coord in positive_vectors:
                     # Calculate Inc Radius
                     r_inc = find_max_radius(coord, active_idxs, coord_map, 'inc', cond)
@@ -309,28 +312,31 @@ def calculate_robustness_stats(varying_cols, coord_map):
                         'active_idxs': active_idxs
                     })
 
-            # Rank: Sort by r_inc DESC, then result DESC
-            candidates.sort(key=lambda x: (x['r_inc'], x['result']), reverse=True)
+                # Rank: Sort by r_inc DESC, then result DESC
+                candidates.sort(key=lambda x: (x['r_inc'], x['result']), reverse=True)
 
-            # Keep Top 100
-            top_100 = candidates[:100]
+                # Keep Top 100 per combination
+                top_100 = candidates[:100]
 
-            # Find Winner (Max Sum)
-            max_sum = 0
+                # Find Winner (Max Sum) for this combination
+                combo_max_sum = 0
 
-            for cand in top_100:
-                coord = cand['coord']
-                active_idxs = cand['active_idxs']
-                r_inc = cand['r_inc']
+                for cand in top_100:
+                    coord = cand['coord']
+                    active_idxs = cand['active_idxs']
+                    r_inc = cand['r_inc']
 
-                # Calculate Dec Radius
-                r_dec = find_max_radius(coord, active_idxs, coord_map, 'dec', cond)
+                    # Calculate Dec Radius
+                    r_dec = find_max_radius(coord, active_idxs, coord_map, 'dec', cond)
 
-                total_sum = r_inc + r_dec
-                if total_sum > max_sum:
-                    max_sum = total_sum
+                    total_sum = r_inc + r_dec
+                    if total_sum > combo_max_sum:
+                        combo_max_sum = total_sum
 
-            robustness_results[d][cond] = max_sum
+                if combo_max_sum > current_dim_max_sum:
+                    current_dim_max_sum = combo_max_sum
+
+            robustness_results[d][cond] = current_dim_max_sum
 
     return robustness_results
 
@@ -510,7 +516,7 @@ def process_file_data(file_data, global_param_values, results_table):
         for col1, col2 in pairs:
             # --- PROFIT HEATMAP ---
             # Create a dedicated figure for each heatmap
-            fig, ax = plt.subplots(figsize=(5, 4))
+            fig, ax = plt.subplots(figsize=(8, 6))
 
             # Filter DF: other cols fixed to best params
             mask = np.ones(len(df), dtype=bool)
@@ -584,7 +590,7 @@ def process_file_data(file_data, global_param_values, results_table):
             plt.close(fig)
 
             # --- RESULT HEATMAP ---
-            fig, ax = plt.subplots(figsize=(5, 4))
+            fig, ax = plt.subplots(figsize=(8, 6))
 
             # (We can reuse slice_df from above as the filter logic is identical)
 
@@ -660,7 +666,7 @@ def process_file_data(file_data, global_param_values, results_table):
     if varying_cols:
         for col in varying_cols:
             # --- PROFIT VIOLIN ---
-            fig, ax = plt.subplots(figsize=(5, 4))
+            fig, ax = plt.subplots(figsize=(8, 6))
             try:
                 global_vals = global_param_values.get(col, sorted(df[col].unique()))
                 data_to_plot = []
@@ -696,7 +702,7 @@ def process_file_data(file_data, global_param_values, results_table):
             plt.close(fig)
 
             # --- RESULT VIOLIN ---
-            fig, ax = plt.subplots(figsize=(5, 4))
+            fig, ax = plt.subplots(figsize=(8, 6))
             try:
                 global_vals = global_param_values.get(col, sorted(df[col].unique()))
                 data_to_plot = []
@@ -803,7 +809,7 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
     if max_dims > 0:
         # Common plot settings
         def create_robustness_graph(metric_key, title):
-            fig, ax = plt.subplots(figsize=(10, 6))
+            fig, ax = plt.subplots(figsize=(12, 8))
 
             for d in range(1, max_dims + 1):
                 y_values = []
