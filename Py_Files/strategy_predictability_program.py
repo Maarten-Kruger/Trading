@@ -378,11 +378,21 @@ class TsaiForecaster:
         # Construct directly
         # tsai is a bit complex with inference without dl
         # Let's create a dl
-        test_dls = dls.test_dl(X_test)
-        preds, _ = learn.get_preds(dl=test_dls)
+        try:
+            test_dls = dls.test_dl(X_test)
+            if test_dls is None:
+                return None
 
-        # preds is (Samples, 1)
-        preds_np = preds.numpy().flatten()
+            pred_res = learn.get_preds(dl=test_dls)
+            if pred_res is None:
+                return None
+
+            preds, _ = pred_res
+
+            # preds is (Samples, 1)
+            preds_np = preds.numpy().flatten()
+        except Exception:
+            return None
 
         best_idx = np.argmax(preds_np)
         best_coord = coords_list[best_idx]
