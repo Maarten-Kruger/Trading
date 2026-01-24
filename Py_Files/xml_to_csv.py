@@ -2,6 +2,7 @@ import xml.etree.ElementTree as ET
 import csv
 import sys
 import os
+import glob
 
 def convert_xml_to_csv(xml_file):
     if not os.path.exists(xml_file):
@@ -12,28 +13,25 @@ def convert_xml_to_csv(xml_file):
         tree = ET.parse(xml_file)
         root = tree.getroot()
     except ET.ParseError as e:
-        print(f"Error parsing XML: {e}")
+        print(f"Error parsing XML '{xml_file}': {e}")
         return
 
     # Namespace for Excel XML
-    # The default namespace is usually the spreadsheet one too,
-    # but we map it to 'ss' for find/findall usage.
     ns = {'ss': 'urn:schemas-microsoft-com:office:spreadsheet'}
 
     # Find the worksheet
-    # Try to find 'Tester Optimizator Results'
     worksheet = root.find(".//ss:Worksheet[@ss:Name='Tester Optimizator Results']", ns)
     if worksheet is None:
         # Fallback to first worksheet
         worksheet = root.find(".//ss:Worksheet", ns)
 
     if worksheet is None:
-        print("Error: No worksheet found in the XML file.")
+        print(f"Error: No worksheet found in '{xml_file}'.")
         return
 
     table = worksheet.find("ss:Table", ns)
     if table is None:
-        print("Error: No table found in the worksheet.")
+        print(f"Error: No table found in '{xml_file}'.")
         return
 
     rows = table.findall("ss:Row", ns)
@@ -83,22 +81,52 @@ def convert_xml_to_csv(xml_file):
 
                 writer.writerow(csv_row)
 
-        print("Conversion complete.")
-
     except IOError as e:
-        print(f"Error writing CSV file: {e}")
+        print(f"Error writing CSV file '{csv_file}': {e}")
+
+def process_path(path):
+    # Remove quotes if present
+    if (path.startswith('"') and path.endswith('"')) or \
+       (path.startswith("'") and path.endswith("'")):
+        path = path[1:-1]
+
+    path = path.strip()
+
+    if not os.path.exists(path):
+        print(f"Error: Path '{path}' does not exist.")
+        return
+
+    if os.path.isdir(path):
+        print(f"Processing all XML files in directory: {path}")
+        # Find all xml files in the directory
+        xml_files = glob.glob(os.path.join(path, "*.xml"))
+        # Case insensitive search fallback if needed (on linux glob is case sensitive)
+        if not xml_files:
+             xml_files = [f for f in os.listdir(path) if f.lower().endswith('.xml')]
+             xml_files = [os.path.join(path, f) for f in xml_files]
+
+        if not xml_files:
+            print("No XML files found in the directory.")
+            return
+
+        for xml_file in xml_files:
+            convert_xml_to_csv(xml_file)
+
+        print(f"Processed {len(xml_files)} files.")
+
+    elif os.path.isfile(path):
+        convert_xml_to_csv(path)
+        print("Conversion complete.")
+    else:
+        print(f"Error: '{path}' is not a valid file or directory.")
 
 def main():
     if len(sys.argv) > 1:
-        xml_file = sys.argv[1]
+        path = sys.argv[1]
     else:
-        xml_file = input("Enter the XML filename to convert: ").strip()
-        # Remove quotes if user added them
-        if (xml_file.startswith('"') and xml_file.endswith('"')) or \
-           (xml_file.startswith("'") and xml_file.endswith("'")):
-            xml_file = xml_file[1:-1]
+        path = input("Enter the XML filename or folder path to convert: ").strip()
 
-    convert_xml_to_csv(xml_file)
+    process_path(path)
 
 if __name__ == "__main__":
     main()
