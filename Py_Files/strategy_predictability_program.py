@@ -21,7 +21,8 @@ logging.getLogger("neuralforecast").setLevel(logging.ERROR)
 
 # Configuration
 RESULT_CUTOFF = 25
-VECTOR_INPUT = 10  # Lookback window size
+VECTOR_INPUT = 10  # Lookback window size (Model Lags)
+TRAINING_WINDOW = 30 # Size of the sliding window used for training (Must be > VECTOR_INPUT)
 
 # --- Library Imports ---
 print("Importing libraries...")
@@ -511,9 +512,13 @@ def main():
     # Structure: {'darts': [], 'nf': [], 'tsai': []}
     results = {'darts': [], 'nf': [], 'tsai': []}
 
-    start_index = VECTOR_INPUT + 1
+    start_index = TRAINING_WINDOW + 1
     if start_index >= len(files_data):
-        print(f"Not enough files. Need > {VECTOR_INPUT + 1}")
+        # Fallback if we have fewer files than TRAINING_WINDOW but enough to start
+        start_index = VECTOR_INPUT + 2
+
+    if start_index >= len(files_data):
+        print(f"Not enough files. Need > {start_index}")
         return
 
     print("Running Forecasts (This may take time)...")
@@ -525,8 +530,8 @@ def main():
             print(f"Processing {file_name}...")
 
             # Data Slices
-            # Sliding window of length VECTOR_INPUT
-            window_start = max(0, i - VECTOR_INPUT)
+            # Sliding window of length TRAINING_WINDOW
+            window_start = max(0, i - TRAINING_WINDOW)
             history_best = best_vectors_history[window_start:i]
             history_all = [fd['df'] for fd in files_data[window_start:i]]
 
