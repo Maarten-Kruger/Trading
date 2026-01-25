@@ -125,7 +125,10 @@ class DartsForecaster:
     def __init__(self, global_config, var_cols):
         self.config = global_config
         self.var_cols = var_cols
-        self.model = RandomForest(lags=VECTOR_INPUT, n_estimators=50, random_state=42)
+        if HAS_DARTS:
+            self.model = RandomForest(lags=VECTOR_INPUT, n_estimators=50, random_state=42)
+        else:
+            self.model = None
 
     def predict(self, best_vectors_history):
         # best_vectors_history is list of dicts: {'params': {...}, ...}
@@ -166,7 +169,10 @@ class NeuralForecastForecaster:
         self.config = global_config
         self.var_cols = var_cols
         # Use NHITS - fast and effective
-        self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=100, enable_checkpointing=False, logger=False)
+        if HAS_NF:
+            self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=100, enable_checkpointing=False, logger=False)
+        else:
+            self.model = None
         self.nf = None
 
     def predict(self, all_vectors_history):
@@ -512,66 +518,72 @@ def main():
 
     print("Running Forecasts (This may take time)...")
 
-    for i in range(start_index, len(files_data)):
-        target_file_data = files_data[i]
-        file_name = os.path.basename(target_file_data['path'])
-        print(f"Processing {file_name}...")
+    try:
+        for i in range(start_index, len(files_data)):
+            target_file_data = files_data[i]
+            file_name = os.path.basename(target_file_data['path'])
+            print(f"Processing {file_name}...")
 
-        # Data Slices
-        history_best = best_vectors_history[:i]
-        history_all = [fd['df'] for fd in files_data[:i]]
+            # Data Slices
+            # Sliding window of length VECTOR_INPUT
+            window_start = max(0, i - VECTOR_INPUT)
+            history_best = best_vectors_history[window_start:i]
+            history_all = [fd['df'] for fd in files_data[window_start:i]]
 
-        # 1. Darts
-        if HAS_DARTS:
-            try:
-                pred = darts_model.predict(history_best)
-                stats = lookup_stats(target_file_data['df'], pred, global_param_config)
-                results['darts'].append({
-                    'file': file_name,
-                    'pred': pred,
-                    'stats': stats
-                })
-            except Exception as e:
-                print(f"  Darts Error: {e}")
-
-        # 2. NeuralForecast
-        if HAS_NF:
-            try:
-                # We should suppress stdout from NF
-                with io.capture_output() if 'io.capture_output' in globals() else open(os.devnull, 'w') as devnull: # Simple redirection
-                     # Redirect stdout/stderr?
-                     # Python logging already handled.
-                    pred = nf_model.predict(history_all)
-
-                if pred:
+            # 1. Darts
+            if HAS_DARTS:
+                try:
+                    pred = darts_model.predict(history_best)
                     stats = lookup_stats(target_file_data['df'], pred, global_param_config)
-                    results['nf'].append({
+                    results['darts'].append({
                         'file': file_name,
                         'pred': pred,
                         'stats': stats
                     })
-                else:
-                     results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
-            except Exception as e:
-                print(f"  NF Error: {e}")
-                results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+                except Exception as e:
+                    print(f"  Darts Error: {e}")
 
-        # 3. Tsai
-        if HAS_TSAI:
-            try:
-                 pred = tsai_model.predict(history_all)
-                 if pred:
-                    stats = lookup_stats(target_file_data['df'], pred, global_param_config)
-                    results['tsai'].append({
-                        'file': file_name,
-                        'pred': pred,
-                        'stats': stats
-                    })
-                 else:
+            # 2. NeuralForecast
+            if HAS_NF:
+                try:
+                    # We should suppress stdout from NF
+                    with io.capture_output() if 'io.capture_output' in globals() else open(os.devnull, 'w') as devnull: # Simple redirection
+                        # Redirect stdout/stderr?
+                        # Python logging already handled.
+                        pred = nf_model.predict(history_all)
+
+                    if pred:
+                        stats = lookup_stats(target_file_data['df'], pred, global_param_config)
+                        results['nf'].append({
+                            'file': file_name,
+                            'pred': pred,
+                            'stats': stats
+                        })
+                    else:
+                        results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+                except Exception as e:
+                    print(f"  NF Error: {e}")
+                    results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+
+            # 3. Tsai
+            if HAS_TSAI:
+                try:
+                    pred = tsai_model.predict(history_all)
+                    if pred:
+                        stats = lookup_stats(target_file_data['df'], pred, global_param_config)
+                        results['tsai'].append({
+                            'file': file_name,
+                            'pred': pred,
+                            'stats': stats
+                        })
+                    else:
+                        results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+                except Exception as e:
+                    print(f"  Tsai Error: {e}")
                     results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
-            except Exception as e:
-                print(f"  Tsai Error: {e}")
-                results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+
+    except KeyboardInterrupt:
+        print("\nProcess cancelled by user. Outputting available results...")
 
     # Generate Report
     generate_html_report(results, target_dir)
