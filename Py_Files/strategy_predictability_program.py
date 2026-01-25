@@ -42,12 +42,13 @@ except ImportError:
     HAS_NF = False
     print("Warning: NeuralForecast not found.")
 
-try:
-    from tsai.all import *
-    HAS_TSAI = True
-except ImportError as e:
-    HAS_TSAI = False
-    print(f"Warning: tsai not found. Error: {e}")
+# try:
+#     from tsai.all import *
+#     HAS_TSAI = True
+# except ImportError as e:
+#     HAS_TSAI = False
+#     print(f"Warning: tsai not found. Error: {e}")
+HAS_TSAI = False
 
 # --- Helper Functions ---
 
@@ -571,21 +572,21 @@ def main():
                     results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
 
             # 3. Tsai
-            if HAS_TSAI:
-                try:
-                    pred = tsai_model.predict(history_all)
-                    if pred:
-                        stats = lookup_stats(target_file_data['df'], pred, global_param_config)
-                        results['tsai'].append({
-                            'file': file_name,
-                            'pred': pred,
-                            'stats': stats
-                        })
-                    else:
-                        results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
-                except Exception as e:
-                    print(f"  Tsai Error: {e}")
-                    results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+            # if HAS_TSAI:
+            #     try:
+            #         pred = tsai_model.predict(history_all)
+            #         if pred:
+            #             stats = lookup_stats(target_file_data['df'], pred, global_param_config)
+            #             results['tsai'].append({
+            #                 'file': file_name,
+            #                 'pred': pred,
+            #                 'stats': stats
+            #             })
+            #         else:
+            #             results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+            #     except Exception as e:
+            #         print(f"  Tsai Error: {e}")
+            #         results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
 
     except KeyboardInterrupt:
         print("\nProcess cancelled by user. Outputting available results...")
@@ -636,6 +637,10 @@ def generate_html_report(results, output_dir):
         fig1, ax1 = plt.subplots(figsize=(10, 5))
         x = range(len(labels))
         ax1.plot(x, actual_results, marker='o', color='blue', label='Actual Result')
+
+        avg_res = np.mean(actual_results) if actual_results else 0
+        ax1.axhline(y=avg_res, color='r', linestyle='--', label=f'Avg: {avg_res:.2f}')
+
         ax1.set_xticks(x)
         ax1.set_xticklabels(labels, rotation=45, ha='right')
         ax1.set_ylabel('Result')
@@ -652,6 +657,10 @@ def generate_html_report(results, output_dir):
         # Plot 2: Profit
         fig2, ax2 = plt.subplots(figsize=(10, 5))
         ax2.plot(x, profits, marker='o', color='green', label='Actual Profit')
+
+        avg_prof = np.mean(profits) if profits else 0
+        ax2.axhline(y=avg_prof, color='orange', linestyle='--', label=f'Avg: {avg_prof:.2f}')
+
         ax2.set_xticks(x)
         ax2.set_xticklabels(labels, rotation=45, ha='right')
         ax2.set_ylabel('Profit')
