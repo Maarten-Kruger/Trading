@@ -407,6 +407,42 @@ class TsaiForecaster:
 
         return coords_to_params(best_coord, self.var_cols, self.config)
 
+class ControlGroupForecaster:
+    def __init__(self, global_config, var_cols):
+        self.config = global_config
+        self.var_cols = var_cols
+
+    def predict(self, best_vectors_history):
+        # best_vectors_history is list of dicts: {'params': {...}, ...}
+        # Use global VECTOR_INPUT
+
+        relevant_history = best_vectors_history[-VECTOR_INPUT:]
+        if not relevant_history:
+            return None
+
+        sums = [0.0] * len(self.var_cols)
+        count = len(relevant_history)
+
+        for bv in relevant_history:
+            for idx, col in enumerate(self.var_cols):
+                val = bv['params'].get(col, self.config[col]['min'])
+                cfg = self.config[col]
+                if cfg['step'] > 0:
+                    step_val = (val - cfg['min']) / cfg['step']
+                else:
+                    step_val = 0
+                sums[idx] += step_val
+
+        pred_params = {}
+        for idx, col in enumerate(self.var_cols):
+            cfg = self.config[col]
+            avg_step = sums[idx] / count
+            step_pred = int(round(avg_step))
+            val_pred = cfg['min'] + step_pred * cfg['step']
+            pred_params[col] = val_pred
+
+        return pred_params
+
 
 # --- Main Execution ---
 
@@ -505,13 +541,14 @@ def main():
             best_vectors_history.append({'params': {}, 'Result': 0})
 
     # Prepare Models
+    control_model = ControlGroupForecaster(global_param_config, var_cols)
     darts_model = DartsForecaster(global_param_config, var_cols)
     nf_model = NeuralForecastForecaster(global_param_config, var_cols)
     tsai_model = TsaiForecaster(global_param_config, var_cols)
 
     # Predictions Storage
     # Structure: {'darts': [], 'nf': [], 'tsai': []}
-    results = {'darts': [], 'nf': [], 'tsai': []}
+    results = {'control': [], 'darts': [], 'nf': [], 'tsai': []}
 
     start_index = TRAINING_WINDOW + 1
     if start_index >= len(files_data):
@@ -535,6 +572,18 @@ def main():
             window_start = max(0, i - TRAINING_WINDOW)
             history_best = best_vectors_history[window_start:i]
             history_all = [fd['df'] for fd in files_data[window_start:i]]
+
+            # 0. Control Group
+            try:
+                pred = control_model.predict(history_best)
+                stats = lookup_stats(target_file_data['df'], pred, global_param_config)
+                results['control'].append({
+                    'file': file_name,
+                    'pred': pred,
+                    'stats': stats
+                })
+            except Exception as e:
+                print(f"  Control Error: {e}")
 
             # 1. Darts
             if HAS_DARTS:
@@ -618,10 +667,10 @@ def generate_html_report(results, output_dir):
     </head>
     <body>
         <h1>Strategy Predictability Report</h1>
-        <p>Comparison of Darts (Vector Trajectory), NeuralForecast (Panel Surface), and Tsai (Panel Surface).</p>
+        <p>Comparison of Control Group (Avg Best Vectors), Darts (Vector Trajectory), NeuralForecast (Panel Surface), and Tsai (Panel Surface).</p>
     """)
 
-    models = [('Darts', 'darts'), ('NeuralForecast', 'nf'), ('Tsai', 'tsai')]
+    models = [('Control Group', 'control'), ('Darts', 'darts'), ('NeuralForecast', 'nf'), ('Tsai', 'tsai')]
 
     for title, key in models:
         data = results.get(key, [])
