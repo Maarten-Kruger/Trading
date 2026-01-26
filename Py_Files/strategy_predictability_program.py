@@ -97,36 +97,42 @@ def coords_to_params(coord, var_cols, config):
     return params
 
 def lookup_stats(df, params, config):
-    # Find row in df that matches params (using approximate matching for floats)
-    # We reconstruct coords to match exactly what we grouped by
-
-    # Actually, simpler: check dist
-    best_dist = float('inf')
-    best_row = None
-
-    # This might be slow for large DF.
-    # Optimization: Filter by first param?
-    # Or just iterate.
-
-    # Let's try to match exactly using the grid logic
-    # But df contains raw values.
-
-    # Filter using tolerance
+    # 1. Try Exact/Close Match (within tolerance)
     mask = np.ones(len(df), dtype=bool)
     for col, val in params.items():
         if col in df.columns:
-            # Tolerance: step / 2 ?
             step = config[col]['step']
             tol = step / 2.0 if step > 0 else 1e-7
             mask = mask & (np.abs(df[col] - val) <= tol)
 
     matches = df[mask]
-    if matches.empty:
-        return {'Result': 0, 'Profit': 0, 'found': False}
+    if not matches.empty:
+        # If multiple matches, take max result
+        row = matches.loc[matches['Result'].idxmax()]
+        matched_params = {k: row[k] for k in params.keys() if k in row}
+        return {'Result': float(row['Result']), 'Profit': float(row['Profit']), 'found': True, 'matched_params': matched_params}
 
-    # If multiple matches (shouldn't happen on grid), take max result
-    row = matches.loc[matches['Result'].idxmax()]
-    return {'Result': float(row['Result']), 'Profit': float(row['Profit']), 'found': True}
+    # 2. Fallback: Nearest Neighbor in Normalized Step Space
+    total_dist_sq = pd.Series(0.0, index=df.index)
+    valid_cols = 0
+
+    for col, val in params.items():
+        if col in df.columns:
+            cfg = config[col]
+            step = cfg['step'] if cfg['step'] > 0 else 1.0
+            # Normalized difference
+            diff = (df[col] - val) / step
+            total_dist_sq += diff ** 2
+            valid_cols += 1
+
+    if valid_cols == 0:
+         return {'Result': 0, 'Profit': 0, 'found': False}
+
+    best_idx = total_dist_sq.idxmin()
+    row = df.loc[best_idx]
+
+    matched_params = {k: row[k] for k in params.keys() if k in row}
+    return {'Result': float(row['Result']), 'Profit': float(row['Profit']), 'found': True, 'matched_params': matched_params}
 
 # --- Model Classes ---
 
@@ -612,6 +618,8 @@ def main():
             try:
                 pred = control_model.predict(history_best)
                 stats = lookup_stats(target_file_data['df'], pred, global_param_config)
+                if stats['found'] and 'matched_params' in stats:
+                    pred = stats['matched_params']
                 results['control'].append({
                     'file': file_name,
                     'pred': pred,
@@ -625,6 +633,8 @@ def main():
                 try:
                     pred = darts_model.predict(history_best)
                     stats = lookup_stats(target_file_data['df'], pred, global_param_config)
+                    if stats['found'] and 'matched_params' in stats:
+                        pred = stats['matched_params']
                     results['darts'].append({
                         'file': file_name,
                         'pred': pred,
@@ -644,6 +654,8 @@ def main():
 
                     if pred:
                         stats = lookup_stats(target_file_data['df'], pred, global_param_config)
+                        if stats['found'] and 'matched_params' in stats:
+                            pred = stats['matched_params']
                         results['nf'].append({
                             'file': file_name,
                             'pred': pred,
@@ -661,6 +673,8 @@ def main():
                     pred = tsai_model.predict(history_all)
                     if pred:
                         stats = lookup_stats(target_file_data['df'], pred, global_param_config)
+                        if stats['found'] and 'matched_params' in stats:
+                            pred = stats['matched_params']
                         results['tsai'].append({
                             'file': file_name,
                             'pred': pred,
