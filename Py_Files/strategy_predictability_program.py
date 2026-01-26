@@ -60,7 +60,9 @@ def read_csv_robust(filepath):
 
     # Clean numeric columns
     for col in df.columns:
-        if df[col].dtype == 'object':
+        # Check for object or string dtype (Pandas 3.0+ compatibility)
+        is_string_like = df[col].dtype == 'object' or isinstance(df[col].dtype, pd.StringDtype)
+        if is_string_like:
             try:
                 series = df[col].astype(str).str.replace(',', '.')
                 df[col] = pd.to_numeric(series)
@@ -70,7 +72,8 @@ def read_csv_robust(filepath):
 
     # Force Result/Profit to numeric if possible
     for c in ['Result', 'Profit']:
-        if c in df.columns and df[c].dtype == 'object':
+        is_string_like = c in df.columns and (df[c].dtype == 'object' or isinstance(df[c].dtype, pd.StringDtype))
+        if is_string_like:
              df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
 
     return df
@@ -97,6 +100,10 @@ def coords_to_params(coord, var_cols, config):
     return params
 
 def lookup_stats(df, params, config):
+    # 0. Safety Check
+    if df.empty:
+        return {'Result': 0, 'Profit': 0, 'found': False}
+
     # 1. Try Exact/Close Match (within tolerance)
     mask = np.ones(len(df), dtype=bool)
     for col, val in params.items():
