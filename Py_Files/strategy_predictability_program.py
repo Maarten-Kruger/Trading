@@ -42,13 +42,12 @@ except ImportError:
     HAS_NF = False
     print("Warning: NeuralForecast not found.")
 
-# try:
-#     from tsai.all import *
-#     HAS_TSAI = True
-# except ImportError as e:
-#     HAS_TSAI = False
-#     print(f"Warning: tsai not found. Error: {e}")
-HAS_TSAI = False
+try:
+    from tsai.all import *
+    HAS_TSAI = True
+except ImportError as e:
+    HAS_TSAI = False
+    print(f"Warning: tsai not found. Error: {e}")
 
 # --- Helper Functions ---
 
@@ -65,7 +64,14 @@ def read_csv_robust(filepath):
                 series = df[col].astype(str).str.replace(',', '.')
                 df[col] = pd.to_numeric(series)
             except ValueError:
+                # print(f"Warning: Column {col} could not be converted to numeric.")
                 pass
+
+    # Force Result/Profit to numeric if possible
+    for c in ['Result', 'Profit']:
+        if c in df.columns and df[c].dtype == 'object':
+             df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
+
     return df
 
 def get_coords(row, var_cols, config):
@@ -119,7 +125,7 @@ def lookup_stats(df, params, config):
 
     # If multiple matches (shouldn't happen on grid), take max result
     row = matches.loc[matches['Result'].idxmax()]
-    return {'Result': row['Result'], 'Profit': row['Profit'], 'found': True}
+    return {'Result': float(row['Result']), 'Profit': float(row['Profit']), 'found': True}
 
 # --- Model Classes ---
 
@@ -426,9 +432,23 @@ class ControlGroupForecaster:
         for bv in relevant_history:
             for idx, col in enumerate(self.var_cols):
                 val = bv['params'].get(col, self.config[col]['min'])
+                # Ensure val is float
+                if isinstance(val, str):
+                    try:
+                        val = float(val.replace(',', '.'))
+                    except:
+                        val = 0.0
+
                 cfg = self.config[col]
+                min_val = cfg['min']
+                if isinstance(min_val, str):
+                     try:
+                        min_val = float(min_val.replace(',', '.'))
+                     except:
+                        min_val = 0.0
+
                 if cfg['step'] > 0:
-                    step_val = (val - cfg['min']) / cfg['step']
+                    step_val = (val - min_val) / cfg['step']
                 else:
                     step_val = 0
                 sums[idx] += step_val
@@ -621,21 +641,21 @@ def main():
                     results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
 
             # 3. Tsai
-            # if HAS_TSAI:
-            #     try:
-            #         pred = tsai_model.predict(history_all)
-            #         if pred:
-            #             stats = lookup_stats(target_file_data['df'], pred, global_param_config)
-            #             results['tsai'].append({
-            #                 'file': file_name,
-            #                 'pred': pred,
-            #                 'stats': stats
-            #             })
-            #         else:
-            #             results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
-            #     except Exception as e:
-            #         print(f"  Tsai Error: {e}")
-            #         results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+            if HAS_TSAI:
+                try:
+                    pred = tsai_model.predict(history_all)
+                    if pred:
+                        stats = lookup_stats(target_file_data['df'], pred, global_param_config)
+                        results['tsai'].append({
+                            'file': file_name,
+                            'pred': pred,
+                            'stats': stats
+                        })
+                    else:
+                        results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+                except Exception as e:
+                    print(f"  Tsai Error: {e}")
+                    results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
 
     except KeyboardInterrupt:
         print("\nProcess cancelled by user. Outputting available results...")
@@ -686,6 +706,9 @@ def generate_html_report(results, output_dir):
         fig1, ax1 = plt.subplots(figsize=(10, 5))
         x = range(len(labels))
         ax1.plot(x, actual_results, marker='o', color='blue', label='Actual Result')
+
+        actual_results = [float(x) for x in actual_results]
+        profits = [float(x) for x in profits]
 
         avg_res = np.mean(actual_results) if actual_results else 0
         ax1.axhline(y=avg_res, color='r', linestyle='--', label=f'Avg: {avg_res:.2f}')
