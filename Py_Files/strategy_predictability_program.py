@@ -9,6 +9,7 @@ import io
 import base64
 import warnings
 import logging
+import time
 from itertools import product
 from datetime import datetime, timedelta
 
@@ -42,13 +43,12 @@ except ImportError:
     HAS_NF = False
     print("Warning: NeuralForecast not found.")
 
-# try:
-#     from tsai.all import *
-#     HAS_TSAI = True
-# except ImportError as e:
-#     HAS_TSAI = False
-#     print(f"Warning: tsai not found. Error: {e}")
-HAS_TSAI = False
+try:
+    from tsai.all import *
+    HAS_TSAI = True
+except ImportError as e:
+    HAS_TSAI = False
+    print(f"Warning: tsai not found. Error: {e}")
 
 # --- Helper Functions ---
 
@@ -65,7 +65,14 @@ def read_csv_robust(filepath):
                 series = df[col].astype(str).str.replace(',', '.')
                 df[col] = pd.to_numeric(series)
             except ValueError:
+                # print(f"Warning: Column {col} could not be converted to numeric.")
                 pass
+
+    # Force Result/Profit to numeric if possible
+    for c in ['Result', 'Profit']:
+        if c in df.columns and df[c].dtype == 'object':
+             df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
+
     return df
 
 def get_coords(row, var_cols, config):
@@ -119,7 +126,7 @@ def lookup_stats(df, params, config):
 
     # If multiple matches (shouldn't happen on grid), take max result
     row = matches.loc[matches['Result'].idxmax()]
-    return {'Result': row['Result'], 'Profit': row['Profit'], 'found': True}
+    return {'Result': float(row['Result']), 'Profit': float(row['Profit']), 'found': True}
 
 # --- Model Classes ---
 
@@ -426,9 +433,23 @@ class ControlGroupForecaster:
         for bv in relevant_history:
             for idx, col in enumerate(self.var_cols):
                 val = bv['params'].get(col, self.config[col]['min'])
+                # Ensure val is float
+                if isinstance(val, str):
+                    try:
+                        val = float(val.replace(',', '.'))
+                    except:
+                        val = 0.0
+
                 cfg = self.config[col]
+                min_val = cfg['min']
+                if isinstance(min_val, str):
+                     try:
+                        min_val = float(min_val.replace(',', '.'))
+                     except:
+                        min_val = 0.0
+
                 if cfg['step'] > 0:
-                    step_val = (val - cfg['min']) / cfg['step']
+                    step_val = (val - min_val) / cfg['step']
                 else:
                     step_val = 0
                 sums[idx] += step_val
@@ -476,6 +497,16 @@ def main():
 
     csv_files.sort(key=sort_key)
     print(f"Found {len(csv_files)} files.")
+
+    print("\n=== Definitions ===")
+    print(f"VECTOR_INPUT ({VECTOR_INPUT}): Lookback window size (Model Lags). The number of past time steps (files/vectors) the model looks at to make a prediction.")
+    print(f"TRAINING_WINDOW ({TRAINING_WINDOW}): Size of the sliding window used for training. The number of recent files included in the training dataset for the model.")
+    print("-" * 30)
+    print("Control Group: Calculates the average of the parameter steps from the last VECTOR_INPUT best vectors.")
+    print("Darts (Random Forest): Trains a Random Forest regressor on the trajectory of the best vectors within the TRAINING_WINDOW to predict the next best vector coordinates.")
+    print("NeuralForecast (NHITS): Trains a specialized neural network (NHITS) on the entire result surface history within the TRAINING_WINDOW to forecast the result of every parameter combination.")
+    print("Tsai (InceptionTime): Trains a Time Series Transformer/CNN (InceptionTime) on the result history of all coordinates within the TRAINING_WINDOW to predict the next best vector.")
+    print("===================\n")
 
     # Global Scan
     print("Scanning global parameters...")
@@ -561,6 +592,10 @@ def main():
 
     print("Running Forecasts (This may take time)...")
 
+    start_time = time.time()
+    files_processed = 0
+    total_files_to_process = len(files_data) - start_index
+
     try:
         for i in range(start_index, len(files_data)):
             target_file_data = files_data[i]
@@ -621,21 +656,30 @@ def main():
                     results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
 
             # 3. Tsai
-            # if HAS_TSAI:
-            #     try:
-            #         pred = tsai_model.predict(history_all)
-            #         if pred:
-            #             stats = lookup_stats(target_file_data['df'], pred, global_param_config)
-            #             results['tsai'].append({
-            #                 'file': file_name,
-            #                 'pred': pred,
-            #                 'stats': stats
-            #             })
-            #         else:
-            #             results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
-            #     except Exception as e:
-            #         print(f"  Tsai Error: {e}")
-            #         results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+            if HAS_TSAI:
+                try:
+                    pred = tsai_model.predict(history_all)
+                    if pred:
+                        stats = lookup_stats(target_file_data['df'], pred, global_param_config)
+                        results['tsai'].append({
+                            'file': file_name,
+                            'pred': pred,
+                            'stats': stats
+                        })
+                    else:
+                        results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+                except Exception as e:
+                    print(f"  Tsai Error: {e}")
+                    results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+
+            # Time Estimation
+            files_processed += 1
+            elapsed_time = time.time() - start_time
+            avg_time = elapsed_time / files_processed
+            remaining_files = total_files_to_process - files_processed
+            eta_seconds = avg_time * remaining_files
+
+            print(f"  > Progress: {files_processed}/{total_files_to_process} | Avg Time: {avg_time:.2f}s | Remaining: {remaining_files} | ETA: {eta_seconds/60:.2f} min")
 
     except KeyboardInterrupt:
         print("\nProcess cancelled by user. Outputting available results...")
@@ -686,6 +730,9 @@ def generate_html_report(results, output_dir):
         fig1, ax1 = plt.subplots(figsize=(10, 5))
         x = range(len(labels))
         ax1.plot(x, actual_results, marker='o', color='blue', label='Actual Result')
+
+        actual_results = [float(x) for x in actual_results]
+        profits = [float(x) for x in profits]
 
         avg_res = np.mean(actual_results) if actual_results else 0
         ax1.axhline(y=avg_res, color='r', linestyle='--', label=f'Avg: {avg_res:.2f}')
