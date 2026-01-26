@@ -22,7 +22,7 @@ logging.getLogger("neuralforecast").setLevel(logging.ERROR)
 # Configuration
 RESULT_CUTOFF = 25
 VECTOR_INPUT = 10  # Lookback window size (Model Lags)
-TRAINING_WINDOW = 30 # Size of the sliding window used for training (Must be > VECTOR_INPUT)
+TRAINING_WINDOW = 12 # Size of the sliding window used for training (Must be > VECTOR_INPUT)
 
 # --- Library Imports ---
 print("Importing libraries...")
