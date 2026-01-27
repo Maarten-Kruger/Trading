@@ -10,6 +10,7 @@ import base64
 import warnings
 import logging
 import time
+import traceback
 from itertools import product
 from datetime import datetime, timedelta
 
@@ -305,6 +306,7 @@ class TsaiForecaster:
         self.var_cols = var_cols
 
     def predict(self, all_vectors_history):
+        print(f"[DEBUG TSAI] Starting prediction. HAS_TSAI={HAS_TSAI}")
         if not HAS_TSAI:
             return None
 
@@ -335,7 +337,10 @@ class TsaiForecaster:
         coords_list = list(history_map.keys())
         time_steps = len(all_vectors_history)
 
+        print(f"[DEBUG TSAI] Coords: {len(coords_list)}, TimeSteps: {time_steps}")
+
         if not coords_list:
+            print("[DEBUG TSAI] coords_list is empty.")
             return None
 
         X = np.zeros((len(coords_list), 1, time_steps))
@@ -365,7 +370,9 @@ class TsaiForecaster:
 
         # We extract all possible windows from the history
         w = min(VECTOR_INPUT, time_steps - 1)
+        print(f"[DEBUG TSAI] Window size w={w}")
         if w < 2:
+            print("[DEBUG TSAI] Window size too small.")
             return None
 
         X_train = []
@@ -382,7 +389,9 @@ class TsaiForecaster:
         X_train = np.array(X_train)[:, np.newaxis, :] # (TotalSamples, 1, w)
         y_train = np.array(y_train)
 
+        print(f"[DEBUG TSAI] Training samples: {len(X_train)}")
         if len(X_train) == 0:
+            print("[DEBUG TSAI] No training samples.")
             return None
 
         # Model
@@ -396,6 +405,7 @@ class TsaiForecaster:
         dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=64, num_workers=0)
 
         learn = ts_learner(dls, model, metrics=mae, verbose=False)
+        print("[DEBUG TSAI] Training model...")
         learn.fit_one_cycle(5, 1e-3) # Fast training
 
         # Predict on latest window
@@ -407,25 +417,34 @@ class TsaiForecaster:
         # tsai is a bit complex with inference without dl
         # Let's create a dl
         try:
+            print("[DEBUG TSAI] Predicting...")
             test_dls = dls.test_dl(X_test)
             if test_dls is None:
+                print("[DEBUG TSAI] test_dls is None.")
                 return None
 
             pred_res = learn.get_preds(dl=test_dls)
             if pred_res is None:
+                print("[DEBUG TSAI] pred_res is None.")
                 return None
 
             preds, _ = pred_res
 
             # preds is (Samples, 1)
             preds_np = preds.numpy().flatten()
-        except Exception:
+            print(f"[DEBUG TSAI] Preds shape: {preds_np.shape}")
+
+            best_idx = np.argmax(preds_np)
+            best_coord = coords_list[best_idx]
+
+            print(f"[DEBUG TSAI] Best Coord: {best_coord}")
+            pred_params = coords_to_params(best_coord, self.var_cols, self.config)
+            print(f"[DEBUG TSAI] Predicted Params: {pred_params}")
+            return pred_params
+        except Exception as e:
+            print(f"[DEBUG TSAI] Exception during prediction: {e}")
+            traceback.print_exc()
             return None
-
-        best_idx = np.argmax(preds_np)
-        best_coord = coords_list[best_idx]
-
-        return coords_to_params(best_coord, self.var_cols, self.config)
 
 class ControlGroupForecaster:
     def __init__(self, global_config, var_cols):
@@ -678,8 +697,10 @@ def main():
             if HAS_TSAI:
                 try:
                     pred = tsai_model.predict(history_all)
+                    print(f"[DEBUG MAIN] Tsai returned prediction: {pred}")
                     if pred:
                         stats = lookup_stats(target_file_data['df'], pred, global_param_config)
+                        print(f"[DEBUG MAIN] Lookup stats result: {stats}")
                         if stats['found'] and 'matched_params' in stats:
                             pred = stats['matched_params']
                         results['tsai'].append({
@@ -688,9 +709,11 @@ def main():
                             'stats': stats
                         })
                     else:
+                        print("[DEBUG MAIN] Tsai returned None.")
                         results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
                 except Exception as e:
                     print(f"  Tsai Error: {e}")
+                    traceback.print_exc()
                     results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
 
             # Time Estimation
