@@ -410,28 +410,27 @@ class TsaiForecaster:
 
         # Predict on latest window
         X_test = X[:, :, -w:] # (Samples, 1, w)
-        # get_preds expects dl
-        test_ds = dsets.valid.new_empty()
-        # Hack to create test dl
-        # Construct directly
-        # tsai is a bit complex with inference without dl
-        # Let's create a dl
+
+        # Direct Model Inference (Bypass fastai test_dl bug)
         try:
-            print("[DEBUG TSAI] Predicting...")
-            test_dls = dls.test_dl(X_test)
-            if test_dls is None:
-                print("[DEBUG TSAI] test_dls is None.")
-                return None
+            print("[DEBUG TSAI] Predicting (Direct Model Call)...")
+            learn.model.eval()
 
-            pred_res = learn.get_preds(dl=test_dls)
-            if pred_res is None:
-                print("[DEBUG TSAI] pred_res is None.")
-                return None
+            # Prepare tensor
+            # X_test is (Samples, 1, w)
+            # Ensure float32
+            import torch
+            input_tensor = torch.from_numpy(X_test).float()
 
-            preds, _ = pred_res
+            # Move to device
+            device = next(learn.model.parameters()).device
+            input_tensor = input_tensor.to(device)
 
-            # preds is (Samples, 1)
-            preds_np = preds.numpy().flatten()
+            with torch.no_grad():
+                preds = learn.model(input_tensor)
+
+            # preds is (Samples, 1) or similar. Move to CPU and numpy
+            preds_np = preds.cpu().numpy().flatten()
             print(f"[DEBUG TSAI] Preds shape: {preds_np.shape}")
 
             best_idx = np.argmax(preds_np)
