@@ -254,8 +254,15 @@ class DartsForecaster:
         if not HAS_DARTS:
             return None
 
+        # Filter out empty entries if any (or handle them)
+        valid_history = [bv for bv in best_vectors_history if bv['Result'] != 0 or bv['params']]
+
+        # We need at least VECTOR_INPUT + 1 data points to fit lags
+        if len(valid_history) < VECTOR_INPUT + 1:
+            return None
+
         data_matrix = []
-        for bv in best_vectors_history:
+        for bv in valid_history:
             row_vec = []
             for col in self.var_cols:
                 val = bv['params'].get(col, self.config[col]['min'])
@@ -299,46 +306,39 @@ class NeuralForecastForecaster:
             self.model = None
         self.nf = None
 
-    def predict(self, history_grid_summaries):
-        # history_grid_summaries: list of dicts {coord_tuple: result}
-        if not HAS_NF:
+    def predict(self, Y_df_global, window_start_idx, window_end_idx):
+        """
+        Takes the global long-format DataFrame and slices it for the current window.
+        window_start_idx / end_idx are integers referring to the file sequence index (0..N).
+        We assume 'ds' in Y_df_global corresponds to these indices (e.g. 2020-01-01 + i days).
+        """
+        if not HAS_NF or Y_df_global is None or Y_df_global.empty:
             return None
 
-        # 1. Build Long Format DF from pre-processed grid summaries
-        # unique_id | ds | y
+        # Calculate date range for the slice
+        # ds starts at 2020-01-01
+        start_date_base = datetime(2020, 1, 1)
 
-        # We need to normalize time. Let's use dummy dates.
-        start_date = datetime(2020, 1, 1)
+        # We need data from [window_start_idx, window_end_idx)
+        # The model needs history.
 
-        # Identify all unique coords seen in history
-        all_coords = set()
-        for grid in history_grid_summaries:
-            all_coords.update(grid.keys())
+        # Slicing via boolean mask is fast
+        # Note: We filter for ds >= start and ds < end
 
-        if not all_coords:
-            return None
+        slice_start_date = start_date_base + timedelta(days=window_start_idx)
+        slice_end_date = start_date_base + timedelta(days=window_end_idx)
 
-        full_time_indices = range(len(history_grid_summaries))
-        long_data = []
+        # Optimization: use searchsorted if sorted, but boolean mask is okay for millions of rows on modern RAM
+        mask = (Y_df_global['ds'] >= slice_start_date) & (Y_df_global['ds'] < slice_end_date)
+        Y_df_window = Y_df_global.loc[mask]
 
-        # Reconstruct per-coord timeline
-        # This loop is much faster than processing raw DFs
-        for coord in all_coords:
-            uid = str(coord)
-            for t in full_time_indices:
-                val = history_grid_summaries[t].get(coord, 0.0) # Fill missing with 0
-                ds = start_date + timedelta(days=t)
-                long_data.append({'unique_id': uid, 'ds': ds, 'y': val})
-
-        Y_df = pd.DataFrame(long_data)
-
-        if Y_df.empty:
+        if Y_df_window.empty:
             return None
 
         # 2. Train and Predict
         # We instantiate NF every time to avoid carrying over state from previous growing windows incorrectly
         nf = NeuralForecast(models=[self.model], freq='D')
-        nf.fit(df=Y_df)
+        nf.fit(df=Y_df_window)
 
         future_df = nf.predict()
 
@@ -356,130 +356,125 @@ class NeuralForecastForecaster:
         else:
             best_uid = future_df['NHITS'].idxmax()
 
-        # Find coord back from string UID
-        # We cast tuple to str(coord) to make uid, so we need to match it back
-        # Optimization: We know uid is str(coord)
-        # But parsing str(coord) is annoying. Let's find match in all_coords
-        best_coord = None
-        for coord in all_coords:
-            if str(coord) == best_uid:
-                best_coord = coord
-                break
-
-        if best_coord:
+        # best_uid is the string representation of the coordinate tuple
+        # We need to parse it back or have a mapping.
+        # In this architecture, we rely on the main function to pass a mapping if needed,
+        # or we re-parse. Re-parsing is safe and reasonably fast for one item.
+        try:
+            # uid is "('coord1', 'coord2')" string
+            # Safe eval or simple parse
+            best_coord = eval(best_uid)
             return coords_to_params(best_coord, self.var_cols, self.config)
-        return None
+        except:
+            return None
 
 class TsaiForecaster:
     def __init__(self, global_config, var_cols):
         self.config = global_config
         self.var_cols = var_cols
 
-    def predict(self, history_grid_summaries):
-        # print(f"[DEBUG TSAI] Starting prediction. HAS_TSAI={HAS_TSAI}")
+    def predict(self, master_matrix, window_start_idx, window_end_idx, coords_map_list):
+        """
+        master_matrix: (Num_Coords, Num_Files) dense array
+        coords_map_list: List of coordinate tuples corresponding to rows of master_matrix
+        """
         if not HAS_TSAI:
             return None
 
-        # Prepare X: (Samples, Features, Time)
-        # Samples: Unique Coords
-        # Features: 1 (Result)
-        # Time: History Length
+        # Slice the matrix: O(1)
+        # X shape: (Samples, Time) -> (Num_Coords, Window_Size)
+        X_slice = master_matrix[:, window_start_idx:window_end_idx]
 
-        history_map = {}
-        all_coords = set()
-        for t, grid in enumerate(history_grid_summaries):
-            for coord, res in grid.items():
-                if coord not in history_map:
-                    history_map[coord] = {}
-                history_map[coord][t] = res
-                all_coords.add(coord)
+        # X_slice shape: (N_Coords, Window_Len)
+        n_coords, win_len = X_slice.shape
 
-        coords_list = list(all_coords)
-        time_steps = len(history_grid_summaries)
-
-        # print(f"[DEBUG TSAI] Coords: {len(coords_list)}, TimeSteps: {time_steps}")
-
-        if not coords_list:
-            # print("[DEBUG TSAI] coords_list is empty.")
+        if win_len < 2:
             return None
 
-        X = np.zeros((len(coords_list), 1, time_steps))
+        # We need to forecast step T+1.
+        # Using InceptionTime or similar.
+        # Training data generation: Sliding window over the *current slice*?
+        # Or just use the slice as one sample?
+        # Usually we train on sub-windows within the history.
 
-        for i, coord in enumerate(coords_list):
-            for t in range(time_steps):
-                X[i, 0, t] = history_map[coord].get(t, 0.0)
-
-        # Sliding Window
-        # X shape: (Samples, 1, Time)
-        # We want to use last VECTOR_INPUT steps to predict next.
-
-        w = min(VECTOR_INPUT, time_steps - 1)
-        # print(f"[DEBUG TSAI] Window size w={w}")
+        # Sliding Window Logic on the slice
+        w = min(VECTOR_INPUT, win_len - 1)
         if w < 2:
-            # print("[DEBUG TSAI] Window size too small.")
             return None
+
+        # Prepare X_train, y_train
+        # X_slice: (Samples, Time)
+        # We want to use all coords as independent samples.
+        # For each coord, we extract sub-windows.
+
+        # Fast strided windowing (numpy trick) or simple loop?
+        # Given huge data, simple loop might be slow.
+        # But we only iterate through Time (small), not Samples (huge).
 
         X_train = []
         y_train = []
 
-        # Use all coords as samples
-        for i in range(len(coords_list)):
-            series = X[i, 0, :]
-            # Generate windows
-            for t in range(w, len(series)):
-                X_train.append(series[t-w:t])
-                y_train.append(series[t])
+        # Vectorized preparation?
+        # shape: (N_Coords, Time)
+        # We want (N_Coords * (Time-w), 1, w)
 
-        X_train = np.array(X_train)[:, np.newaxis, :] # (TotalSamples, 1, w)
-        y_train = np.array(y_train)
+        for t in range(w, win_len):
+            # Input: columns t-w to t
+            # Output: column t
+            # Copy is necessary to be safe
+            X_win = X_slice[:, t-w:t] # Shape (N_Coords, w)
+            y_win = X_slice[:, t]     # Shape (N_Coords,)
 
-        # print(f"[DEBUG TSAI] Training samples: {len(X_train)}")
+            X_train.append(X_win)
+            y_train.append(y_win)
+
+        if not X_train:
+            return None
+
+        X_train = np.concatenate(X_train, axis=0) # Stack samples
+        y_train = np.concatenate(y_train, axis=0)
+
+        # Add channel dim: (Total_Samples, 1, w)
+        X_train = X_train[:, np.newaxis, :]
+
         if len(X_train) == 0:
-            # print("[DEBUG TSAI] No training samples.")
             return None
 
         # Model
-        # InceptionTime is good
         model = InceptionTime(c_in=1, c_out=1)
-        # Use simple Learner
         splits = RandomSplitter()(range(len(X_train)))
         tfms = [None, [TSRegression()]]
         dsets = TSDatasets(X_train, y_train, tfms=tfms, splits=splits)
-        # num_workers=0 is safer for stability, increase if needed
+        # num_workers=0 is safer for stability
         dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=64, num_workers=0)
 
         learn = ts_learner(dls, model, metrics=mae, verbose=False)
-        # print("[DEBUG TSAI] Training model...")
         learn.fit_one_cycle(5, 1e-3) # Fast training
 
-        # Predict on latest window
-        X_test = X[:, :, -w:] # (Samples, 1, w)
+        # Predict on latest window (the end of the slice)
+        # Shape (N_Coords, 1, w)
+        X_test = X_slice[:, -w:]
+        X_test = X_test[:, np.newaxis, :]
 
         try:
-            # print("[DEBUG TSAI] Predicting (Direct Model Call)...")
             learn.model.eval()
 
             # Prepare tensor
-            # X_test is (Samples, 1, w)
-            # Ensure float32
             import torch
             input_tensor = torch.from_numpy(X_test).float()
 
-            # Move to device
             device = next(learn.model.parameters()).device
             input_tensor = input_tensor.to(device)
 
             with torch.no_grad():
                 preds = learn.model(input_tensor)
 
-            # preds is (Samples, 1) or similar. Move to CPU and numpy
             preds_np = preds.cpu().numpy().flatten()
-            # print(f"[DEBUG TSAI] Preds shape: {preds_np.shape}")
 
             best_idx = np.argmax(preds_np)
-            best_coord = coords_list[best_idx]
+            # Map index back to coord
+            best_coord = coords_map_list[best_idx]
 
-            # print(f"[DEBUG TSAI] Best Coord: {best_coord}")
             pred_params = coords_to_params(best_coord, self.var_cols, self.config)
             return pred_params
         except Exception as e:
@@ -500,10 +495,15 @@ class ControlGroupForecaster:
         if not relevant_history:
             return None
 
-        sums = [0.0] * len(self.var_cols)
-        count = len(relevant_history)
+        # Filter valid
+        valid_history = [bv for bv in relevant_history if bv['Result'] != 0 or bv['params']]
+        if not valid_history:
+            return None
 
-        for bv in relevant_history:
+        sums = [0.0] * len(self.var_cols)
+        count = len(valid_history)
+
+        for bv in valid_history:
             for idx, col in enumerate(self.var_cols):
                 val = bv['params'].get(col, self.config[col]['min'])
                 # Ensure val is float
@@ -588,7 +588,6 @@ def main():
     files_data = []
 
     # Use ProcessPoolExecutor for parallel loading
-    # Adjust max_workers as needed, default is usually #CPUs
     with concurrent.futures.ProcessPoolExecutor() as executor:
         try:
             results = executor.map(process_file_load, csv_files)
@@ -628,7 +627,7 @@ def main():
 
     var_cols = sorted_vars
 
-    # Pre-process Data (Parallel)
+    # Pre-process Data (Parallel) - Build Per-File Grids
     print("Preprocessing data for models...")
     start_pre = time.time()
 
@@ -644,7 +643,90 @@ def main():
 
     print(f"Preprocessed {len(files_data)} files in {time.time() - start_pre:.2f}s")
 
-    # Extract Best Vectors (Compatibility)
+    # --- MASTER MATRIX CONSTRUCTION ---
+    print("Constructing Master Data Structures (Global Matrix)...")
+    start_matrix = time.time()
+
+    # 1. Identify ALL unique coords across history
+    all_coords_set = set()
+    for fd in files_data:
+        all_coords_set.update(fd['grid_summary'].keys())
+
+    coords_list = sorted(list(all_coords_set)) # Consistent ordering
+    coord_to_idx = {c: i for i, c in enumerate(coords_list)}
+    num_coords = len(coords_list)
+    num_files = len(files_data)
+
+    print(f"  > Unique Coordinate Combinations: {num_coords}")
+    print(f"  > Time Steps (Files): {num_files}")
+
+    # 2. Build Tsai Master Matrix (NumPy)
+    # Shape: (Num_Coords, Num_Files)
+    # Init with 0 or NaN? 0 implies bad result, which is safe for maximization logic.
+    master_matrix = np.zeros((num_coords, num_files), dtype=np.float32)
+
+    # Fill matrix
+    # This might take a moment but it's done ONCE.
+    for t, fd in enumerate(files_data):
+        grid = fd['grid_summary']
+        for coord, res in grid.items():
+            if coord in coord_to_idx:
+                idx = coord_to_idx[coord]
+                master_matrix[idx, t] = res
+
+    # 3. Build NeuralForecast Global DataFrame (Pandas Long Format)
+    # Columns: unique_id, ds, y
+    # ds = 2020-01-01 + t days
+
+    # We can construct this efficiently from the master matrix using numpy magic
+    # or list comprehension.
+
+    # Let's use list comprehension for clarity and safety with strings
+    nf_records = []
+    base_date = datetime(2020, 1, 1)
+
+    # To optimize: Create a DF directly from the matrix?
+    # NeuralForecast needs 'unique_id' column (string of tuple)
+    # 'ds' column (datetime)
+    # 'y' column (float)
+
+    # Fast approach: Stack the matrix
+    # Rows: Coords, Cols: Time
+    # We want Long format.
+
+    # Coords column
+    # Repeat coords list for each time step?
+
+    # Let's do a semi-vectorized approach
+    # Create indices
+    t_indices = np.arange(num_files)
+    dates = [base_date + timedelta(days=int(t)) for t in t_indices]
+
+    # We need to melt the master matrix
+    # DataFrame(master_matrix, index=coords_strs, columns=dates) -> melt
+
+    coords_strs = [str(c) for c in coords_list]
+
+    # Create a DataFrame for easy melting
+    # This consumes RAM but is fast.
+    # If 860,000 rows * 30 cols = 25M elements. Float32 ~ 100MB. Pandas overhead x5 ~ 500MB.
+    # This is fine for "nice computer".
+
+    temp_df = pd.DataFrame(master_matrix, index=coords_strs, columns=dates)
+    temp_df.index.name = 'unique_id'
+
+    # Reset index to make unique_id a column
+    # Melt
+    # id_vars='unique_id', var_name='ds', value_name='y'
+    Y_df_global = temp_df.reset_index().melt(id_vars='unique_id', var_name='ds', value_name='y')
+
+    # Ensure types
+    Y_df_global['ds'] = pd.to_datetime(Y_df_global['ds'])
+    Y_df_global['y'] = Y_df_global['y'].astype(np.float32)
+
+    print(f"Master Matrix Construction took {time.time() - start_matrix:.2f}s")
+
+    # 4. Extract Best Vectors (Compatibility)
     best_vectors_history = [fd['best_vector'] for fd in files_data]
 
     # Prepare Models
@@ -666,7 +748,7 @@ def main():
         print(f"Not enough files. Need > {start_index}")
         return
 
-    print("Running Forecasts (This may take time)...")
+    print("Running Forecasts (Optimized Loop)...")
 
     start_time = time.time()
     files_processed = 0
@@ -678,11 +760,12 @@ def main():
             file_name = os.path.basename(target_file_data['path'])
             print(f"Processing {file_name}...")
 
-            # Data Slices
-            # Sliding window of length TRAINING_WINDOW
+            # Data Slices (Indices only)
             window_start = max(0, i - TRAINING_WINDOW)
-            history_best = best_vectors_history[window_start:i]
-            history_grid = [fd['grid_summary'] for fd in files_data[window_start:i]]
+            window_end = i
+
+            # History Best is just a list slice
+            history_best = best_vectors_history[window_start:window_end]
 
             # 0. Control Group
             try:
@@ -718,9 +801,8 @@ def main():
                 try:
                     # We should suppress stdout from NF
                     with io.capture_output() if 'io.capture_output' in globals() else open(os.devnull, 'w') as devnull: # Simple redirection
-                        # Redirect stdout/stderr?
-                        # Python logging already handled.
-                        pred = nf_model.predict(history_grid)
+                        # Pass Global DF and Indices
+                        pred = nf_model.predict(Y_df_global, window_start, window_end)
 
                     if pred:
                         stats = lookup_stats(target_file_data['df'], pred, global_param_config)
@@ -740,11 +822,11 @@ def main():
             # 3. Tsai
             if HAS_TSAI:
                 try:
-                    pred = tsai_model.predict(history_grid)
-                    # print(f"[DEBUG MAIN] Tsai returned prediction: {pred}")
+                    # Pass Master Matrix and Indices + Coords Map
+                    pred = tsai_model.predict(master_matrix, window_start, window_end, coords_list)
+
                     if pred:
                         stats = lookup_stats(target_file_data['df'], pred, global_param_config)
-                        # print(f"[DEBUG MAIN] Lookup stats result: {stats}")
                         if stats['found'] and 'matched_params' in stats:
                             pred = stats['matched_params']
                         results['tsai'].append({
@@ -753,7 +835,6 @@ def main():
                             'stats': stats
                         })
                     else:
-                        # print("[DEBUG MAIN] Tsai returned None.")
                         results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
                 except Exception as e:
                     print(f"  Tsai Error: {e}")
