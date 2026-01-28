@@ -41,6 +41,7 @@ try:
     from neuralforecast import NeuralForecast
     from neuralforecast.models import NHITS, LSTM
     import torch
+    torch.set_float32_matmul_precision('medium')
     HAS_NF = True
 except ImportError:
     HAS_NF = False
@@ -880,6 +881,20 @@ def generate_html_report(results, output_dir):
     </head>
     <body>
         <h1>Strategy Predictability Report</h1>
+        <div class="section">
+            <h2>Definitions</h2>
+            <ul>
+                <li><strong>VECTOR_INPUT ({VECTOR_INPUT}):</strong> Lookback window size (Model Lags). The number of past time steps (files/vectors) the model looks at to make a prediction.</li>
+                <li><strong>TRAINING_WINDOW ({TRAINING_WINDOW}):</strong> Size of the sliding window used for training. The number of recent files included in the training dataset for the model.</li>
+            </ul>
+            <hr>
+            <ul>
+                <li><strong>Control Group:</strong> Calculates the average of the parameter steps from the last VECTOR_INPUT best vectors.</li>
+                <li><strong>Darts (Random Forest):</strong> Trains a Random Forest regressor on the trajectory of the best vectors within the TRAINING_WINDOW to predict the next best vector coordinates.</li>
+                <li><strong>NeuralForecast (NHITS):</strong> Trains a specialized neural network (NHITS) on the entire result surface history within the TRAINING_WINDOW to forecast the result of every parameter combination.</li>
+                <li><strong>Tsai (InceptionTime):</strong> Trains a Time Series Transformer/CNN (InceptionTime) on the result history of all coordinates within the TRAINING_WINDOW to predict the next best vector.</li>
+            </ul>
+        </div>
         <p>Comparison of Control Group (Avg Best Vectors), Darts (Vector Trajectory), NeuralForecast (Panel Surface), and Tsai (Panel Surface).</p>
     """)
 
