@@ -601,7 +601,12 @@ def main():
     def sort_key(f):
         base = os.path.basename(f)
         try:
-            return (int(base.split('_')[0]), base)
+            # Format: [version] [Bot name].[currency pair].[Timeframe].[date range start].[date range end].csv
+            # Example: 1.0 Simple Crossover.EURUSDm.M30.20240101.20240108.csv
+            parts = base.split('.')
+            # Start date is the 3rd from the end (before .csv and end_date)
+            start_date_str = parts[-3]
+            return (int(start_date_str), base)
         except:
             return (float('inf'), base)
 
@@ -699,8 +704,9 @@ def main():
 
     # 2. Build Tsai Master Matrix (NumPy)
     # Shape: (Num_Coords, Num_Files)
-    # Init with 0 or NaN? 0 implies bad result, which is safe for maximization logic.
-    master_matrix = np.zeros((num_coords, num_files), dtype=np.float32)
+    # Init with -1000.0 (a value lower than any valid Result) to ensure missing data is treated as "worst case".
+    # This prevents the model from preferring "missing" (0) over "bad" (e.g. -4.33).
+    master_matrix = np.full((num_coords, num_files), -1000.0, dtype=np.float32)
 
     # Fill matrix
     # This might take a moment but it's done ONCE.
