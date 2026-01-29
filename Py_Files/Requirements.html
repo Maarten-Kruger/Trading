@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Strategy Predictability Program - Requirements & Specifications</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; max-width: 1000px; margin: 0 auto; padding: 20px; }
+        h1, h2, h3 { color: #2c3e50; }
+        h1 { border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        h2 { background-color: #f8f9fa; padding: 10px; border-left: 5px solid #3498db; margin-top: 30px; }
+        .req-box { background-color: #eef7fa; padding: 15px; border-radius: 5px; border: 1px solid #b8daff; margin-bottom: 20px; }
+        .tech-box { background-color: #fdfdfe; padding: 15px; border-radius: 5px; border: 1px solid #eaeaea; margin-bottom: 20px; }
+        ul { margin-top: 5px; }
+        li { margin-bottom: 5px; }
+        code { background-color: #f1f1f1; padding: 2px 5px; border-radius: 3px; font-family: 'Consolas', monospace; color: #c7254e; }
+        .note { font-style: italic; color: #666; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+    <h1>Strategy Predictability Program Requirements</h1>
+
+    <div class="req-box">
+        <h2>1. Core User Requirements</h2>
+        <p>The following requirements outline the intended logic for the strategy predictability analysis program:</p>
+
+        <h3>1.1 Data Filtering & Vector Selection</h3>
+        <ul>
+            <li><strong>Input Data:</strong> Process a sequence of CSV files (optimization results).</li>
+            <li><strong>Result Cutoff:</strong> Filter vectors inside each file where the result exceeds a defined threshold (<code>RESULT_CUTOFF</code>, e.g., 25).</li>
+            <li><strong>Hypercube Selection:</strong> Amongst the filtered vectors, identify the "Best Vector" by finding the one with the largest "Hypercube" (robustness area).</li>
+            <li><strong>History Window:</strong> Use a history of <code>VECTOR_INPUT</code> (e.g., 10) files to define the trajectory for sequential models.</li>
+        </ul>
+
+        <h3>1.2 Sequential Forecasting Models</h3>
+        <ul>
+            <li><strong>Basic Model (Control):</strong> Calculate the average parameters of the "Best Vectors" from the last <code>VECTOR_INPUT</code> files.</li>
+            <li><strong>Darts Model:</strong> Train a model (e.g., Random Forest) on the sequence of "Best Vectors" (length <code>VECTOR_INPUT</code>) to predict the next vector.</li>
+        </ul>
+
+        <h3>1.3 Panel/Surface Forecasting Models</h3>
+        <ul>
+            <li><strong>Training Data:</strong> Feed a larger window of files (<code>TRAINING_WINDOW</code>, e.g., 30) to deep learning models.</li>
+            <li><strong>Full Surface Data:</strong> Input <em>all</em> vectors (lines) from each CSV (e.g., 300,000+ lines total) into the models, ensuring the correct format.</li>
+            <li><strong>Models:</strong>
+                <ul>
+                    <li><strong>Tsai:</strong> Time Series deep learning model (InceptionTime).</li>
+                    <li><strong>NeuralForecast:</strong> Neural forecasting model (NHITS).</li>
+                </ul>
+            </li>
+            <li><strong>Epochs:</strong> Models should process the data multiple times (e.g., <code>EPOCHS_NUMBER = 3</code>). <em>(Note: Implementation pending/configurable)</em></li>
+        </ul>
+
+        <h3>1.4 Validation & Verification</h3>
+        <ul>
+            <li><strong>Prediction Check:</strong> Compare the model predictions against the actual next sequential document (the file immediately following the input window).</li>
+            <li><strong>Matching Logic:</strong> Check for an "Exact" or "Close Match" (within tolerance) in the target file.</li>
+        </ul>
+    </div>
+
+    <div class="tech-box">
+        <h2>2. Technical Specifications & Current Implementation</h2>
+        <p>Analysis of the current codebase (<code>strategy_predictability_program.py</code>) highlights the following technical implementations and optimizations:</p>
+
+        <h3>2.1 High-Performance Architecture</h3>
+        <ul>
+            <li><strong>Master Matrix (Tsai):</strong> A global, dense NumPy array (<code>Float32</code>) is constructed at initialization. It maps every unique parameter combination (Coordinate) across all time steps (files). This allows for O(1) slicing during the training loop.</li>
+            <li><strong>Global Long-Format DataFrame (NeuralForecast):</strong> A single Pandas DataFrame is created by melting the Master Matrix. It uses dummy dates (starting 2020-01-01) to represent file indices, enabling efficient filtering by date for the <code>NHITS</code> model.</li>
+            <li><strong>Parallel Processing:</strong>
+                <ul>
+                    <li><code>ProcessPoolExecutor</code> is used for parallel CSV file loading (CPU-bound I/O).</li>
+                    <li><code>ThreadPoolExecutor</code> is used for data preprocessing (extracting grids and best vectors).</li>
+                </ul>
+            </li>
+            <li><strong>GPU Acceleration:</strong>
+                <ul>
+                    <li><code>NeuralForecast</code> is configured to use GPU (<code>accelerator='gpu'</code>) if available.</li>
+                    <li><code>Tsai</code> models leverage PyTorch/FastAI GPU capabilities.</li>
+                    <li><code>torch.set_float32_matmul_precision('medium')</code> is set for Tensor Core optimization.</li>
+                </ul>
+            </li>
+        </ul>
+
+        <h3>2.2 Model Implementations</h3>
+        <ul>
+            <li><strong>Control Group:</strong> Calculates the average of normalized parameter "steps" (integer grid coordinates) over the <code>VECTOR_INPUT</code> window.</li>
+            <li><strong>Darts (Random Forest):</strong>
+                <ul>
+                    <li>Uses <code>RandomForest</code> regressor with <code>n_estimators=50</code>.</li>
+                    <li>Trains on the trajectory of the "Best Vector" (currently selected by Max Result).</li>
+                    <li>Runs on all CPU cores (<code>n_jobs=-1</code>).</li>
+                </ul>
+            </li>
+            <li><strong>NeuralForecast (NHITS):</strong>
+                <ul>
+                    <li>Uses the <code>NHITS</code> model (Horizon=1, Input Size=<code>VECTOR_INPUT</code>).</li>
+                    <li>Trains on the full "Result Surface" of the <code>TRAINING_WINDOW</code>.</li>
+                    <li>Logging and checkpointing are disabled for performance.</li>
+                </ul>
+            </li>
+            <li><strong>Tsai (InceptionTime):</strong>
+                <ul>
+                    <li>Uses the <code>InceptionTime</code> architecture (CNN/Transformer hybrid for time series).</li>
+                    <li>Trains on slices of the Master Matrix corresponding to the <code>TRAINING_WINDOW</code>.</li>
+                    <li>Currently configured for 5 epochs (<code>fit_one_cycle(5, 1e-3)</code>).</li>
+                </ul>
+            </li>
+        </ul>
+
+        <h3>2.3 Data Handling & Robustness</h3>
+        <ul>
+            <li><strong>Robust CSV Reader:</strong> Custom <code>read_csv_robust</code> function detects separators (<code>;</code> vs <code>,</code>) and decimal formats (European vs US) automatically using the C engine for speed.</li>
+            <li><strong>Coordinate System:</strong> Parameters are normalized into integer "steps" based on the global minimum and step size of each variable. This ensures predictions snap to the valid grid.</li>
+            <li><strong>Verification Logic (<code>lookup_stats</code>):</strong>
+                <ul>
+                    <li><strong>Primary:</strong> Searches for an exact parameter match in the target file.</li>
+                    <li><strong>Fallback:</strong> If no exact match exists, calculates the Nearest Neighbor in normalized step space (Euclidean distance) to find the closest existing vector.</li>
+                </ul>
+            </li>
+        </ul>
+
+        <h3>2.4 Reporting</h3>
+        <ul>
+            <li><strong>HTML Output:</strong> Generates <code>Predictability_Report_MultiModel.html</code>.</li>
+            <li><strong>Visualizations:</strong> Includes Base64-encoded plots for "Result Performance" and "Profit Performance" for each model.</li>
+            <li><strong>Metrics:</strong> Calculates Average Result and Hit Rate (percentage of times the predicted parameters were found in the target file).</li>
+        </ul>
+    </div>
+</body>
+</html>
