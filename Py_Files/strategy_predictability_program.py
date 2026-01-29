@@ -524,6 +524,8 @@ def worker_predict_week(task_args):
         # 2. NeuralForecast
         if HAS_NF and 'NeuralForecastForecaster' in forecaster_classes:
             try:
+                # print(f"  [Worker] {file_name}: Starting NeuralForecast...", flush=True) # Verbose
+
                 # Reconstruct DF slice for NF
                 nf_matrix = task_args.get('nf_matrix')
                 nf_dates = task_args.get('nf_dates')
@@ -552,6 +554,8 @@ def worker_predict_week(task_args):
         # 3. Tsai
         if HAS_TSAI and 'TsaiForecaster' in forecaster_classes:
             try:
+                # print(f"  [Worker] {file_name}: Starting Tsai...", flush=True) # Verbose
+
                 TsaiForecaster = forecaster_classes['TsaiForecaster']
                 tsai_model = TsaiForecaster(global_param_config, var_cols)
                 # slice_matrix is already sliced to [window_start:window_end]
@@ -824,6 +828,8 @@ def main():
             # Submit all tasks
             future_to_idx = {executor.submit(worker_predict_week, t[1]): t[0] for t in tasks}
 
+            print("\n--- Parallel Processing Started ---")
+
             for future in concurrent.futures.as_completed(future_to_idx):
                 i = future_to_idx[future]
                 target_file_data = files_data[i]
@@ -834,12 +840,13 @@ def main():
                     # res has {'file_name', 'results': {'control': ..., ...}, 'error': ...}
 
                     if 'error' in res:
-                        print(f"Worker Error for {file_name}: {res['error']}")
+                        print(f"  [Error] {file_name}: {res['error']}")
                         continue
 
                     preds_map = res['results']
 
                     # --- Verification (Main Process) ---
+                    status_msg = []
 
                     # Control
                     if preds_map.get('control'):
@@ -847,6 +854,7 @@ def main():
                         if stats['found'] and 'matched_params' in stats:
                             preds_map['control'] = stats['matched_params']
                         results['control'].append({'file': file_name, 'pred': preds_map['control'], 'stats': stats})
+                        status_msg.append(f"C:{'Y' if stats['found'] else 'N'}")
 
                     # Darts
                     if HAS_DARTS:
@@ -855,6 +863,7 @@ def main():
                             if stats['found'] and 'matched_params' in stats:
                                 preds_map['darts'] = stats['matched_params']
                             results['darts'].append({'file': file_name, 'pred': preds_map['darts'], 'stats': stats})
+                            status_msg.append(f"D:{'Y' if stats['found'] else 'N'}")
 
                     # NF
                     if HAS_NF:
@@ -875,8 +884,10 @@ def main():
                             if stats['found'] and 'matched_params' in stats:
                                 preds_map['nf'] = stats['matched_params']
                             results['nf'].append({'file': file_name, 'pred': preds_map['nf'], 'stats': stats})
+                            status_msg.append(f"NF:{'Y' if stats['found'] else 'N'}")
                         else:
                             results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+                            status_msg.append("NF:-")
 
                     # Tsai
                     if HAS_TSAI:
@@ -897,8 +908,10 @@ def main():
                             if stats['found'] and 'matched_params' in stats:
                                 preds_map['tsai'] = stats['matched_params']
                             results['tsai'].append({'file': file_name, 'pred': preds_map['tsai'], 'stats': stats})
+                            status_msg.append(f"Tsai:{'Y' if stats['found'] else 'N'}")
                         else:
                             results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+                            status_msg.append("Tsai:-")
 
                 except Exception as e:
                     print(f"Error processing result for {file_name}: {e}")
@@ -910,7 +923,9 @@ def main():
                 avg = elapsed / files_processed
                 rem = total_files_to_process - files_processed
                 eta = avg * rem
-                print(f"  > Progress: {files_processed}/{total_files_to_process} | Avg Time: {avg:.2f}s | Remaining: {rem} | ETA: {eta/60:.2f} min")
+
+                status_str = " | ".join(status_msg)
+                print(f"  > [{files_processed}/{total_files_to_process}] {file_name} | {status_str} | ETA: {eta/60:.2f} min", flush=True)
 
     except KeyboardInterrupt:
         print("\nProcess cancelled by user. Outputting available results...")
