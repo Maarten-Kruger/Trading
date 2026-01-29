@@ -28,6 +28,9 @@ logging.getLogger("neuralforecast").setLevel(logging.ERROR)
 RESULT_CUTOFF = 25
 VECTOR_INPUT = 10  # Lookback window size (Model Lags)
 TRAINING_WINDOW = 30 # Size of the sliding window used for training (Must be > VECTOR_INPUT)
+MAX_WORKERS = 4      # Max parallel processes (Adjust based on VRAM)
+TSAI_EPOCHS = 5      # Epochs for Tsai InceptionTime model
+NF_MAX_STEPS = 100   # Max steps for NeuralForecast NHITS
 
 # --- Library Availability Flags (Lazy Check) ---
 # We check availability without importing to keep workers fast
@@ -295,14 +298,14 @@ def get_forecasters(flags):
             torch.set_float32_matmul_precision('medium')
 
             class NeuralForecastForecaster:
-                def __init__(self, global_config, var_cols):
+                def __init__(self, global_config, var_cols, max_steps=100):
                     self.config = global_config
                     self.var_cols = var_cols
                     # Use NHITS - fast and effective
                     # Check for GPU
                     accel = 'gpu' if torch.cuda.is_available() else 'cpu'
                     # print(f"[NeuralForecast] Using accelerator: {accel}")
-                    self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=100,
+                    self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=max_steps,
                                        enable_checkpointing=False, logger=False,
                                        accelerator=accel)
 
@@ -355,9 +358,10 @@ def get_forecasters(flags):
             import torch
 
             class TsaiForecaster:
-                def __init__(self, global_config, var_cols):
+                def __init__(self, global_config, var_cols, epochs=5):
                     self.config = global_config
                     self.var_cols = var_cols
+                    self.epochs = epochs
 
                 def predict(self, master_matrix, window_start_idx, window_end_idx):
                     # Slice the matrix: O(1)
@@ -396,7 +400,7 @@ def get_forecasters(flags):
                     dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=4096, num_workers=8, pin_memory=True)
 
                     learn = ts_learner(dls, model, metrics=mae, verbose=False)
-                    learn.fit_one_cycle(5, 1e-3)
+                    learn.fit_one_cycle(self.epochs, 1e-3)
 
                     # Predict on latest window (the end of the slice)
                     X_test = X_slice[:, -w:]
@@ -494,8 +498,9 @@ def worker_predict_week(task_args):
 
         global_param_config = task_args['config']
         var_cols = task_args['var_cols']
-
         flags = task_args['flags']
+        epochs = task_args.get('epochs', {'tsai': 5, 'nf': 100})
+
         HAS_DARTS = flags['HAS_DARTS']
         HAS_NF = flags['HAS_NF']
         HAS_TSAI = flags['HAS_TSAI']
@@ -542,7 +547,7 @@ def worker_predict_week(task_args):
                      Y_df_window['y'] = Y_df_window['y'].astype(np.float32)
 
                      NeuralForecastForecaster = forecaster_classes['NeuralForecastForecaster']
-                     nf_model = NeuralForecastForecaster(global_param_config, var_cols)
+                     nf_model = NeuralForecastForecaster(global_param_config, var_cols, max_steps=epochs['nf'])
 
                      # Suppress output
                      with open(os.devnull, 'w') as devnull:
@@ -557,7 +562,7 @@ def worker_predict_week(task_args):
                 # print(f"  [Worker] {file_name}: Starting Tsai...", flush=True) # Verbose
 
                 TsaiForecaster = forecaster_classes['TsaiForecaster']
-                tsai_model = TsaiForecaster(global_param_config, var_cols)
+                tsai_model = TsaiForecaster(global_param_config, var_cols, epochs=epochs['tsai'])
                 # slice_matrix is already sliced to [window_start:window_end]
                 # Pass 0 and width to predict
                 win_len = slice_matrix.shape[1]
@@ -814,11 +819,11 @@ def main():
             # 'coords_list': coords_list, # Removed to reduce payload
             'window_start': window_start,
             'window_end': window_end,
-            'flags': flags
+            'flags': flags,
+            'epochs': {'tsai': TSAI_EPOCHS, 'nf': NF_MAX_STEPS}
         }
         tasks.append((i, task))
 
-    MAX_WORKERS = 4
     print(f"Submitted {len(tasks)} tasks to ProcessPoolExecutor (Spawn, Max Workers={MAX_WORKERS})...")
 
     try:
