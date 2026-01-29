@@ -601,7 +601,12 @@ def main():
     def sort_key(f):
         base = os.path.basename(f)
         try:
-            return (int(base.split('_')[0]), base)
+            # Format: [version] [Bot name].[currency pair].[Timeframe].[date range start].[date range end].csv
+            # Example: 1.0 Simple Crossover.EURUSDm.M30.20240101.20240108.csv
+            parts = base.split('.')
+            # Start date is the 3rd from the end (before .csv and end_date)
+            start_date_str = parts[-3]
+            return (int(start_date_str), base)
         except:
             return (float('inf'), base)
 
@@ -699,8 +704,9 @@ def main():
 
     # 2. Build Tsai Master Matrix (NumPy)
     # Shape: (Num_Coords, Num_Files)
-    # Init with 0 or NaN? 0 implies bad result, which is safe for maximization logic.
-    master_matrix = np.zeros((num_coords, num_files), dtype=np.float32)
+    # Init with -1000.0 (a value lower than any valid Result) to ensure missing data is treated as "worst case".
+    # This prevents the model from preferring "missing" (0) over "bad" (e.g. -4.33).
+    master_matrix = np.full((num_coords, num_files), -1000.0, dtype=np.float32)
 
     # Fill matrix
     # This might take a moment but it's done ONCE.
@@ -943,7 +949,7 @@ def generate_html_report(results, output_dir):
 
     html_parts = []
 
-    html_parts.append("""
+    html_parts.append(f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -965,8 +971,12 @@ def generate_html_report(results, output_dir):
         <div class="section">
             <h2>Definitions</h2>
             <ul>
+                <li><strong>RESULT_CUTOFF ({RESULT_CUTOFF}):</strong> Filter vectors inside each file where the result exceeds a defined threshold.</li>
                 <li><strong>VECTOR_INPUT ({VECTOR_INPUT}):</strong> Lookback window size (Model Lags). The number of past time steps (files/vectors) the model looks at to make a prediction.</li>
                 <li><strong>TRAINING_WINDOW ({TRAINING_WINDOW}):</strong> Size of the sliding window used for training. The number of recent files included in the training dataset for the model.</li>
+                <li><strong>MAX_WORKERS ({MAX_WORKERS}):</strong> Max parallel processes (Adjust based on VRAM).</li>
+                <li><strong>TSAI_EPOCHS ({TSAI_EPOCHS}):</strong> Epochs for Tsai InceptionTime model.</li>
+                <li><strong>NF_MAX_STEPS ({NF_MAX_STEPS}):</strong> Max steps for NeuralForecast NHITS.</li>
             </ul>
             <hr>
             <ul>
