@@ -12,6 +12,8 @@ import logging
 import time
 import traceback
 import concurrent.futures
+import multiprocessing
+from numpy.lib.stride_tricks import sliding_window_view
 from itertools import product
 from datetime import datetime, timedelta
 
@@ -26,33 +28,20 @@ logging.getLogger("neuralforecast").setLevel(logging.ERROR)
 RESULT_CUTOFF = 25
 VECTOR_INPUT = 10  # Lookback window size (Model Lags)
 TRAINING_WINDOW = 30 # Size of the sliding window used for training (Must be > VECTOR_INPUT)
+MAX_WORKERS = 4      # Max parallel processes (Adjust based on VRAM)
+TSAI_EPOCHS = 5      # Epochs for Tsai InceptionTime model
+NF_MAX_STEPS = 100   # Max steps for NeuralForecast NHITS
 
-# --- Library Imports ---
-print("Importing libraries...")
-try:
-    from darts import TimeSeries
-    from darts.models import RandomForest
-    HAS_DARTS = True
-except ImportError:
-    HAS_DARTS = False
-    print("Warning: Darts not found.")
+# --- Library Availability Flags (Lazy Check) ---
+# We check availability without importing to keep workers fast
+import importlib.util
 
-try:
-    from neuralforecast import NeuralForecast
-    from neuralforecast.models import NHITS, LSTM
-    import torch
-    torch.set_float32_matmul_precision('medium')
-    HAS_NF = True
-except ImportError:
-    HAS_NF = False
-    print("Warning: NeuralForecast not found.")
+def check_lib(name):
+    return importlib.util.find_spec(name) is not None
 
-try:
-    from tsai.all import *
-    HAS_TSAI = True
-except ImportError as e:
-    HAS_TSAI = False
-    print(f"Warning: tsai not found. Error: {e}")
+HAS_DARTS = check_lib("darts")
+HAS_NF = check_lib("neuralforecast")
+HAS_TSAI = check_lib("tsai")
 
 # --- Helper Functions ---
 
@@ -238,250 +227,205 @@ def lookup_stats(df, params, config):
     matched_params = {k: row[k] for k in params.keys() if k in row}
     return {'Result': float(row['Result']), 'Profit': float(row['Profit']), 'found': True, 'matched_params': matched_params}
 
-# --- Model Classes ---
+# --- Model Classes (Lazy Loading Wrapper) ---
 
-class DartsForecaster:
-    def __init__(self, global_config, var_cols):
-        self.config = global_config
-        self.var_cols = var_cols
-        if HAS_DARTS:
-            # Optimize: n_jobs=-1 to use all cores
-            self.model = RandomForest(lags=VECTOR_INPUT, n_estimators=50, random_state=42, n_jobs=-1)
-        else:
-            self.model = None
+def get_forecasters(flags):
+    """
+    Returns forecaster classes, importing libraries only when called.
+    Used inside worker process.
+    """
 
-    def predict(self, best_vectors_history):
-        # best_vectors_history is list of dicts: {'params': {...}, ...}
-        if not HAS_DARTS:
-            return None
+    classes = {}
 
-        # Filter out empty entries if any (or handle them)
-        valid_history = [bv for bv in best_vectors_history if bv['Result'] != 0 or bv['params']]
-
-        # We need at least VECTOR_INPUT + 1 data points to fit lags
-        if len(valid_history) < VECTOR_INPUT + 1:
-            return None
-
-        data_matrix = []
-        for bv in valid_history:
-            row_vec = []
-            for col in self.var_cols:
-                val = bv['params'].get(col, self.config[col]['min'])
-                cfg = self.config[col]
-                if cfg['step'] > 0:
-                    step_val = int(round((val - cfg['min']) / cfg['step']))
-                else:
-                    step_val = 0
-                row_vec.append(step_val)
-            data_matrix.append(row_vec)
-
-        data_np = np.array(data_matrix)
-        ts = TimeSeries.from_values(data_np)
-
-        self.model.fit(ts)
-        pred = self.model.predict(n=1)
-        pred_vals = pred.values()[0]
-
-        pred_params = {}
-        for idx, col in enumerate(self.var_cols):
-            cfg = self.config[col]
-            step_pred = int(round(pred_vals[idx]))
-            val_pred = cfg['min'] + step_pred * cfg['step']
-            pred_params[col] = val_pred
-
-        return pred_params
-
-class NeuralForecastForecaster:
-    def __init__(self, global_config, var_cols):
-        self.config = global_config
-        self.var_cols = var_cols
-        # Use NHITS - fast and effective
-        if HAS_NF:
-            # Check for GPU
-            accel = 'gpu' if torch.cuda.is_available() else 'cpu'
-            print(f"[NeuralForecast] Using accelerator: {accel}")
-            self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=100,
-                               enable_checkpointing=False, logger=False,
-                               accelerator=accel)
-        else:
-            self.model = None
-        self.nf = None
-
-    def predict(self, Y_df_global, window_start_idx, window_end_idx):
-        """
-        Takes the global long-format DataFrame and slices it for the current window.
-        window_start_idx / end_idx are integers referring to the file sequence index (0..N).
-        We assume 'ds' in Y_df_global corresponds to these indices (e.g. 2020-01-01 + i days).
-        """
-        if not HAS_NF or Y_df_global is None or Y_df_global.empty:
-            return None
-
-        # Calculate date range for the slice
-        # ds starts at 2020-01-01
-        start_date_base = datetime(2020, 1, 1)
-
-        # We need data from [window_start_idx, window_end_idx)
-        # The model needs history.
-
-        # Slicing via boolean mask is fast
-        # Note: We filter for ds >= start and ds < end
-
-        slice_start_date = start_date_base + timedelta(days=window_start_idx)
-        slice_end_date = start_date_base + timedelta(days=window_end_idx)
-
-        # Optimization: use searchsorted if sorted, but boolean mask is okay for millions of rows on modern RAM
-        mask = (Y_df_global['ds'] >= slice_start_date) & (Y_df_global['ds'] < slice_end_date)
-        Y_df_window = Y_df_global.loc[mask]
-
-        if Y_df_window.empty:
-            return None
-
-        # 2. Train and Predict
-        # We instantiate NF every time to avoid carrying over state from previous growing windows incorrectly
-        nf = NeuralForecast(models=[self.model], freq='D')
-        nf.fit(df=Y_df_window)
-
-        future_df = nf.predict()
-
-        # 3. Find Best
-        if future_df.empty:
-            return None
-
-        # future_df has columns [ds, NHITS]
-        # We want the row with max NHITS value
-        best_row = future_df.loc[future_df['NHITS'].idxmax()]
-
-        # Determine best_uid
-        if 'unique_id' in future_df.columns:
-            best_uid = future_df.loc[future_df['NHITS'].idxmax()]['unique_id']
-        else:
-            best_uid = future_df['NHITS'].idxmax()
-
-        # best_uid is the string representation of the coordinate tuple
-        # We need to parse it back or have a mapping.
-        # In this architecture, we rely on the main function to pass a mapping if needed,
-        # or we re-parse. Re-parsing is safe and reasonably fast for one item.
+    if flags['HAS_DARTS']:
         try:
-            # uid is "('coord1', 'coord2')" string
-            # Safe eval or simple parse
-            best_coord = eval(best_uid)
-            return coords_to_params(best_coord, self.var_cols, self.config)
-        except:
-            return None
+            from darts import TimeSeries
+            from darts.models import RandomForest
 
-class TsaiForecaster:
-    def __init__(self, global_config, var_cols):
-        self.config = global_config
-        self.var_cols = var_cols
+            class DartsForecaster:
+                def __init__(self, global_config, var_cols):
+                    self.config = global_config
+                    self.var_cols = var_cols
+                    # Optimize: n_jobs=-1 to use all cores
+                    self.model = RandomForest(lags=VECTOR_INPUT, n_estimators=50, random_state=42, n_jobs=-1)
 
-    def predict(self, master_matrix, window_start_idx, window_end_idx, coords_map_list):
-        """
-        master_matrix: (Num_Coords, Num_Files) dense array
-        coords_map_list: List of coordinate tuples corresponding to rows of master_matrix
-        """
-        if not HAS_TSAI:
-            return None
+                def predict(self, best_vectors_history):
+                    # Filter out empty entries if any (or handle them)
+                    valid_history = [bv for bv in best_vectors_history if bv['Result'] != 0 or bv['params']]
 
-        # Slice the matrix: O(1)
-        # X shape: (Samples, Time) -> (Num_Coords, Window_Size)
-        X_slice = master_matrix[:, window_start_idx:window_end_idx]
+                    # We need at least VECTOR_INPUT + 1 data points to fit lags
+                    if len(valid_history) < VECTOR_INPUT + 1:
+                        return None
 
-        # X_slice shape: (N_Coords, Window_Len)
-        n_coords, win_len = X_slice.shape
+                    data_matrix = []
+                    for bv in valid_history:
+                        row_vec = []
+                        for col in self.var_cols:
+                            val = bv['params'].get(col, self.config[col]['min'])
+                            cfg = self.config[col]
+                            if cfg['step'] > 0:
+                                step_val = int(round((val - cfg['min']) / cfg['step']))
+                            else:
+                                step_val = 0
+                            row_vec.append(step_val)
+                        data_matrix.append(row_vec)
 
-        if win_len < 2:
-            return None
+                    data_np = np.array(data_matrix)
+                    ts = TimeSeries.from_values(data_np)
 
-        # We need to forecast step T+1.
-        # Using InceptionTime or similar.
-        # Training data generation: Sliding window over the *current slice*?
-        # Or just use the slice as one sample?
-        # Usually we train on sub-windows within the history.
+                    self.model.fit(ts)
+                    pred = self.model.predict(n=1)
+                    pred_vals = pred.values()[0]
 
-        # Sliding Window Logic on the slice
-        w = min(VECTOR_INPUT, win_len - 1)
-        if w < 2:
-            return None
+                    pred_params = {}
+                    for idx, col in enumerate(self.var_cols):
+                        cfg = self.config[col]
+                        step_pred = int(round(pred_vals[idx]))
+                        val_pred = cfg['min'] + step_pred * cfg['step']
+                        pred_params[col] = val_pred
 
-        # Prepare X_train, y_train
-        # X_slice: (Samples, Time)
-        # We want to use all coords as independent samples.
-        # For each coord, we extract sub-windows.
+                    return pred_params
 
-        # Fast strided windowing (numpy trick) or simple loop?
-        # Given huge data, simple loop might be slow.
-        # But we only iterate through Time (small), not Samples (huge).
-
-        X_train = []
-        y_train = []
-
-        # Vectorized preparation?
-        # shape: (N_Coords, Time)
-        # We want (N_Coords * (Time-w), 1, w)
-
-        for t in range(w, win_len):
-            # Input: columns t-w to t
-            # Output: column t
-            # Copy is necessary to be safe
-            X_win = X_slice[:, t-w:t] # Shape (N_Coords, w)
-            y_win = X_slice[:, t]     # Shape (N_Coords,)
-
-            X_train.append(X_win)
-            y_train.append(y_win)
-
-        if not X_train:
-            return None
-
-        X_train = np.concatenate(X_train, axis=0) # Stack samples
-        y_train = np.concatenate(y_train, axis=0)
-
-        # Add channel dim: (Total_Samples, 1, w)
-        X_train = X_train[:, np.newaxis, :]
-
-        if len(X_train) == 0:
-            return None
-
-        # Model
-        model = InceptionTime(c_in=1, c_out=1)
-        splits = RandomSplitter()(range(len(X_train)))
-        tfms = [None, [TSRegression()]]
-        dsets = TSDatasets(X_train, y_train, tfms=tfms, splits=splits)
-        # num_workers=0 is safer for stability
-        dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=64, num_workers=0)
-
-        learn = ts_learner(dls, model, metrics=mae, verbose=False)
-        learn.fit_one_cycle(5, 1e-3) # Fast training
-
-        # Predict on latest window (the end of the slice)
-        # Shape (N_Coords, 1, w)
-        X_test = X_slice[:, -w:]
-        X_test = X_test[:, np.newaxis, :]
-
-        try:
-            learn.model.eval()
-
-            # Prepare tensor
-            import torch
-            input_tensor = torch.from_numpy(X_test).float()
-
-            device = next(learn.model.parameters()).device
-            input_tensor = input_tensor.to(device)
-
-            with torch.no_grad():
-                preds = learn.model(input_tensor)
-
-            preds_np = preds.cpu().numpy().flatten()
-
-            best_idx = np.argmax(preds_np)
-            # Map index back to coord
-            best_coord = coords_map_list[best_idx]
-
-            pred_params = coords_to_params(best_coord, self.var_cols, self.config)
-            return pred_params
+            classes['DartsForecaster'] = DartsForecaster
         except Exception as e:
-            print(f"[DEBUG TSAI] Exception during prediction: {e}")
-            traceback.print_exc()
-            return None
+            print(f"Lazy Import Error (Darts): {e}")
+
+    if flags['HAS_NF']:
+        try:
+            from neuralforecast import NeuralForecast
+            from neuralforecast.models import NHITS
+            import torch
+            torch.set_float32_matmul_precision('medium')
+
+            class NeuralForecastForecaster:
+                def __init__(self, global_config, var_cols, max_steps=100):
+                    self.config = global_config
+                    self.var_cols = var_cols
+                    # Use NHITS - fast and effective
+                    # Check for GPU
+                    accel = 'gpu' if torch.cuda.is_available() else 'cpu'
+                    # print(f"[NeuralForecast] Using accelerator: {accel}")
+                    self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=max_steps,
+                                       enable_checkpointing=False, logger=False,
+                                       accelerator=accel)
+
+                def predict(self, Y_df_global, window_start_idx, window_end_idx):
+                    if Y_df_global is None or Y_df_global.empty:
+                        return None
+
+                    # Calculate date range for the slice
+                    # ds starts at 2020-01-01
+                    start_date_base = datetime(2020, 1, 1)
+
+                    slice_start_date = start_date_base + timedelta(days=window_start_idx)
+                    slice_end_date = start_date_base + timedelta(days=window_end_idx)
+
+                    # Optimization: use searchsorted if sorted, but boolean mask is okay for millions of rows on modern RAM
+                    mask = (Y_df_global['ds'] >= slice_start_date) & (Y_df_global['ds'] < slice_end_date)
+                    Y_df_window = Y_df_global.loc[mask]
+
+                    if Y_df_window.empty:
+                        return None
+
+                    # 2. Train and Predict
+                    nf = NeuralForecast(models=[self.model], freq='D')
+                    nf.fit(df=Y_df_window)
+
+                    future_df = nf.predict()
+
+                    # 3. Find Best
+                    if future_df.empty:
+                        return None
+
+                    # future_df has columns [ds, NHITS]
+                    # Determine best_uid
+                    # best_uid will be the index (int) or whatever was used as unique_id
+                    if 'unique_id' in future_df.columns:
+                        best_uid = future_df.loc[future_df['NHITS'].idxmax()]['unique_id']
+                    else:
+                        best_uid = future_df['NHITS'].idxmax()
+
+                    # Return the identifier (index), let main process resolve it
+                    return best_uid
+
+            classes['NeuralForecastForecaster'] = NeuralForecastForecaster
+        except Exception as e:
+             print(f"Lazy Import Error (NF): {e}")
+
+    if flags['HAS_TSAI']:
+        try:
+            from tsai.all import InceptionTime, RandomSplitter, TSRegression, TSDatasets, TSDataLoaders, ts_learner, mae
+            import torch
+
+            class TsaiForecaster:
+                def __init__(self, global_config, var_cols, epochs=5):
+                    self.config = global_config
+                    self.var_cols = var_cols
+                    self.epochs = epochs
+
+                def predict(self, master_matrix, window_start_idx, window_end_idx):
+                    # Slice the matrix: O(1)
+                    X_slice = master_matrix[:, window_start_idx:window_end_idx]
+                    n_coords, win_len = X_slice.shape
+
+                    if win_len < 2: return None
+
+                    # Sliding Window Logic on the slice
+                    w = min(VECTOR_INPUT, win_len - 1)
+                    if w < 2: return None
+
+                    # Fast strided windowing using sliding_window_view
+                    try:
+                        if win_len < w + 1: return None
+                        windows = sliding_window_view(X_slice, window_shape=w+1, axis=1)
+                        X_train = windows[:, :, :-1]
+                        y_train = windows[:, :, -1]
+                        X_train = X_train.reshape(-1, w)
+                        y_train = y_train.flatten()
+                    except Exception as e:
+                        print(f"Error in vectorized windowing: {e}")
+                        return None
+
+                    # Add channel dim: (Total_Samples, 1, w)
+                    X_train = X_train[:, np.newaxis, :]
+                    if len(X_train) == 0: return None
+
+                    # Model
+                    model = InceptionTime(c_in=1, c_out=1)
+                    splits = RandomSplitter()(range(len(X_train)))
+                    tfms = [None, [TSRegression()]]
+                    dsets = TSDatasets(X_train, y_train, tfms=tfms, splits=splits)
+
+                    # High-performance DataLoaders
+                    dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=4096, num_workers=8, pin_memory=True)
+
+                    learn = ts_learner(dls, model, metrics=mae, verbose=False)
+                    learn.fit_one_cycle(self.epochs, 1e-3)
+
+                    # Predict on latest window (the end of the slice)
+                    X_test = X_slice[:, -w:]
+                    X_test = X_test[:, np.newaxis, :]
+
+                    try:
+                        learn.model.eval()
+                        input_tensor = torch.from_numpy(X_test).float()
+                        device = next(learn.model.parameters()).device
+                        input_tensor = input_tensor.to(device)
+                        with torch.no_grad():
+                            preds = learn.model(input_tensor)
+                        preds_np = preds.cpu().numpy().flatten()
+                        best_idx = np.argmax(preds_np)
+                        return int(best_idx)
+                    except Exception as e:
+                        print(f"[DEBUG TSAI] Exception during prediction: {e}")
+                        traceback.print_exc()
+                        return None
+
+            classes['TsaiForecaster'] = TsaiForecaster
+        except Exception as e:
+            print(f"Lazy Import Error (Tsai): {e}")
+
+    return classes
 
 class ControlGroupForecaster:
     def __init__(self, global_config, var_cols):
@@ -538,6 +482,98 @@ class ControlGroupForecaster:
 
         return pred_params
 
+
+# --- Worker Function for Parallel Processing ---
+
+def worker_predict_week(task_args):
+    """
+    Worker function to process a single week/file.
+    Executed in a separate process.
+    """
+    try:
+        # Unpack arguments
+        file_name = task_args['file_name']
+        history_best = task_args['history_best']
+        slice_matrix = task_args['slice_matrix'] # Numpy array
+
+        global_param_config = task_args['config']
+        var_cols = task_args['var_cols']
+        flags = task_args['flags']
+        epochs = task_args.get('epochs', {'tsai': 5, 'nf': 100})
+
+        HAS_DARTS = flags['HAS_DARTS']
+        HAS_NF = flags['HAS_NF']
+        HAS_TSAI = flags['HAS_TSAI']
+
+        # Lazy load forecaster classes inside the worker
+        forecaster_classes = get_forecasters(flags)
+
+        results = {'control': None, 'darts': None, 'nf': None, 'tsai': None}
+
+        # 0. Control Group
+        try:
+            control_model = ControlGroupForecaster(global_param_config, var_cols)
+            results['control'] = control_model.predict(history_best)
+        except Exception as e:
+            pass
+
+        # 1. Darts
+        if HAS_DARTS and 'DartsForecaster' in forecaster_classes:
+            try:
+                DartsForecaster = forecaster_classes['DartsForecaster']
+                darts_model = DartsForecaster(global_param_config, var_cols)
+                results['darts'] = darts_model.predict(history_best)
+            except Exception as e:
+                pass
+
+        # 2. NeuralForecast
+        if HAS_NF and 'NeuralForecastForecaster' in forecaster_classes:
+            try:
+                # print(f"  [Worker] {file_name}: Starting NeuralForecast...", flush=True) # Verbose
+
+                # Reconstruct DF slice for NF
+                nf_matrix = task_args.get('nf_matrix')
+                nf_dates = task_args.get('nf_dates')
+                # nf_coords removed to reduce payload
+
+                if nf_matrix is not None and nf_dates is not None:
+                     # Efficiently create DF
+                     # Use integer index as unique_id
+                     num_coords = nf_matrix.shape[0]
+                     temp_df = pd.DataFrame(nf_matrix, index=np.arange(num_coords), columns=nf_dates)
+                     temp_df.index.name = 'unique_id'
+                     Y_df_window = temp_df.reset_index().melt(id_vars='unique_id', var_name='ds', value_name='y')
+                     Y_df_window['ds'] = pd.to_datetime(Y_df_window['ds'])
+                     Y_df_window['y'] = Y_df_window['y'].astype(np.float32)
+
+                     NeuralForecastForecaster = forecaster_classes['NeuralForecastForecaster']
+                     nf_model = NeuralForecastForecaster(global_param_config, var_cols, max_steps=epochs['nf'])
+
+                     # Suppress output
+                     with open(os.devnull, 'w') as devnull:
+                         # Pass original window indices so predict calculates correct date filter
+                         results['nf'] = nf_model.predict(Y_df_window, task_args['window_start'], task_args['window_end'])
+            except Exception as e:
+                pass
+
+        # 3. Tsai
+        if HAS_TSAI and 'TsaiForecaster' in forecaster_classes:
+            try:
+                # print(f"  [Worker] {file_name}: Starting Tsai...", flush=True) # Verbose
+
+                TsaiForecaster = forecaster_classes['TsaiForecaster']
+                tsai_model = TsaiForecaster(global_param_config, var_cols, epochs=epochs['tsai'])
+                # slice_matrix is already sliced to [window_start:window_end]
+                # Pass 0 and width to predict
+                win_len = slice_matrix.shape[1]
+                results['tsai'] = tsai_model.predict(slice_matrix, 0, win_len)
+            except Exception as e:
+                pass
+
+        return {'file_name': file_name, 'results': results}
+
+    except Exception as e:
+        return {'file_name': task_args.get('file_name', 'unknown'), 'results': {}, 'error': str(e)}
 
 # --- Main Execution ---
 
@@ -730,11 +766,8 @@ def main():
     # 4. Extract Best Vectors (Compatibility)
     best_vectors_history = [fd['best_vector'] for fd in files_data]
 
-    # Prepare Models
-    control_model = ControlGroupForecaster(global_param_config, var_cols)
-    darts_model = DartsForecaster(global_param_config, var_cols)
-    nf_model = NeuralForecastForecaster(global_param_config, var_cols)
-    tsai_model = TsaiForecaster(global_param_config, var_cols)
+    # Prepare Models (Main process only needs ControlGroup for non-parallel parts if any, but in parallel it's done in worker)
+    # We no longer instantiate Darts/NF/Tsai here to avoid importing them in main.
 
     # Predictions Storage
     # Structure: {'darts': [], 'nf': [], 'tsai': []}
@@ -749,107 +782,155 @@ def main():
         print(f"Not enough files. Need > {start_index}")
         return
 
-    print("Running Forecasts (Optimized Loop)...")
+    print("Preparing Tasks for Parallel Execution...")
 
     start_time = time.time()
     files_processed = 0
     total_files_to_process = len(files_data) - start_index
 
+    # Flags for worker
+    flags = {'HAS_DARTS': HAS_DARTS, 'HAS_NF': HAS_NF, 'HAS_TSAI': HAS_TSAI}
+
+    # Prepare Tasks List
+    tasks = []
+    for i in range(start_index, len(files_data)):
+        target_file_data = files_data[i]
+        file_name = os.path.basename(target_file_data['path'])
+
+        window_start = max(0, i - TRAINING_WINDOW)
+        window_end = i
+
+        # Slices
+        history_best = best_vectors_history[window_start:window_end]
+        slice_matrix = master_matrix[:, window_start:window_end] # (N_Coords, Window)
+
+        # NF specific: Dates slice
+        nf_dates_slice = dates[window_start:window_end]
+
+        task = {
+            'file_name': file_name,
+            'history_best': history_best,
+            'slice_matrix': slice_matrix,
+            'nf_matrix': slice_matrix if HAS_NF else None,
+            'nf_dates': nf_dates_slice if HAS_NF else None,
+            # 'nf_coords': coords_strs if HAS_NF else None, # Removed to reduce payload
+            'config': global_param_config,
+            'var_cols': var_cols,
+            # 'coords_list': coords_list, # Removed to reduce payload
+            'window_start': window_start,
+            'window_end': window_end,
+            'flags': flags,
+            'epochs': {'tsai': TSAI_EPOCHS, 'nf': NF_MAX_STEPS}
+        }
+        tasks.append((i, task))
+
+    print(f"Submitted {len(tasks)} tasks to ProcessPoolExecutor (Spawn, Max Workers={MAX_WORKERS})...")
+
     try:
-        for i in range(start_index, len(files_data)):
-            target_file_data = files_data[i]
-            file_name = os.path.basename(target_file_data['path'])
-            print(f"Processing {file_name}...")
+        # Use spawn context as requested for independent GPU streams/memory
+        ctx = multiprocessing.get_context('spawn')
+        with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, mp_context=ctx) as executor:
+            # Submit all tasks
+            future_to_idx = {executor.submit(worker_predict_week, t[1]): t[0] for t in tasks}
 
-            # Data Slices (Indices only)
-            window_start = max(0, i - TRAINING_WINDOW)
-            window_end = i
+            print("\n--- Parallel Processing Started ---")
 
-            # History Best is just a list slice
-            history_best = best_vectors_history[window_start:window_end]
+            for future in concurrent.futures.as_completed(future_to_idx):
+                i = future_to_idx[future]
+                target_file_data = files_data[i]
+                file_name = os.path.basename(target_file_data['path'])
 
-            # 0. Control Group
-            try:
-                pred = control_model.predict(history_best)
-                stats = lookup_stats(target_file_data['df'], pred, global_param_config)
-                if stats['found'] and 'matched_params' in stats:
-                    pred = stats['matched_params']
-                results['control'].append({
-                    'file': file_name,
-                    'pred': pred,
-                    'stats': stats
-                })
-            except Exception as e:
-                print(f"  Control Error: {e}")
-
-            # 1. Darts
-            if HAS_DARTS:
                 try:
-                    pred = darts_model.predict(history_best)
-                    stats = lookup_stats(target_file_data['df'], pred, global_param_config)
-                    if stats['found'] and 'matched_params' in stats:
-                        pred = stats['matched_params']
-                    results['darts'].append({
-                        'file': file_name,
-                        'pred': pred,
-                        'stats': stats
-                    })
-                except Exception as e:
-                    print(f"  Darts Error: {e}")
+                    res = future.result()
+                    # res has {'file_name', 'results': {'control': ..., ...}, 'error': ...}
 
-            # 2. NeuralForecast
-            if HAS_NF:
-                try:
-                    # We should suppress stdout from NF
-                    with io.capture_output() if 'io.capture_output' in globals() else open(os.devnull, 'w') as devnull: # Simple redirection
-                        # Pass Global DF and Indices
-                        pred = nf_model.predict(Y_df_global, window_start, window_end)
+                    if 'error' in res:
+                        print(f"  [Error] {file_name}: {res['error']}")
+                        continue
 
-                    if pred:
-                        stats = lookup_stats(target_file_data['df'], pred, global_param_config)
+                    preds_map = res['results']
+
+                    # --- Verification (Main Process) ---
+                    status_msg = []
+
+                    # Control
+                    if preds_map.get('control'):
+                        stats = lookup_stats(target_file_data['df'], preds_map['control'], global_param_config)
                         if stats['found'] and 'matched_params' in stats:
-                            pred = stats['matched_params']
-                        results['nf'].append({
-                            'file': file_name,
-                            'pred': pred,
-                            'stats': stats
-                        })
-                    else:
-                        results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
-                except Exception as e:
-                    print(f"  NF Error: {e}")
-                    results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+                            preds_map['control'] = stats['matched_params']
+                        results['control'].append({'file': file_name, 'pred': preds_map['control'], 'stats': stats})
+                        status_msg.append(f"C:{'Y' if stats['found'] else 'N'}")
 
-            # 3. Tsai
-            if HAS_TSAI:
-                try:
-                    # Pass Master Matrix and Indices + Coords Map
-                    pred = tsai_model.predict(master_matrix, window_start, window_end, coords_list)
+                    # Darts
+                    if HAS_DARTS:
+                        if preds_map.get('darts'):
+                            stats = lookup_stats(target_file_data['df'], preds_map['darts'], global_param_config)
+                            if stats['found'] and 'matched_params' in stats:
+                                preds_map['darts'] = stats['matched_params']
+                            results['darts'].append({'file': file_name, 'pred': preds_map['darts'], 'stats': stats})
+                            status_msg.append(f"D:{'Y' if stats['found'] else 'N'}")
 
-                    if pred:
-                        stats = lookup_stats(target_file_data['df'], pred, global_param_config)
-                        if stats['found'] and 'matched_params' in stats:
-                            pred = stats['matched_params']
-                        results['tsai'].append({
-                            'file': file_name,
-                            'pred': pred,
-                            'stats': stats
-                        })
-                    else:
-                        results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+                    # NF
+                    if HAS_NF:
+                        nf_res = preds_map.get('nf')
+                        if nf_res is not None:
+                            # Resolve index to params if int/str
+                            if isinstance(nf_res, (int, np.integer, str)):
+                                try:
+                                    idx = int(nf_res)
+                                    if 0 <= idx < len(coords_list):
+                                        nf_res = coords_to_params(coords_list[idx], var_cols, global_param_config)
+                                    else:
+                                        nf_res = {}
+                                except:
+                                    nf_res = {}
+
+                            stats = lookup_stats(target_file_data['df'], nf_res, global_param_config)
+                            if stats['found'] and 'matched_params' in stats:
+                                preds_map['nf'] = stats['matched_params']
+                            results['nf'].append({'file': file_name, 'pred': preds_map['nf'], 'stats': stats})
+                            status_msg.append(f"NF:{'Y' if stats['found'] else 'N'}")
+                        else:
+                            results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+                            status_msg.append("NF:-")
+
+                    # Tsai
+                    if HAS_TSAI:
+                        tsai_res = preds_map.get('tsai')
+                        if tsai_res is not None:
+                             # Resolve index to params if int
+                            if isinstance(tsai_res, (int, np.integer)):
+                                try:
+                                    idx = int(tsai_res)
+                                    if 0 <= idx < len(coords_list):
+                                        tsai_res = coords_to_params(coords_list[idx], var_cols, global_param_config)
+                                    else:
+                                        tsai_res = {}
+                                except:
+                                    tsai_res = {}
+
+                            stats = lookup_stats(target_file_data['df'], tsai_res, global_param_config)
+                            if stats['found'] and 'matched_params' in stats:
+                                preds_map['tsai'] = stats['matched_params']
+                            results['tsai'].append({'file': file_name, 'pred': preds_map['tsai'], 'stats': stats})
+                            status_msg.append(f"Tsai:{'Y' if stats['found'] else 'N'}")
+                        else:
+                            results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+                            status_msg.append("Tsai:-")
+
                 except Exception as e:
-                    print(f"  Tsai Error: {e}")
+                    print(f"Error processing result for {file_name}: {e}")
                     traceback.print_exc()
-                    results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
 
-            # Time Estimation
-            files_processed += 1
-            elapsed_time = time.time() - start_time
-            avg_time = elapsed_time / files_processed
-            remaining_files = total_files_to_process - files_processed
-            eta_seconds = avg_time * remaining_files
+                # Progress
+                files_processed += 1
+                elapsed = time.time() - start_time
+                avg = elapsed / files_processed
+                rem = total_files_to_process - files_processed
+                eta = avg * rem
 
-            print(f"  > Progress: {files_processed}/{total_files_to_process} | Avg Time: {avg_time:.2f}s | Remaining: {remaining_files} | ETA: {eta_seconds/60:.2f} min")
+                status_str = " | ".join(status_msg)
+                print(f"  > [{files_processed}/{total_files_to_process}] {file_name} | {status_str} | ETA: {eta/60:.2f} min", flush=True)
 
     except KeyboardInterrupt:
         print("\nProcess cancelled by user. Outputting available results...")
