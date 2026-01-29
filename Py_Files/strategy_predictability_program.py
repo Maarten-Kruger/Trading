@@ -949,7 +949,7 @@ def generate_html_report(results, output_dir):
 
     html_parts = []
 
-    html_parts.append("""
+    html_parts.append(f"""
     <!DOCTYPE html>
     <html>
     <head>
