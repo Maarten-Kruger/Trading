@@ -354,32 +354,23 @@ class NeuralForecastForecaster:
         best_row = future_df.loc[future_df['NHITS'].idxmax()]
 
         # Determine best_uid
+        # best_uid will be the index (int) or whatever was used as unique_id
         if 'unique_id' in future_df.columns:
             best_uid = future_df.loc[future_df['NHITS'].idxmax()]['unique_id']
         else:
             best_uid = future_df['NHITS'].idxmax()
 
-        # best_uid is the string representation of the coordinate tuple
-        # We need to parse it back or have a mapping.
-        # In this architecture, we rely on the main function to pass a mapping if needed,
-        # or we re-parse. Re-parsing is safe and reasonably fast for one item.
-        try:
-            # uid is "('coord1', 'coord2')" string
-            # Safe eval or simple parse
-            best_coord = eval(best_uid)
-            return coords_to_params(best_coord, self.var_cols, self.config)
-        except:
-            return None
+        # Return the identifier (index), let main process resolve it
+        return best_uid
 
 class TsaiForecaster:
     def __init__(self, global_config, var_cols):
         self.config = global_config
         self.var_cols = var_cols
 
-    def predict(self, master_matrix, window_start_idx, window_end_idx, coords_map_list):
+    def predict(self, master_matrix, window_start_idx, window_end_idx):
         """
         master_matrix: (Num_Coords, Num_Files) dense array
-        coords_map_list: List of coordinate tuples corresponding to rows of master_matrix
         """
         if not HAS_TSAI:
             return None
@@ -475,11 +466,9 @@ class TsaiForecaster:
             preds_np = preds.cpu().numpy().flatten()
 
             best_idx = np.argmax(preds_np)
-            # Map index back to coord
-            best_coord = coords_map_list[best_idx]
 
-            pred_params = coords_to_params(best_coord, self.var_cols, self.config)
-            return pred_params
+            # Return index, let main process resolve it
+            return int(best_idx)
         except Exception as e:
             print(f"[DEBUG TSAI] Exception during prediction: {e}")
             traceback.print_exc()
@@ -556,7 +545,6 @@ def worker_predict_week(task_args):
 
         global_param_config = task_args['config']
         var_cols = task_args['var_cols']
-        coords_list = task_args['coords_list']
 
         flags = task_args['flags']
         HAS_DARTS = flags['HAS_DARTS']
@@ -586,12 +574,13 @@ def worker_predict_week(task_args):
                 # Reconstruct DF slice for NF
                 nf_matrix = task_args.get('nf_matrix')
                 nf_dates = task_args.get('nf_dates')
-                nf_coords = task_args.get('nf_coords')
+                # nf_coords removed to reduce payload
 
-                if nf_matrix is not None and nf_dates is not None and nf_coords is not None:
+                if nf_matrix is not None and nf_dates is not None:
                      # Efficiently create DF
-                     # (N_Coords, Time)
-                     temp_df = pd.DataFrame(nf_matrix, index=nf_coords, columns=nf_dates)
+                     # Use integer index as unique_id
+                     num_coords = nf_matrix.shape[0]
+                     temp_df = pd.DataFrame(nf_matrix, index=np.arange(num_coords), columns=nf_dates)
                      temp_df.index.name = 'unique_id'
                      Y_df_window = temp_df.reset_index().melt(id_vars='unique_id', var_name='ds', value_name='y')
                      Y_df_window['ds'] = pd.to_datetime(Y_df_window['ds'])
@@ -613,7 +602,7 @@ def worker_predict_week(task_args):
                 # slice_matrix is already sliced to [window_start:window_end]
                 # Pass 0 and width to predict
                 win_len = slice_matrix.shape[1]
-                results['tsai'] = tsai_model.predict(slice_matrix, 0, win_len, coords_list)
+                results['tsai'] = tsai_model.predict(slice_matrix, 0, win_len)
             except Exception as e:
                 pass
 
@@ -863,22 +852,23 @@ def main():
             'slice_matrix': slice_matrix,
             'nf_matrix': slice_matrix if HAS_NF else None,
             'nf_dates': nf_dates_slice if HAS_NF else None,
-            'nf_coords': coords_strs if HAS_NF else None,
+            # 'nf_coords': coords_strs if HAS_NF else None, # Removed to reduce payload
             'config': global_param_config,
             'var_cols': var_cols,
-            'coords_list': coords_list,
+            # 'coords_list': coords_list, # Removed to reduce payload
             'window_start': window_start,
             'window_end': window_end,
             'flags': flags
         }
         tasks.append((i, task))
 
-    print(f"Submitted {len(tasks)} tasks to ProcessPoolExecutor (Spawn)...")
+    MAX_WORKERS = 4
+    print(f"Submitted {len(tasks)} tasks to ProcessPoolExecutor (Spawn, Max Workers={MAX_WORKERS})...")
 
     try:
         # Use spawn context as requested for independent GPU streams/memory
         ctx = multiprocessing.get_context('spawn')
-        with concurrent.futures.ProcessPoolExecutor(mp_context=ctx) as executor:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, mp_context=ctx) as executor:
             # Submit all tasks
             future_to_idx = {executor.submit(worker_predict_week, t[1]): t[0] for t in tasks}
 
@@ -916,8 +906,20 @@ def main():
 
                     # NF
                     if HAS_NF:
-                        if preds_map.get('nf'):
-                            stats = lookup_stats(target_file_data['df'], preds_map['nf'], global_param_config)
+                        nf_res = preds_map.get('nf')
+                        if nf_res is not None:
+                            # Resolve index to params if int/str
+                            if isinstance(nf_res, (int, np.integer, str)):
+                                try:
+                                    idx = int(nf_res)
+                                    if 0 <= idx < len(coords_list):
+                                        nf_res = coords_to_params(coords_list[idx], var_cols, global_param_config)
+                                    else:
+                                        nf_res = {}
+                                except:
+                                    nf_res = {}
+
+                            stats = lookup_stats(target_file_data['df'], nf_res, global_param_config)
                             if stats['found'] and 'matched_params' in stats:
                                 preds_map['nf'] = stats['matched_params']
                             results['nf'].append({'file': file_name, 'pred': preds_map['nf'], 'stats': stats})
@@ -926,8 +928,20 @@ def main():
 
                     # Tsai
                     if HAS_TSAI:
-                        if preds_map.get('tsai'):
-                            stats = lookup_stats(target_file_data['df'], preds_map['tsai'], global_param_config)
+                        tsai_res = preds_map.get('tsai')
+                        if tsai_res is not None:
+                             # Resolve index to params if int
+                            if isinstance(tsai_res, (int, np.integer)):
+                                try:
+                                    idx = int(tsai_res)
+                                    if 0 <= idx < len(coords_list):
+                                        tsai_res = coords_to_params(coords_list[idx], var_cols, global_param_config)
+                                    else:
+                                        tsai_res = {}
+                                except:
+                                    tsai_res = {}
+
+                            stats = lookup_stats(target_file_data['df'], tsai_res, global_param_config)
                             if stats['found'] and 'matched_params' in stats:
                                 preds_map['tsai'] = stats['matched_params']
                             results['tsai'].append({'file': file_name, 'pred': preds_map['tsai'], 'stats': stats})
