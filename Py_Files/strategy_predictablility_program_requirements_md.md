@@ -38,11 +38,14 @@ The following requirements outline the intended logic for the strategy predictab
 Analysis of the current codebase (`strategy_predictability_program.py`) highlights the following technical implementations and optimizations:
 
 ### 2.1 High-Performance Architecture
-*   **Master Matrix (Tsai):** A global, dense NumPy array (`Float32`) is constructed at initialization. It maps every unique parameter combination (Coordinate) across all time steps (files). This allows for O(1) slicing during the training loop.
-*   **Global Long-Format DataFrame (NeuralForecast):** A single Pandas DataFrame is created by melting the Master Matrix. It uses dummy dates (starting 2020-01-01) to represent file indices, enabling efficient filtering by date for the `NHITS` model.
+*   **Vectorized Data Ingestion:** Uses `np.lib.stride_tricks.sliding_window_view` to pre-calculate all sliding windows instantly in RAM, replacing slow Python loops.
+*   **GPU Saturation:** `TSDataLoaders` are configured with `bs=4096` (or higher), `pin_memory=True`, and multiple `num_workers` to ensure maximum GPU throughput.
 *   **Parallel Processing:**
+    *   `ProcessPoolExecutor` with `multiprocessing.get_context('spawn')` is used to train independent weekly models simultaneously on separate GPU streams.
     *   `ProcessPoolExecutor` is used for parallel CSV file loading (CPU-bound I/O).
     *   `ThreadPoolExecutor` is used for data preprocessing (extracting grids and best vectors).
+*   **Master Matrix (Tsai):** A global, dense NumPy array (`Float32`) is constructed at initialization. It maps every unique parameter combination (Coordinate) across all time steps (files). This allows for O(1) slicing during the training loop.
+*   **Global Long-Format DataFrame (NeuralForecast):** A single Pandas DataFrame is created by melting the Master Matrix. It uses dummy dates (starting 2020-01-01) to represent file indices, enabling efficient filtering by date for the `NHITS` model.
 *   **GPU Acceleration:**
     *   `NeuralForecast` is configured to use GPU (`accelerator='gpu'`) if available.
     *   `Tsai` models leverage PyTorch/FastAI GPU capabilities.
