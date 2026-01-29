@@ -17,12 +17,16 @@ You can install all the required dependencies with the following pip command:
 pip install pandas numpy matplotlib darts neuralforecast tsai scikit-learn
 
 ```
+## The Goal:
+The goal of this script/project is to make a succesfull model or python script that helps to optimize a strategies parameters to future data. It will succeed if we get a higher baseline profit than our Control Group on our optimizations.
+
 
 ## 1. Core User Requirements
 
 > **STRICT RULE:** It should strictly NEVER LOOK AT OR TRAIN ON DATA THAT it uses for the prediction. The prediction should be totally based on previous data and not on future data.
 
 The following requirements outline the intended logic for the strategy predictability analysis program:
+
 
 ### 1.1 Data Filtering & Vector Selection
 *   **Input Data:** Process a sequence of CSV files (optimization results).
