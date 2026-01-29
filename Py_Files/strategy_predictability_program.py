@@ -226,12 +226,10 @@ def lookup_stats(df, params, config):
 
 # --- Model Classes (Lazy Loading Wrapper) ---
 
-def get_forecasters(flags):
+def get_cpu_forecasters(flags):
     """
-    Returns forecaster classes, importing libraries only when called.
-    Used inside worker process.
+    Returns CPU-based forecaster classes.
     """
-
     classes = {}
 
     if flags['HAS_DARTS']:
@@ -243,8 +241,9 @@ def get_forecasters(flags):
                 def __init__(self, global_config, var_cols):
                     self.config = global_config
                     self.var_cols = var_cols
-                    # Optimize: n_jobs=-1 to use all cores
-                    self.model = RandomForest(lags=VECTOR_INPUT, n_estimators=50, random_state=42, n_jobs=-1)
+                    # Optimize: n_jobs=1 to use process parallelism instead of thread parallelism
+                    # This avoids contention when running multiple worker processes
+                    self.model = RandomForest(lags=VECTOR_INPUT, n_estimators=50, random_state=42, n_jobs=1)
 
                 def predict(self, best_vectors_history):
                     # Filter out empty entries if any (or handle them)
@@ -286,6 +285,14 @@ def get_forecasters(flags):
             classes['DartsForecaster'] = DartsForecaster
         except Exception as e:
             print(f"Lazy Import Error (Darts): {e}")
+
+    return classes
+
+def get_gpu_forecasters(flags):
+    """
+    Returns GPU-based forecaster classes.
+    """
+    classes = {}
 
     if flags['HAS_NF']:
         try:
@@ -479,31 +486,24 @@ class ControlGroupForecaster:
         return pred_params
 
 
-# --- Worker Function for Parallel Processing ---
+# --- Worker Functions for Parallel Processing ---
 
-def worker_predict_week(task_args):
+def worker_cpu_tasks(task_args):
     """
-    Worker function to process a single week/file.
-    Executed in a separate process.
+    Worker for CPU-bound tasks (Control, Darts).
     """
     try:
-        # Unpack arguments
         file_name = task_args['file_name']
-        history_best = task_args['history_best']
-        slice_matrix = task_args['slice_matrix'] # Numpy array
+        # print(f"  [CPU Worker] {file_name}: Starting...", flush=True)
 
+        history_best = task_args['history_best']
         global_param_config = task_args['config']
         var_cols = task_args['var_cols']
-
         flags = task_args['flags']
         HAS_DARTS = flags['HAS_DARTS']
-        HAS_NF = flags['HAS_NF']
-        HAS_TSAI = flags['HAS_TSAI']
 
-        # Lazy load forecaster classes inside the worker
-        forecaster_classes = get_forecasters(flags)
-
-        results = {'control': None, 'darts': None, 'nf': None, 'tsai': None}
+        forecaster_classes = get_cpu_forecasters(flags)
+        results = {'control': None, 'darts': None}
 
         # 0. Control Group
         try:
@@ -515,25 +515,46 @@ def worker_predict_week(task_args):
         # 1. Darts
         if HAS_DARTS and 'DartsForecaster' in forecaster_classes:
             try:
+                # print(f"  [CPU Worker] {file_name}: Running Darts...", flush=True)
                 DartsForecaster = forecaster_classes['DartsForecaster']
                 darts_model = DartsForecaster(global_param_config, var_cols)
                 results['darts'] = darts_model.predict(history_best)
             except Exception as e:
                 pass
 
+        return {'file_name': file_name, 'type': 'cpu', 'results': results}
+
+    except Exception as e:
+        return {'file_name': task_args.get('file_name', 'unknown'), 'type': 'cpu', 'results': {}, 'error': str(e)}
+
+def worker_gpu_tasks(task_args):
+    """
+    Worker for GPU-bound tasks (NeuralForecast, Tsai).
+    """
+    try:
+        file_name = task_args['file_name']
+        # print(f"  [GPU Worker] {file_name}: Starting...", flush=True)
+
+        slice_matrix = task_args['slice_matrix']
+        global_param_config = task_args['config']
+        var_cols = task_args['var_cols']
+        flags = task_args['flags']
+        HAS_NF = flags['HAS_NF']
+        HAS_TSAI = flags['HAS_TSAI']
+
+        forecaster_classes = get_gpu_forecasters(flags)
+        results = {'nf': None, 'tsai': None}
+
         # 2. NeuralForecast
         if HAS_NF and 'NeuralForecastForecaster' in forecaster_classes:
             try:
-                # print(f"  [Worker] {file_name}: Starting NeuralForecast...", flush=True) # Verbose
+                # print(f"  [GPU Worker] {file_name}: Running NeuralForecast...", flush=True)
 
                 # Reconstruct DF slice for NF
                 nf_matrix = task_args.get('nf_matrix')
                 nf_dates = task_args.get('nf_dates')
-                # nf_coords removed to reduce payload
 
                 if nf_matrix is not None and nf_dates is not None:
-                     # Efficiently create DF
-                     # Use integer index as unique_id
                      num_coords = nf_matrix.shape[0]
                      temp_df = pd.DataFrame(nf_matrix, index=np.arange(num_coords), columns=nf_dates)
                      temp_df.index.name = 'unique_id'
@@ -544,9 +565,7 @@ def worker_predict_week(task_args):
                      NeuralForecastForecaster = forecaster_classes['NeuralForecastForecaster']
                      nf_model = NeuralForecastForecaster(global_param_config, var_cols)
 
-                     # Suppress output
                      with open(os.devnull, 'w') as devnull:
-                         # Pass original window indices so predict calculates correct date filter
                          results['nf'] = nf_model.predict(Y_df_window, task_args['window_start'], task_args['window_end'])
             except Exception as e:
                 pass
@@ -554,26 +573,24 @@ def worker_predict_week(task_args):
         # 3. Tsai
         if HAS_TSAI and 'TsaiForecaster' in forecaster_classes:
             try:
-                # print(f"  [Worker] {file_name}: Starting Tsai...", flush=True) # Verbose
-
+                # print(f"  [GPU Worker] {file_name}: Running Tsai...", flush=True)
                 TsaiForecaster = forecaster_classes['TsaiForecaster']
                 tsai_model = TsaiForecaster(global_param_config, var_cols)
-                # slice_matrix is already sliced to [window_start:window_end]
-                # Pass 0 and width to predict
                 win_len = slice_matrix.shape[1]
                 results['tsai'] = tsai_model.predict(slice_matrix, 0, win_len)
             except Exception as e:
                 pass
 
-        return {'file_name': file_name, 'results': results}
+        return {'file_name': file_name, 'type': 'gpu', 'results': results}
 
     except Exception as e:
-        return {'file_name': task_args.get('file_name', 'unknown'), 'results': {}, 'error': str(e)}
+        return {'file_name': task_args.get('file_name', 'unknown'), 'type': 'gpu', 'results': {}, 'error': str(e)}
+
 
 # --- Main Execution ---
 
 def main():
-    print("--- Strategy Predictability Program (Multi-Model) ---")
+    print("--- Strategy Predictability Program (Multi-Model / Hybrid Parallel) ---")
 
     # User Input
     if not sys.stdin.isatty():
@@ -604,17 +621,17 @@ def main():
     print(f"Found {len(csv_files)} files.")
 
     print("\n=== Definitions ===")
-    print(f"VECTOR_INPUT ({VECTOR_INPUT}): Lookback window size (Model Lags). The number of past time steps (files/vectors) the model looks at to make a prediction.")
-    print(f"TRAINING_WINDOW ({TRAINING_WINDOW}): Size of the sliding window used for training. The number of recent files included in the training dataset for the model.")
+    print(f"VECTOR_INPUT ({VECTOR_INPUT}): Lookback window size (Model Lags).")
+    print(f"TRAINING_WINDOW ({TRAINING_WINDOW}): Size of the sliding window used for training.")
     print("-" * 30)
     print("Control Group: Calculates the average of the parameter steps from the last VECTOR_INPUT best vectors.")
-    print("Darts (Random Forest): Trains a Random Forest regressor on the trajectory of the best vectors within the TRAINING_WINDOW to predict the next best vector coordinates.")
-    print("NeuralForecast (NHITS): Trains a specialized neural network (NHITS) on the entire result surface history within the TRAINING_WINDOW to forecast the result of every parameter combination.")
-    print("Tsai (InceptionTime): Trains a Time Series Transformer/CNN (InceptionTime) on the result history of all coordinates within the TRAINING_WINDOW to predict the next best vector.")
+    print("Darts (Random Forest): Trajectory prediction (CPU).")
+    print("NeuralForecast (NHITS): Surface forecasting (GPU).")
+    print("Tsai (InceptionTime): Surface forecasting (GPU).")
     print("===================\n")
 
     # Global Scan (Parallel Loading)
-    print("Loading files in parallel...")
+    print(">>> PHASE 1: Loading Files Parallel...")
     start_load = time.time()
 
     files_data = []
@@ -623,7 +640,6 @@ def main():
     with concurrent.futures.ProcessPoolExecutor() as executor:
         try:
             results = executor.map(process_file_load, csv_files)
-
             for res in results:
                 if res is not None:
                     files_data.append(res)
@@ -638,7 +654,7 @@ def main():
         return
 
     # Process stats for global config
-    print("Scanning global parameters...")
+    print(">>> PHASE 2: Scanning Global Parameters...")
     all_values = {}
     for fd in files_data:
         for col, vals in fd['unique_vals'].items():
@@ -660,7 +676,7 @@ def main():
     var_cols = sorted_vars
 
     # Pre-process Data (Parallel) - Build Per-File Grids
-    print("Preprocessing data for models...")
+    print(">>> PHASE 3: Preprocessing Data for Models (Grid Construction)...")
     start_pre = time.time()
 
     def _pre_wrapper(fd):
@@ -676,7 +692,7 @@ def main():
     print(f"Preprocessed {len(files_data)} files in {time.time() - start_pre:.2f}s")
 
     # --- MASTER MATRIX CONSTRUCTION ---
-    print("Constructing Master Data Structures (Global Matrix)...")
+    print(">>> PHASE 4: Constructing Master Data Structures (Global Matrix)...")
     start_matrix = time.time()
 
     # 1. Identify ALL unique coords across history
@@ -693,12 +709,8 @@ def main():
     print(f"  > Time Steps (Files): {num_files}")
 
     # 2. Build Tsai Master Matrix (NumPy)
-    # Shape: (Num_Coords, Num_Files)
-    # Init with 0 or NaN? 0 implies bad result, which is safe for maximization logic.
     master_matrix = np.zeros((num_coords, num_files), dtype=np.float32)
 
-    # Fill matrix
-    # This might take a moment but it's done ONCE.
     for t, fd in enumerate(files_data):
         grid = fd['grid_summary']
         for coord, res in grid.items():
@@ -707,87 +719,39 @@ def main():
                 master_matrix[idx, t] = res
 
     # 3. Build NeuralForecast Global DataFrame (Pandas Long Format)
-    # Columns: unique_id, ds, y
-    # ds = 2020-01-01 + t days
-
-    # We can construct this efficiently from the master matrix using numpy magic
-    # or list comprehension.
-
-    # Let's use list comprehension for clarity and safety with strings
-    nf_records = []
+    # Necessary for dates matching
     base_date = datetime(2020, 1, 1)
-
-    # To optimize: Create a DF directly from the matrix?
-    # NeuralForecast needs 'unique_id' column (string of tuple)
-    # 'ds' column (datetime)
-    # 'y' column (float)
-
-    # Fast approach: Stack the matrix
-    # Rows: Coords, Cols: Time
-    # We want Long format.
-
-    # Coords column
-    # Repeat coords list for each time step?
-
-    # Let's do a semi-vectorized approach
-    # Create indices
     t_indices = np.arange(num_files)
     dates = [base_date + timedelta(days=int(t)) for t in t_indices]
 
-    # We need to melt the master matrix
-    # DataFrame(master_matrix, index=coords_strs, columns=dates) -> melt
-
     coords_strs = [str(c) for c in coords_list]
 
-    # Create a DataFrame for easy melting
-    # This consumes RAM but is fast.
-    # If 860,000 rows * 30 cols = 25M elements. Float32 ~ 100MB. Pandas overhead x5 ~ 500MB.
-    # This is fine for "nice computer".
-
-    temp_df = pd.DataFrame(master_matrix, index=coords_strs, columns=dates)
-    temp_df.index.name = 'unique_id'
-
-    # Reset index to make unique_id a column
-    # Melt
-    # id_vars='unique_id', var_name='ds', value_name='y'
-    Y_df_global = temp_df.reset_index().melt(id_vars='unique_id', var_name='ds', value_name='y')
-
-    # Ensure types
-    Y_df_global['ds'] = pd.to_datetime(Y_df_global['ds'])
-    Y_df_global['y'] = Y_df_global['y'].astype(np.float32)
+    # Temporarily build DF to extract long format?
+    # Actually we only need dates list in main. The worker reconstructs df from slice matrix + dates slice.
+    # The matrix is already built.
 
     print(f"Master Matrix Construction took {time.time() - start_matrix:.2f}s")
 
-    # 4. Extract Best Vectors (Compatibility)
+    # 4. Extract Best Vectors
     best_vectors_history = [fd['best_vector'] for fd in files_data]
 
-    # Prepare Models (Main process only needs ControlGroup for non-parallel parts if any, but in parallel it's done in worker)
-    # We no longer instantiate Darts/NF/Tsai here to avoid importing them in main.
-
     # Predictions Storage
-    # Structure: {'darts': [], 'nf': [], 'tsai': []}
     results = {'control': [], 'darts': [], 'nf': [], 'tsai': []}
 
     start_index = TRAINING_WINDOW + 1
     if start_index >= len(files_data):
-        # Fallback if we have fewer files than TRAINING_WINDOW but enough to start
         start_index = VECTOR_INPUT + 2
 
     if start_index >= len(files_data):
         print(f"Not enough files. Need > {start_index}")
         return
 
-    print("Preparing Tasks for Parallel Execution...")
+    print(">>> PHASE 5: Preparing Tasks for Parallel Execution...")
 
-    start_time = time.time()
-    files_processed = 0
-    total_files_to_process = len(files_data) - start_index
-
-    # Flags for worker
     flags = {'HAS_DARTS': HAS_DARTS, 'HAS_NF': HAS_NF, 'HAS_TSAI': HAS_TSAI}
 
-    # Prepare Tasks List
-    tasks = []
+    # Prepare Task Data
+    tasks_data = {}
     for i in range(start_index, len(files_data)):
         target_file_data = files_data[i]
         file_name = os.path.basename(target_file_data['path'])
@@ -795,11 +759,8 @@ def main():
         window_start = max(0, i - TRAINING_WINDOW)
         window_end = i
 
-        # Slices
         history_best = best_vectors_history[window_start:window_end]
         slice_matrix = master_matrix[:, window_start:window_end] # (N_Coords, Window)
-
-        # NF specific: Dates slice
         nf_dates_slice = dates[window_start:window_end]
 
         task = {
@@ -808,127 +769,144 @@ def main():
             'slice_matrix': slice_matrix,
             'nf_matrix': slice_matrix if HAS_NF else None,
             'nf_dates': nf_dates_slice if HAS_NF else None,
-            # 'nf_coords': coords_strs if HAS_NF else None, # Removed to reduce payload
             'config': global_param_config,
             'var_cols': var_cols,
-            # 'coords_list': coords_list, # Removed to reduce payload
             'window_start': window_start,
             'window_end': window_end,
             'flags': flags
         }
-        tasks.append((i, task))
+        tasks_data[i] = task
 
-    MAX_WORKERS = 4
-    print(f"Submitted {len(tasks)} tasks to ProcessPoolExecutor (Spawn, Max Workers={MAX_WORKERS})...")
+    # Configure Process Pools
+    # CPU Pool: Aggressive (e.g., all cores - 2)
+    # GPU Pool: Conservative (e.g., 2 workers)
+
+    cpu_count = os.cpu_count() or 4
+    CPU_WORKERS = max(1, cpu_count - 2)
+    GPU_WORKERS = 2 # Conservative for VRAM
+
+    print(f"Initializing Pools: CPU_WORKERS={CPU_WORKERS}, GPU_WORKERS={GPU_WORKERS}")
 
     try:
-        # Use spawn context as requested for independent GPU streams/memory
         ctx = multiprocessing.get_context('spawn')
-        with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, mp_context=ctx) as executor:
-            # Submit all tasks
-            future_to_idx = {executor.submit(worker_predict_week, t[1]): t[0] for t in tasks}
 
-            print("\n--- Parallel Processing Started ---")
+        with concurrent.futures.ProcessPoolExecutor(max_workers=CPU_WORKERS, mp_context=ctx) as cpu_pool, \
+             concurrent.futures.ProcessPoolExecutor(max_workers=GPU_WORKERS, mp_context=ctx) as gpu_pool:
 
-            for future in concurrent.futures.as_completed(future_to_idx):
-                i = future_to_idx[future]
+            future_map = {} # future -> (file_index, type)
+
+            print("Submitting tasks...")
+            for i, task in tasks_data.items():
+                # Submit CPU Task
+                f_cpu = cpu_pool.submit(worker_cpu_tasks, task)
+                future_map[f_cpu] = (i, 'cpu')
+
+                # Submit GPU Task
+                f_gpu = gpu_pool.submit(worker_gpu_tasks, task)
+                future_map[f_gpu] = (i, 'gpu')
+
+            print("\n--- Parallel Processing Started (Hybrid CPU/GPU) ---")
+
+            total_tasks = len(tasks_data) * 2 # cpu + gpu
+            completed_tasks = 0
+
+            # Tracking for user feedback
+            # We want to print when a File is FULLY done?
+            # Or print partials? User wants to see activity.
+            # Printing "File X: CPU Done" and "File X: GPU Done" is good.
+
+            for future in concurrent.futures.as_completed(future_map):
+                i, task_type = future_map[future]
                 target_file_data = files_data[i]
                 file_name = os.path.basename(target_file_data['path'])
 
                 try:
                     res = future.result()
-                    # res has {'file_name', 'results': {'control': ..., ...}, 'error': ...}
+                    # res: {'file_name', 'type', 'results': {}, 'error'}
 
                     if 'error' in res:
-                        print(f"  [Error] {file_name}: {res['error']}")
+                        print(f"  [Error] {file_name} ({task_type.upper()}): {res['error']}")
                         continue
 
                     preds_map = res['results']
 
-                    # --- Verification (Main Process) ---
-                    status_msg = []
+                    status_parts = []
 
-                    # Control
-                    if preds_map.get('control'):
-                        stats = lookup_stats(target_file_data['df'], preds_map['control'], global_param_config)
-                        if stats['found'] and 'matched_params' in stats:
-                            preds_map['control'] = stats['matched_params']
-                        results['control'].append({'file': file_name, 'pred': preds_map['control'], 'stats': stats})
-                        status_msg.append(f"C:{'Y' if stats['found'] else 'N'}")
+                    if task_type == 'cpu':
+                        # Handle Control
+                        if preds_map.get('control'):
+                            stats = lookup_stats(target_file_data['df'], preds_map['control'], global_param_config)
+                            if stats['found'] and 'matched_params' in stats: preds_map['control'] = stats['matched_params']
+                            results['control'].append({'file': file_name, 'pred': preds_map['control'], 'stats': stats})
+                            status_parts.append(f"Control:{'Y' if stats['found'] else 'N'}")
 
-                    # Darts
-                    if HAS_DARTS:
-                        if preds_map.get('darts'):
+                        # Handle Darts
+                        if HAS_DARTS and preds_map.get('darts'):
                             stats = lookup_stats(target_file_data['df'], preds_map['darts'], global_param_config)
-                            if stats['found'] and 'matched_params' in stats:
-                                preds_map['darts'] = stats['matched_params']
+                            if stats['found'] and 'matched_params' in stats: preds_map['darts'] = stats['matched_params']
                             results['darts'].append({'file': file_name, 'pred': preds_map['darts'], 'stats': stats})
-                            status_msg.append(f"D:{'Y' if stats['found'] else 'N'}")
+                            status_parts.append(f"Darts:{'Y' if stats['found'] else 'N'}")
 
-                    # NF
-                    if HAS_NF:
-                        nf_res = preds_map.get('nf')
-                        if nf_res is not None:
-                            # Resolve index to params if int/str
-                            if isinstance(nf_res, (int, np.integer, str)):
-                                try:
-                                    idx = int(nf_res)
-                                    if 0 <= idx < len(coords_list):
-                                        nf_res = coords_to_params(coords_list[idx], var_cols, global_param_config)
-                                    else:
-                                        nf_res = {}
-                                except:
-                                    nf_res = {}
+                        print(f"  > {file_name} [CPU]: " + ", ".join(status_parts), flush=True)
 
-                            stats = lookup_stats(target_file_data['df'], nf_res, global_param_config)
-                            if stats['found'] and 'matched_params' in stats:
-                                preds_map['nf'] = stats['matched_params']
-                            results['nf'].append({'file': file_name, 'pred': preds_map['nf'], 'stats': stats})
-                            status_msg.append(f"NF:{'Y' if stats['found'] else 'N'}")
-                        else:
-                            results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
-                            status_msg.append("NF:-")
+                    elif task_type == 'gpu':
+                        # Handle NF
+                        if HAS_NF:
+                            nf_res = preds_map.get('nf')
+                            if nf_res is not None:
+                                if isinstance(nf_res, (int, np.integer, str)):
+                                    try:
+                                        idx = int(nf_res)
+                                        if 0 <= idx < len(coords_list):
+                                            nf_res = coords_to_params(coords_list[idx], var_cols, global_param_config)
+                                        else: nf_res = {}
+                                    except: nf_res = {}
+                                stats = lookup_stats(target_file_data['df'], nf_res, global_param_config)
+                                if stats['found'] and 'matched_params' in stats: preds_map['nf'] = stats['matched_params']
+                                results['nf'].append({'file': file_name, 'pred': preds_map['nf'], 'stats': stats})
+                                status_parts.append(f"NF:{'Y' if stats['found'] else 'N'}")
+                            else:
+                                results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+                                status_parts.append("NF:-")
 
-                    # Tsai
-                    if HAS_TSAI:
-                        tsai_res = preds_map.get('tsai')
-                        if tsai_res is not None:
-                             # Resolve index to params if int
-                            if isinstance(tsai_res, (int, np.integer)):
-                                try:
-                                    idx = int(tsai_res)
-                                    if 0 <= idx < len(coords_list):
-                                        tsai_res = coords_to_params(coords_list[idx], var_cols, global_param_config)
-                                    else:
-                                        tsai_res = {}
-                                except:
-                                    tsai_res = {}
+                        # Handle Tsai
+                        if HAS_TSAI:
+                            tsai_res = preds_map.get('tsai')
+                            if tsai_res is not None:
+                                if isinstance(tsai_res, (int, np.integer)):
+                                    try:
+                                        idx = int(tsai_res)
+                                        if 0 <= idx < len(coords_list):
+                                            tsai_res = coords_to_params(coords_list[idx], var_cols, global_param_config)
+                                        else: tsai_res = {}
+                                    except: tsai_res = {}
+                                stats = lookup_stats(target_file_data['df'], tsai_res, global_param_config)
+                                if stats['found'] and 'matched_params' in stats: preds_map['tsai'] = stats['matched_params']
+                                results['tsai'].append({'file': file_name, 'pred': preds_map['tsai'], 'stats': stats})
+                                status_parts.append(f"Tsai:{'Y' if stats['found'] else 'N'}")
+                            else:
+                                results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+                                status_parts.append("Tsai:-")
 
-                            stats = lookup_stats(target_file_data['df'], tsai_res, global_param_config)
-                            if stats['found'] and 'matched_params' in stats:
-                                preds_map['tsai'] = stats['matched_params']
-                            results['tsai'].append({'file': file_name, 'pred': preds_map['tsai'], 'stats': stats})
-                            status_msg.append(f"Tsai:{'Y' if stats['found'] else 'N'}")
-                        else:
-                            results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
-                            status_msg.append("Tsai:-")
+                        print(f"  > {file_name} [GPU]: " + ", ".join(status_parts), flush=True)
 
                 except Exception as e:
                     print(f"Error processing result for {file_name}: {e}")
                     traceback.print_exc()
 
-                # Progress
-                files_processed += 1
-                elapsed = time.time() - start_time
-                avg = elapsed / files_processed
-                rem = total_files_to_process - files_processed
-                eta = avg * rem
-
-                status_str = " | ".join(status_msg)
-                print(f"  > [{files_processed}/{total_files_to_process}] {file_name} | {status_str} | ETA: {eta/60:.2f} min", flush=True)
+                completed_tasks += 1
+                # Optional: ETA calculation based on completed_tasks vs total_tasks
 
     except KeyboardInterrupt:
         print("\nProcess cancelled by user. Outputting available results...")
+
+    # Sort results to ensure chronological order in report
+    def result_sort_key(item):
+         try: return int(item['file'].split('_')[0])
+         except: return float('inf')
+
+    for key in results:
+        results[key].sort(key=result_sort_key)
 
     # Generate Report
     generate_html_report(results, target_dir)
