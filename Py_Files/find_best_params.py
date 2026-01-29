@@ -4,17 +4,35 @@ import os
 import glob
 import math
 from itertools import product, combinations
+import matplotlib
+# Use Agg backend for speed (non-interactive)
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.colors import TwoSlopeNorm
 import io
 import base64
+import sys
 
 # Configuration
-REQUIRED_GRID_SIDE = 5  # Corresponds to Radius = 1 (1 step up, 1 step down) -> 3 points total per axis
+REQUIRED_GRID_SIDE = 5  # Corresponds to Radius = 2 -> 5 points total per axis
 
 def main():
-    # Ask for the path to the folder with the CSV files
-    target_dir = input("Please enter the path to the folder with the CSV files: ").strip()
+    # Input handling
+    if len(sys.argv) > 1:
+        target_dir = sys.argv[1]
+    else:
+        # Default behavior: Prompt user
+        print("Please enter the path to the folder with the CSV files: ", end="", flush=True)
+        # Check if input is piped or interactive
+        if sys.stdin.isatty():
+             target_dir = input().strip()
+        else:
+             # Read line from stdin if piped
+             try:
+                target_dir = sys.stdin.readline().strip()
+                print(target_dir) # Echo it back
+             except:
+                target_dir = ""
 
     if not target_dir:
         print("No directory provided.")
@@ -47,20 +65,11 @@ def main():
     print("Loading files and scanning parameter ranges...")
     for file_path in csv_files:
         try:
-            # Load Data
-            try:
-                df = pd.read_csv(file_path, sep=None, engine='python')
-            except Exception as e:
-                print(f"Error reading {file_path}: {e}")
-                continue
+            # Fast Load
+            df = fast_load_csv(file_path)
 
-            # Clean numeric columns
-            for col in df.columns:
-                if df[col].dtype == 'object':
-                    try:
-                        df[col] = df[col].astype(str).str.replace(',', '.').astype(float)
-                    except ValueError:
-                        pass
+            if df is None:
+                continue
 
             # Identify Variables
             try:
@@ -72,6 +81,7 @@ def main():
 
             # Update Global Params
             for col in var_cols:
+                # Get unique values efficiently
                 unique_vals = df[col].dropna().unique()
                 if col not in global_param_values:
                     global_param_values[col] = set()
@@ -124,17 +134,52 @@ def main():
         # Format variables string
         vars_parts = []
         for k, v in res['params'].items():
-            step = res['step_sizes'].get(k, 0)
-            if step > 0:
-                vars_parts.append(f"{k}={v}")
-            else:
-                vars_parts.append(f"{k}={v}")
+            # step = res['step_sizes'].get(k, 0) # Not used in output format actually
+            vars_parts.append(f"{k}={v}")
 
         vars_str = ", ".join(vars_parts)
         print(f"{file_name[:29]:<30} | {best_res:<11} | {profit:<10} | {inc_dec:<8} | {neigh_prof:<18} | {vars_str}")
     print("="*120 + "\n")
 
     export_to_html(results_table, global_param_values, filename=os.path.join(target_dir, "Optimization_Report.html"))
+
+def fast_load_csv(file_path):
+    """
+    Detects separator and decimal, loads CSV efficiently using C engine.
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+            line1 = f.readline()
+            line2 = f.readline()
+
+        # Simple detection logic
+        sep = ','
+        decimal = '.'
+
+        if ';' in line1:
+            sep = ';'
+            # Check decimal in line 2
+            if ',' in line2 and '.' not in line2: # Rough heuristic
+                decimal = ','
+
+        df = pd.read_csv(file_path, sep=sep, decimal=decimal, engine='c')
+
+        # Fallback cleanup for object columns that should be numeric (mixed formats)
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                try:
+                    # Try converting strings with comma decimals if they were missed
+                    # Only if they look like numbers
+                    sample = df[col].dropna().iloc[0] if not df[col].dropna().empty else ""
+                    if isinstance(sample, str) and sample.replace(',','').replace('.','').replace('-','').isdigit():
+                         df[col] = df[col].astype(str).str.replace(',', '.').astype(float)
+                except (ValueError, IndexError):
+                    pass
+
+        return df
+    except Exception as e:
+        print(f"Error reading {file_path}: {e}")
+        return None
 
 def plot_to_base64(fig):
     buf = io.BytesIO()
@@ -143,129 +188,9 @@ def plot_to_base64(fig):
     img_str = base64.b64encode(buf.read()).decode('utf-8')
     return img_str
 
-def check_square_region(center_coord, active_indices, coord_map, radius, direction, condition_type):
+def calculate_robustness_stats(varying_cols, grid_handler, positive_vectors):
     """
-    Checks if the defined 'bubble' (square region) meets the condition.
-    range: [0, R] for inc, [-R, 0] for dec. Excludes origin.
-    active_indices: list of indices in center_coord that are varying.
-    """
-    full_dim = len(center_coord)
-    ranges = []
-    active_set = set(active_indices)
-
-    for i in range(full_dim):
-        if i in active_set:
-            if direction == 'inc':
-                ranges.append(range(0, radius + 1))
-            else:
-                ranges.append(range(-radius, 1))
-        else:
-            ranges.append(range(0, 1))
-
-    points_in_bubble = []
-
-    # Iterate all combinations in the box
-    for steps in product(*ranges):
-        # Exclude origin (all zeros means we are at center)
-        if all(s == 0 for s in steps):
-            continue
-
-        # Calculate coordinate
-        test_coord = list(center_coord)
-        valid_point = True
-        for i, step in enumerate(steps):
-            test_coord[i] += step
-
-        test_coord = tuple(test_coord)
-
-        if test_coord not in coord_map:
-            # Missing point implies the square is broken
-            return False
-
-        points_in_bubble.append(coord_map[test_coord])
-
-    if not points_in_bubble:
-        # Should not happen if R >= 1 and active_indices is not empty
-        return True
-
-    # Check Condition
-    if condition_type == 'loss':
-        # No Losing Sets -> All Profit >= 0
-        for p in points_in_bubble:
-            if p['Profit'] < 0:
-                return False
-    elif condition_type == 'avg':
-        # Avg Profit > 0 (Condition applies to the Bubble Set)
-        avg_profit = np.mean([p['Profit'] for p in points_in_bubble])
-        if avg_profit <= 0:
-            return False
-    elif condition_type == 'result':
-        # Result >= 25 (User Requirement)
-        for p in points_in_bubble:
-            if p['Result'] < 25:
-                return False
-
-    return True
-
-def find_max_radius(center_coord, active_indices, coord_map, direction, condition_type):
-    radius = 0
-    # Safety limit to prevent infinite loops
-    MAX_SEARCH_RADIUS = 50
-
-    while radius < MAX_SEARCH_RADIUS:
-        next_r = radius + 1
-        if check_square_region(center_coord, active_indices, coord_map, next_r, direction, condition_type):
-            radius = next_r
-        else:
-            break
-
-    return radius
-
-def calculate_1d_robustness(center_coord, varying_cols, coord_map):
-    """
-    Calculates the max valid increment and decrement for each variable independently (1D slice),
-    while keeping other variables fixed at the center_coord values.
-    Returns a dict: {col_name: {'inc': int, 'dec': int}}
-    """
-    robustness = {}
-
-    for i, col in enumerate(varying_cols):
-        # Current variable index is i
-        # We vary coord[i], keep others fixed
-        base_coord = list(center_coord)
-
-        # Check Increment
-        inc = 0
-        while True:
-            test_coord = list(base_coord)
-            test_coord[i] += (inc + 1)
-            if tuple(test_coord) in coord_map and coord_map[tuple(test_coord)]['Profit'] > 0:
-                inc += 1
-            else:
-                break
-
-        # Check Decrement
-        dec = 0
-        while True:
-            test_coord = list(base_coord)
-            test_coord[i] -= (dec + 1)
-            if tuple(test_coord) in coord_map and coord_map[tuple(test_coord)]['Profit'] > 0:
-                dec += 1
-            else:
-                break
-
-        robustness[col] = {'inc': inc, 'dec': dec}
-
-    return robustness
-
-def calculate_robustness_stats(varying_cols, coord_map):
-    """
-    Calculates robustness based on the new logic:
-    1. Filter Positive Vectors (Result > 25)
-    2. Separate Inc/Dec bubbles.
-    3. Rank Top 100 by Inc Radius.
-    4. Find Max Sum (Inc + Dec) for the winner.
-    Returns: { dim: { 'loss': max_sum, 'avg': max_sum, 'result': max_sum } }
+    Optimized robustness calculation.
     """
     num_vars = len(varying_cols)
     robustness_results = {} # { d: { 'loss': val, 'avg': val, 'result': val } }
@@ -273,12 +198,6 @@ def calculate_robustness_stats(varying_cols, coord_map):
     # Pre-calculate combinations
     indices = range(num_vars)
     dim_combinations = {d: list(combinations(indices, d)) for d in range(1, num_vars + 1)}
-
-    # Filter Positive Vectors
-    positive_vectors = []
-    for coord, data in coord_map.items():
-        if data['Result'] > 25:
-             positive_vectors.append(coord)
 
     if not positive_vectors:
         return {d: {'loss': 0, 'avg': 0, 'result': 0} for d in range(1, num_vars + 1)}
@@ -289,22 +208,24 @@ def calculate_robustness_stats(varying_cols, coord_map):
         robustness_results[d] = {}
 
         for cond in conditions:
-            # We need to find the Best Vector for this (Dimension, Condition) pair.
-            # We must check ALL combinations for this dimensionality and find the global max.
-
             current_dim_max_sum = 0
 
             for active_idxs in dim_combinations[d]:
+                # Optimized Candidate Evaluation
+                # We need top 100 based on r_inc
+
+                # Batch process all positive vectors for this dimension combo?
+                # grid_handler.find_max_radius allows checking a point.
+
                 candidates = []
-                # List of tuples: (inc_radius, result, coord, active_idxs)
 
+                # Check Inc Radius for all
                 for coord in positive_vectors:
-                    # Calculate Inc Radius
-                    r_inc = find_max_radius(coord, active_idxs, coord_map, 'inc', cond)
+                    r_inc = grid_handler.find_max_radius(coord, active_idxs, 'inc', cond)
 
-                    # Store candidate
-                    # We store Result for tie-breaking
-                    res_val = coord_map[coord]['Result']
+                    # Result value for tie-break
+                    res_val = grid_handler.get_value(coord, 'Result')
+
                     candidates.append({
                         'r_inc': r_inc,
                         'result': res_val,
@@ -312,26 +233,19 @@ def calculate_robustness_stats(varying_cols, coord_map):
                         'active_idxs': active_idxs
                     })
 
-                # Rank: Sort by r_inc DESC, then result DESC
+                # Rank
                 candidates.sort(key=lambda x: (x['r_inc'], x['result']), reverse=True)
-
-                # Keep Top 100 per combination
                 top_100 = candidates[:100]
 
-                # Find Winner (Max Sum) for this combination
                 combo_max_sum = 0
-
                 for cand in top_100:
                     coord = cand['coord']
-                    active_idxs = cand['active_idxs']
                     r_inc = cand['r_inc']
-
                     # Calculate Dec Radius
-                    r_dec = find_max_radius(coord, active_idxs, coord_map, 'dec', cond)
+                    r_dec = grid_handler.find_max_radius(coord, active_idxs, 'dec', cond)
 
-                    total_sum = r_inc + r_dec
-                    if total_sum > combo_max_sum:
-                        combo_max_sum = total_sum
+                    if r_inc + r_dec > combo_max_sum:
+                        combo_max_sum = r_inc + r_dec
 
                 if combo_max_sum > current_dim_max_sum:
                     current_dim_max_sum = combo_max_sum
@@ -339,6 +253,355 @@ def calculate_robustness_stats(varying_cols, coord_map):
             robustness_results[d][cond] = current_dim_max_sum
 
     return robustness_results
+
+class GridHandler:
+    """
+    Abstracts Dense vs Sparse grid logic.
+    """
+    def __init__(self, df, varying_cols, step_sizes):
+        self.varying_cols = varying_cols
+        self.step_sizes = step_sizes
+        self.min_vals = {col: df[col].min() for col in varying_cols}
+
+        # Calculate coordinates
+        coords_list = []
+        self.dims = []
+        for col in varying_cols:
+            mn = self.min_vals[col]
+            st = step_sizes[col]
+            if st == 0:
+                c = np.zeros(len(df), dtype=int)
+            else:
+                c = ((df[col] - mn) / st).round().astype(int).values
+            coords_list.append(c)
+            self.dims.append(c.max() + 1)
+
+        self.coords = np.column_stack(coords_list) # (N, D)
+        self.profit_values = df['Profit'].values
+        self.result_values = df['Result'].values
+        self.row_indices = df.index.values
+
+        # Heuristic to choose Dense vs Sparse
+        # If total cells < 100 Million, use Dense
+        total_cells = np.prod(self.dims) if self.dims else 0
+        self.use_dense = (total_cells < 1e8) and (total_cells > 0)
+
+        if self.use_dense:
+            # print(f"Using Dense Grid (Size: {self.dims})")
+            shape = tuple(self.dims)
+            # Initialize with NaN
+            self.profit_grid = np.full(shape, np.nan, dtype=np.float32)
+            self.result_grid = np.full(shape, np.nan, dtype=np.float32)
+            self.index_grid = np.full(shape, -1, dtype=int)
+
+            # Fill
+            # Need to handle duplicates? Taking last one or mean?
+            # The logic usually implies unique params. If duplicates, overwrite is fine or we map unique.
+            # Using tuple indexing
+            idx = tuple(self.coords.T)
+            self.profit_grid[idx] = self.profit_values
+            self.result_grid[idx] = self.result_values
+            self.index_grid[idx] = self.row_indices
+        else:
+            # print("Using Sparse Grid")
+            self.map = {}
+            for i in range(len(self.coords)):
+                t = tuple(self.coords[i])
+                self.map[t] = i
+
+    def get_value(self, coord, metric='Profit'):
+        if self.use_dense:
+            try:
+                if metric == 'Profit':
+                    return self.profit_grid[coord]
+                elif metric == 'Result':
+                    return self.result_grid[coord]
+                elif metric == 'Index':
+                    return self.index_grid[coord]
+            except IndexError:
+                return np.nan
+        else:
+            idx = self.map.get(coord)
+            if idx is None: return None
+            if metric == 'Profit': return self.profit_values[idx]
+            if metric == 'Result': return self.result_values[idx]
+            if metric == 'Index': return self.row_indices[idx]
+            return None
+
+    def find_max_radius(self, center, active_idxs, direction, condition):
+        # Linear search 1..50
+        # If dense, optimized slicing?
+        # Implementing incremental checking logic
+
+        radius = 0
+        MAX_R = 50
+
+        while radius < MAX_R:
+            next_r = radius + 1
+            if not self.check_shell(center, active_idxs, next_r, direction, condition):
+                break
+            radius = next_r
+        return radius
+
+    def check_shell(self, center, active_idxs, radius, direction, condition):
+        # Generate points on the surface of the hypercube (shell)
+        # defined by active_idxs with radius.
+        # direction 'inc' -> [0, R], shell is at least one coord == R
+        # direction 'dec' -> [-R, 0], shell is at least one coord == -R
+
+        # General approach:
+        # Iterate all points in the box of size R, excluding box of size R-1.
+        # Box limits for dimension i:
+        # If i in active_idxs:
+        #   inc: [0, R]
+        #   dec: [-R, 0]
+        # Else: [0, 0]
+
+        ranges = []
+        for i in range(len(center)):
+            if i in active_idxs:
+                if direction == 'inc':
+                    ranges.append(range(0, radius + 1))
+                else:
+                    ranges.append(range(-radius, 1))
+            else:
+                ranges.append(range(0, 1))
+
+        # If we use `product`, we still generate full volume.
+        # Optimization: We only need points where max(abs(steps)) == radius
+        # But `product` generates all.
+        # For small dimensions (d=1,2,3), full volume generation is okay.
+        # For d=6, R=5, volume is 15k points. Acceptable.
+
+        # Dense Optimization
+        if self.use_dense:
+            return self._check_box_dense(center, active_idxs, radius, direction, condition)
+        else:
+            return self._check_box_sparse(center, active_idxs, radius, direction, condition)
+
+    def _check_box_dense(self, center, active_idxs, radius, direction, condition):
+        # Construct slices
+        slices = []
+        for i in range(len(center)):
+            c = center[i]
+            if i in active_idxs:
+                if direction == 'inc':
+                    start = c
+                    stop = c + radius + 1
+                else:
+                    start = c - radius
+                    stop = c + 1
+            else:
+                start = c
+                stop = c + 1
+
+            # Check bounds
+            if start < 0 or stop > self.dims[i]:
+                # Out of bounds -> Fail
+                return False
+            slices.append(slice(start, stop))
+
+        subset_profit = self.profit_grid[tuple(slices)]
+
+        # Flatten
+        vals = subset_profit.ravel()
+
+        # Center exclusion logic from original: "Excludes origin (all zeros means we are at center)"
+        # But we pass `radius` incrementally.
+        # If we check the FULL box at radius R, we include everything.
+        # To match "check_square_region", we must exclude center for 'avg'?
+        # Original: "avg_profit = np.mean([p['Profit'] for p in points_in_bubble])"
+        # points_in_bubble excluded center.
+
+        # Mask center
+        # Center in the slice is relative.
+        # If dec: center is at index -1 (last). If inc: index 0.
+
+        # Mask NaNs (missing points)
+        # If any NaN -> square broken -> False
+        if np.isnan(vals).any():
+            return False
+
+        # Exclude center for calculation
+        # Center in flattened array?
+        # It's easier to keep center and adjust calculation or just iterate.
+        # If condition is 'loss', ALL must be >= 0. Center must also be >= 0 (since it's in coord_map).
+        # So for 'loss', we can check min >= 0.
+
+        if condition == 'loss':
+            if np.min(vals) < 0: return False
+            return True
+
+        if condition == 'result':
+            # Check result grid
+            res_subset = self.result_grid[tuple(slices)]
+            if np.min(res_subset) < 25: return False
+            return True
+
+        if condition == 'avg':
+            # Mean > 0. Exclude center.
+            # Calculate sum and count
+            total = np.sum(vals)
+            count = vals.size
+
+            # Subtract center
+            center_profit = self.profit_grid[center]
+
+            # If box size is 1 (only center), then list is empty -> return True
+            if count <= 1: return True
+
+            mean = (total - center_profit) / (count - 1)
+            if mean <= 0: return False
+            return True
+
+        return True
+
+    def _check_box_sparse(self, center, active_idxs, radius, direction, condition):
+        # Fallback to iteration
+        # This checks the FULL BOX (Volume), not shell.
+        # Because we need to validate "Missing point implies square is broken" for the WHOLE box.
+        # Even if R-1 was valid, we re-validate R.
+
+        ranges = []
+        for i in range(len(center)):
+            if i in active_idxs:
+                if direction == 'inc':
+                    ranges.append(range(0, radius + 1))
+                else:
+                    ranges.append(range(-radius, 1))
+            else:
+                ranges.append(range(0, 1))
+
+        profits = []
+        results = []
+
+        for steps in product(*ranges):
+            if all(s == 0 for s in steps): continue
+
+            test_coord = list(center)
+            for i, step in enumerate(steps):
+                test_coord[i] += step
+            t = tuple(test_coord)
+
+            if t not in self.map: return False
+            idx = self.map[t]
+            profits.append(self.profit_values[idx])
+            if condition == 'result':
+                results.append(self.result_values[idx])
+
+        if not profits: return True
+
+        if condition == 'loss':
+            for p in profits:
+                if p < 0: return False
+        elif condition == 'avg':
+            if np.mean(profits) <= 0: return False
+        elif condition == 'result':
+            for r in results:
+                if r < 25: return False
+
+        return True
+
+    def measure_max_box(self, center):
+        # Greedy expansion of inc and dec
+        inc = 0
+        dec = 0
+
+        while True:
+            can_inc = self._check_full_box(center, inc + 1, dec)
+            can_dec = self._check_full_box(center, inc, dec + 1)
+
+            if can_inc and can_dec:
+                inc += 1
+                dec += 1
+            elif can_inc:
+                inc += 1
+            elif can_dec:
+                dec += 1
+            else:
+                break
+        return inc, dec
+
+    def _check_full_box(self, center, inc, dec):
+        # Box from -dec to +inc in ALL varying dims
+        # ranges = [range(c - dec, c + inc + 1) for c in center_coord]
+
+        if self.use_dense:
+            slices = []
+            for i, c in enumerate(center):
+                start = c - dec
+                stop = c + inc + 1
+                if start < 0 or stop > self.dims[i]: return False
+                slices.append(slice(start, stop))
+
+            subset = self.profit_grid[tuple(slices)]
+            if np.isnan(subset).any(): return False
+            if np.min(subset) <= 0: return False # Original logic: <= 0
+            return True
+        else:
+            # Sparse
+            ranges = []
+            for c in center:
+                ranges.append(range(c - dec, c + inc + 1))
+
+            for coords in product(*ranges):
+                if coords not in self.map: return False
+                idx = self.map[coords]
+                if self.profit_values[idx] <= 0: return False
+            return True
+
+    def get_box_stats(self, center, inc, dec):
+        if self.use_dense:
+            slices = []
+            for i, c in enumerate(center):
+                slices.append(slice(c - dec, c + inc + 1))
+            subset = self.profit_grid[tuple(slices)]
+            # Filter NaNs if any (shouldn't be if measured correctly)
+            valid = subset[~np.isnan(subset)]
+            if valid.size == 0: return None, None
+            return np.min(valid), np.max(valid)
+        else:
+            ranges = [range(c - dec, c + inc + 1) for c in center]
+            profits = []
+            for coords in product(*ranges):
+                if coords in self.map:
+                    idx = self.map[coords]
+                    profits.append(self.profit_values[idx])
+            if not profits: return None, None
+            return min(profits), max(profits)
+
+    def calculate_1d_robustness(self, center):
+        robustness = {}
+        for i, col in enumerate(self.varying_cols):
+            base_coord = list(center)
+
+            # Inc
+            inc = 0
+            while True:
+                test_coord = list(base_coord)
+                test_coord[i] += (inc + 1)
+                t = tuple(test_coord)
+                val = self.get_value(t, 'Profit')
+                if val is not None and not np.isnan(val) and val > 0:
+                    inc += 1
+                else:
+                    break
+
+            # Dec
+            dec = 0
+            while True:
+                test_coord = list(base_coord)
+                test_coord[i] -= (dec + 1)
+                t = tuple(test_coord)
+                val = self.get_value(t, 'Profit')
+                if val is not None and not np.isnan(val) and val > 0:
+                    dec += 1
+                else:
+                    break
+
+            robustness[col] = {'inc': inc, 'dec': dec}
+        return robustness
+
 
 def process_file_data(file_data, global_param_values, results_table):
     file_path = file_data['path']
@@ -351,7 +614,7 @@ def process_file_data(file_data, global_param_values, results_table):
         print("No variable columns found.")
         return
 
-    # Determine step sizes and identify varying columns (local check)
+    # Determine step sizes
     step_sizes = {}
     varying_cols = []
 
@@ -372,141 +635,126 @@ def process_file_data(file_data, global_param_values, results_table):
         step_sizes[col] = step_val
         varying_cols.append(col)
 
+    # Init Grid Handler
+    grid = GridHandler(df, varying_cols, step_sizes)
+
     # 1. Calculation Logic: Find Best Candidate First
     best_candidate = None
-    coord_map = {} # Defined here to be available for plotting later if needed
 
-    if not varying_cols:
-        best_idx = df['Result'].idxmax()
-        row = df.loc[best_idx]
-        best_candidate = {
-            'file': file_path,
-            'result': row['Result'],
-            'profit': row['Profit'],
-            'params': row[var_cols].to_dict(),
-            'step_sizes': step_sizes,
-            'radius_inc': "N/A",
-            'radius_dec': "N/A",
-            'min_neigh_profit': None,
-            'max_neigh_profit': None,
-            'robustness_1d': {},
-            'multidim_robustness': {},
-            'coord_map': {},
-            'center_coord': (),
-            'varying_cols': varying_cols
-        }
-    else:
-        # Normalize coordinates
-        min_vals = {col: df[col].min() for col in varying_cols}
+    # Sort candidates by Result DESC
+    # We can get this from grid arrays or df
+    # Using df is fine as it's just sorting
+    sorted_df = df.sort_values('Result', ascending=False)
 
-        for idx, row in df.iterrows():
+    # We need coordinates for sorted candidates
+    # grid.coords matches df order.
+    # Let's map index to coord
+    # Or just re-calculate coord for candidate row? Fast enough.
+
+    target_radius = (REQUIRED_GRID_SIDE - 1) // 2
+
+    # Primary Search
+    for idx, row in sorted_df.iterrows():
+        # Get coord
+        # We can look up in grid.coords if we map index
+        # Or recompute
+        coords = []
+        for col in varying_cols:
+            mn = grid.min_vals[col]
+            st = step_sizes[col]
+            c = int(round((row[col] - mn) / st))
+            coords.append(c)
+        coord = tuple(coords)
+
+        inc, dec = grid.measure_max_box(coord)
+
+        if min(inc, dec) >= target_radius:
+            min_p, max_p = grid.get_box_stats(coord, inc, dec)
+            robust_1d = grid.calculate_1d_robustness(coord)
+
+            best_candidate = {
+                'file': file_path,
+                'result': row['Result'],
+                'profit': row['Profit'],
+                'params': row[var_cols].to_dict(),
+                'step_sizes': step_sizes,
+                'radius_inc': inc,
+                'radius_dec': dec,
+                'min_neigh_profit': min_p,
+                'max_neigh_profit': max_p,
+                'robustness_1d': robust_1d,
+                'varying_cols': varying_cols
+            }
+            break
+
+    # Fallback Search
+    if not best_candidate:
+        print("  No candidate met target radius. Searching for max box...")
+        max_found_min_dim = -1
+        best_fallback = None
+
+        for idx, row in sorted_df.iterrows():
             coords = []
             for col in varying_cols:
-                val = row[col]
-                mn = min_vals[col]
+                mn = grid.min_vals[col]
                 st = step_sizes[col]
-                c = int(round((val - mn) / st))
+                c = int(round((row[col] - mn) / st))
                 coords.append(c)
+            coord = tuple(coords)
 
-            coord_tuple = tuple(coords)
-            coord_map[coord_tuple] = {
-                'Profit': row['Profit'],
-                'Result': row['Result'],
-                'Index': idx,
-                'Row': row
-            }
+            inc, dec = grid.measure_max_box(coord)
+            min_dim = min(inc, dec)
 
-        sorted_candidates = sorted(coord_map.items(), key=lambda x: x[1]['Result'], reverse=True)
-        target_radius = (REQUIRED_GRID_SIDE - 1) // 2
+            if min_dim > max_found_min_dim:
+                max_found_min_dim = min_dim
+                min_p, max_p = grid.get_box_stats(coord, inc, dec)
+                robust_1d = grid.calculate_1d_robustness(coord)
 
-        # Primary Search
-        for coord, data in sorted_candidates:
-            # We want min(inc, dec) >= target_radius
-            inc, dec = measure_max_box(coord, varying_cols, coord_map)
-
-            if min(inc, dec) >= target_radius:
-                min_p, max_p = get_box_stats(coord, inc, dec, coord_map)
-                robust_1d = calculate_1d_robustness(coord, varying_cols, coord_map)
-
-                best_candidate = {
+                best_fallback = {
                     'file': file_path,
-                    'result': data['Result'],
-                    'profit': data['Profit'],
-                    'params': data['Row'][var_cols].to_dict(),
+                    'result': row['Result'],
+                    'profit': row['Profit'],
+                    'params': row[var_cols].to_dict(),
                     'step_sizes': step_sizes,
                     'radius_inc': inc,
                     'radius_dec': dec,
                     'min_neigh_profit': min_p,
                     'max_neigh_profit': max_p,
                     'robustness_1d': robust_1d,
-                    # multidim_robustness calculated globally below
-                    'coord_map': coord_map,
-                    'center_coord': coord,
                     'varying_cols': varying_cols
                 }
-                break
+            elif min_dim == max_found_min_dim and best_fallback is None:
+                min_p, max_p = grid.get_box_stats(coord, inc, dec)
+                robust_1d = grid.calculate_1d_robustness(coord)
 
-        # Fallback Search
-        if not best_candidate:
-            print("  No candidate met target radius. Searching for max box...")
-            max_found_min_dim = -1
-            best_fallback = None
-
-            for coord, data in sorted_candidates:
-                inc, dec = measure_max_box(coord, varying_cols, coord_map)
-                min_dim = min(inc, dec)
-
-                if min_dim > max_found_min_dim:
-                    max_found_min_dim = min_dim
-                    min_p, max_p = get_box_stats(coord, inc, dec, coord_map)
-                    robust_1d = calculate_1d_robustness(coord, varying_cols, coord_map)
-
-                    best_fallback = {
-                        'file': file_path,
-                        'result': data['Result'],
-                        'profit': data['Profit'],
-                        'params': data['Row'][var_cols].to_dict(),
-                        'step_sizes': step_sizes,
-                        'radius_inc': inc,
-                        'radius_dec': dec,
-                        'min_neigh_profit': min_p,
-                        'max_neigh_profit': max_p,
-                        'robustness_1d': robust_1d,
-                        'coord_map': coord_map,
-                        'center_coord': coord,
-                        'varying_cols': varying_cols
-                    }
-                elif min_dim == max_found_min_dim and best_fallback is None:
-                     # Keep first one found (highest result)
-                    min_p, max_p = get_box_stats(coord, inc, dec, coord_map)
-                    robust_1d = calculate_1d_robustness(coord, varying_cols, coord_map)
-
-                    best_fallback = {
-                        'file': file_path,
-                        'result': data['Result'],
-                        'profit': data['Profit'],
-                        'params': data['Row'][var_cols].to_dict(),
-                        'step_sizes': step_sizes,
-                        'radius_inc': inc,
-                        'radius_dec': dec,
-                        'min_neigh_profit': min_p,
-                        'max_neigh_profit': max_p,
-                        'robustness_1d': robust_1d,
-                        'coord_map': coord_map,
-                        'center_coord': coord,
-                        'varying_cols': varying_cols
-                    }
-            best_candidate = best_fallback
+                best_fallback = {
+                    'file': file_path,
+                    'result': row['Result'],
+                    'profit': row['Profit'],
+                    'params': row[var_cols].to_dict(),
+                    'step_sizes': step_sizes,
+                    'radius_inc': inc,
+                    'radius_dec': dec,
+                    'min_neigh_profit': min_p,
+                    'max_neigh_profit': max_p,
+                    'robustness_1d': robust_1d,
+                    'varying_cols': varying_cols
+                }
+        best_candidate = best_fallback
 
     if not best_candidate:
         print("  No suitable data found.")
         return
 
-    # Calculate Global Robustness Stats (New Logic)
+    # Calculate Global Robustness Stats
     print("  Calculating Multi-Dim Robustness Stats...")
-    best_candidate['multidim_robustness'] = calculate_robustness_stats(varying_cols, coord_map)
+    # Get positive vectors (>25)
+    positive_indices = np.where(grid.result_values > 25)[0]
+    positive_vectors = [tuple(grid.coords[i]) for i in positive_indices]
 
-    # 2. Plotting: Heatmaps (Using Global Ranges)
+    best_candidate['multidim_robustness'] = calculate_robustness_stats(varying_cols, grid, positive_vectors)
+
+    # 2. Plotting (Optimization: Reuse DF, avoid excessive copying)
     heatmaps_dict = {}
     result_heatmaps_dict = {}
 
@@ -514,278 +762,121 @@ def process_file_data(file_data, global_param_values, results_table):
         pairs = list(combinations(varying_cols, 2))
 
         for col1, col2 in pairs:
-            # --- PROFIT HEATMAP ---
-            # Create a dedicated figure for each heatmap
-            fig, ax = plt.subplots(figsize=(5, 4))
-
             # Filter DF: other cols fixed to best params
+            # Vectorized mask
             mask = np.ones(len(df), dtype=bool)
             for other_col in varying_cols:
                 if other_col in [col1, col2]: continue
                 target_val = best_candidate['params'][other_col]
-                mask = mask & (np.isclose(df[other_col], target_val))
+                # Float comparison tolerance
+                mask = mask & (np.abs(df[other_col] - target_val) < 1e-9)
 
             slice_df = df[mask]
 
             if not slice_df.empty:
-                try:
-                    # Global Axis Ranges
-                    x_vals_global = global_param_values.get(col1, sorted(df[col1].unique()))
-                    y_vals_global = global_param_values.get(col2, sorted(df[col2].unique()))
-
-                    # Create Pivot Table
-                    pivot = slice_df.pivot_table(index=col2, columns=col1, values='Profit', aggfunc='mean')
-
-                    # REINDEX to Global Range
-                    pivot = pivot.reindex(index=y_vals_global, columns=x_vals_global)
-
-                    # Determine norm for Profit (center=0)
-                    data_min = np.nanmin(pivot.values)
-                    data_max = np.nanmax(pivot.values)
-                    center = 0
-
-                    # Ensure vmin < center < vmax
-                    vmin = min(data_min, center - 1e-9)
-                    vmax = max(data_max, center + 1e-9)
-
-                    norm = TwoSlopeNorm(vmin=vmin, vcenter=center, vmax=vmax)
-
-                    # Plot Heatmap
-                    im = ax.imshow(pivot.values, cmap='RdYlGn', origin='lower', aspect='auto', norm=norm)
-
-                    # Set ticks and labels
-                    ax.set_xticks(np.arange(len(x_vals_global)))
-                    ax.set_yticks(np.arange(len(y_vals_global)))
-                    ax.set_xticklabels([f"{v:g}" for v in x_vals_global], rotation=45, ha='right')
-                    ax.set_yticklabels([f"{v:g}" for v in y_vals_global])
-
-                    ax.set_xlabel(col1)
-                    ax.set_ylabel(col2)
-                    ax.set_title(f"Profit Heatmap: {col1} vs {col2}")
-
-                    # Add colorbar
-                    plt.colorbar(im, ax=ax, label='Profit')
-
-                    # Highlight Best Point
-                    best_x = best_candidate['params'][col1]
-                    best_y = best_candidate['params'][col2]
-
-                    try:
-                        # Find indices in the GLOBAL list
-                        x_idx = x_vals_global.index(best_x) if best_x in x_vals_global else -1
-                        y_idx = y_vals_global.index(best_y) if best_y in y_vals_global else -1
-
-                        if x_idx != -1 and y_idx != -1:
-                            ax.plot(x_idx, y_idx, marker='*', color='blue', markersize=10, markeredgecolor='white')
-                    except ValueError:
-                        pass
-
-                except Exception as e:
-                    ax.text(0.5, 0.5, f"Error: {str(e)}", ha='center', va='center')
-            else:
-                ax.text(0.5, 0.5, "No Data for Slice", ha='center', va='center')
-
-            plt.tight_layout()
-            heatmaps_dict[(col1, col2)] = plot_to_base64(fig)
-            plt.close(fig)
-
-            # --- RESULT HEATMAP ---
-            fig, ax = plt.subplots(figsize=(5, 4))
-
-            # (We can reuse slice_df from above as the filter logic is identical)
-
-            if not slice_df.empty:
-                try:
-                    # Global Axis Ranges (Same as above)
-                    x_vals_global = global_param_values.get(col1, sorted(df[col1].unique()))
-                    y_vals_global = global_param_values.get(col2, sorted(df[col2].unique()))
-
-                    # Create Pivot Table for RESULT
-                    pivot = slice_df.pivot_table(index=col2, columns=col1, values='Result', aggfunc='mean')
-
-                    # REINDEX to Global Range
-                    pivot = pivot.reindex(index=y_vals_global, columns=x_vals_global)
-
-                    # Determine norm for Result (center=25)
-                    data_min = np.nanmin(pivot.values)
-                    data_max = np.nanmax(pivot.values)
-                    center = 25
-
-                    # Ensure vmin < center < vmax
-                    vmin = min(data_min, center - 1e-9)
-                    vmax = max(data_max, center + 1e-9)
-
-                    norm = TwoSlopeNorm(vmin=vmin, vcenter=center, vmax=vmax)
-
-                    # Plot Heatmap
-                    im = ax.imshow(pivot.values, cmap='RdYlGn', origin='lower', aspect='auto', norm=norm)
-
-                    # Set ticks and labels
-                    ax.set_xticks(np.arange(len(x_vals_global)))
-                    ax.set_yticks(np.arange(len(y_vals_global)))
-                    ax.set_xticklabels([f"{v:g}" for v in x_vals_global], rotation=45, ha='right')
-                    ax.set_yticklabels([f"{v:g}" for v in y_vals_global])
-
-                    ax.set_xlabel(col1)
-                    ax.set_ylabel(col2)
-                    ax.set_title(f"Result Heatmap: {col1} vs {col2}")
-
-                    # Add colorbar
-                    plt.colorbar(im, ax=ax, label='Result')
-
-                    # Highlight Best Point (Same as above)
-                    best_x = best_candidate['params'][col1]
-                    best_y = best_candidate['params'][col2]
-
-                    try:
-                        x_idx = x_vals_global.index(best_x) if best_x in x_vals_global else -1
-                        y_idx = y_vals_global.index(best_y) if best_y in y_vals_global else -1
-
-                        if x_idx != -1 and y_idx != -1:
-                            ax.plot(x_idx, y_idx, marker='*', color='blue', markersize=10, markeredgecolor='white')
-                    except ValueError:
-                        pass
-
-                except Exception as e:
-                    ax.text(0.5, 0.5, f"Error: {str(e)}", ha='center', va='center')
-            else:
-                ax.text(0.5, 0.5, "No Data for Slice", ha='center', va='center')
-
-            plt.tight_layout()
-            result_heatmaps_dict[(col1, col2)] = plot_to_base64(fig)
-            plt.close(fig)
-
+                # Reuse code for heatmap generation
+                generate_heatmap(slice_df, col1, col2, 'Profit', global_param_values, best_candidate, heatmaps_dict)
+                generate_heatmap(slice_df, col1, col2, 'Result', global_param_values, best_candidate, result_heatmaps_dict)
 
     best_candidate['heatmaps_dict'] = heatmaps_dict
     best_candidate['result_heatmaps_dict'] = result_heatmaps_dict
 
-    # Violin Plot (Individual Plots per Variable)
+    # Violin Plots
     violin_plots_dict = {}
     result_violin_plots_dict = {}
 
     if varying_cols:
         for col in varying_cols:
-            # --- PROFIT VIOLIN ---
-            fig, ax = plt.subplots(figsize=(5, 4))
-            try:
-                global_vals = global_param_values.get(col, sorted(df[col].unique()))
-                data_to_plot = []
-                for val in global_vals:
-                    subset = df[df[col] == val]['Profit'].values
-                    data_to_plot.append(subset if len(subset) > 0 else [])
-
-                valid_data = []
-                valid_positions = []
-                for idx, d in enumerate(data_to_plot):
-                    if len(d) > 0:
-                        valid_data.append(d)
-                        valid_positions.append(idx + 1)
-
-                if valid_data:
-                    parts = ax.violinplot(valid_data, positions=valid_positions, showmeans=False, showmedians=True)
-                    for pc in parts['bodies']:
-                        pc.set_facecolor('indianred')
-                        pc.set_edgecolor('black')
-                        pc.set_alpha(0.7)
-
-                ax.set_xticks(range(1, len(global_vals) + 1))
-                ax.set_xticklabels([str(v) for v in global_vals], rotation=45, ha='right')
-                ax.set_xlim(0.5, len(global_vals) + 0.5)
-                ax.set_title(f"Profit Dist. by {col}")
-                ax.set_xlabel(col)
-                ax.set_ylabel("Profit")
-                ax.grid(True, axis='y', linestyle=':', alpha=0.6)
-            except Exception as e:
-                ax.text(0.5, 0.5, f"Error: {str(e)}", ha='center', va='center')
-            plt.tight_layout()
-            violin_plots_dict[col] = plot_to_base64(fig)
-            plt.close(fig)
-
-            # --- RESULT VIOLIN ---
-            fig, ax = plt.subplots(figsize=(5, 4))
-            try:
-                global_vals = global_param_values.get(col, sorted(df[col].unique()))
-                data_to_plot = []
-                for val in global_vals:
-                    subset = df[df[col] == val]['Result'].values # <--- Result
-                    data_to_plot.append(subset if len(subset) > 0 else [])
-
-                valid_data = []
-                valid_positions = []
-                for idx, d in enumerate(data_to_plot):
-                    if len(d) > 0:
-                        valid_data.append(d)
-                        valid_positions.append(idx + 1)
-
-                if valid_data:
-                    parts = ax.violinplot(valid_data, positions=valid_positions, showmeans=False, showmedians=True)
-                    for pc in parts['bodies']:
-                        pc.set_facecolor('cornflowerblue') # Change color for Results to distinguish?
-                        pc.set_edgecolor('black')
-                        pc.set_alpha(0.7)
-
-                ax.set_xticks(range(1, len(global_vals) + 1))
-                ax.set_xticklabels([str(v) for v in global_vals], rotation=45, ha='right')
-                ax.set_xlim(0.5, len(global_vals) + 0.5)
-                ax.set_title(f"Result Dist. by {col}")
-                ax.set_xlabel(col)
-                ax.set_ylabel("Result")
-                ax.grid(True, axis='y', linestyle=':', alpha=0.6)
-            except Exception as e:
-                ax.text(0.5, 0.5, f"Error: {str(e)}", ha='center', va='center')
-            plt.tight_layout()
-            result_violin_plots_dict[col] = plot_to_base64(fig)
-            plt.close(fig)
+            generate_violin(df, col, 'Profit', global_param_values, violin_plots_dict)
+            generate_violin(df, col, 'Result', global_param_values, result_violin_plots_dict)
 
     best_candidate['violin_plots_dict'] = violin_plots_dict
     best_candidate['result_violin_plots_dict'] = result_violin_plots_dict
 
-    # Remove large objects
-    if 'coord_map' in best_candidate: del best_candidate['coord_map']
-
     results_table.append(best_candidate)
 
-def check_box(center_coord, inc, dec, coord_map):
-    ranges = [range(c - dec, c + inc + 1) for c in center_coord]
-    for neighbor in product(*ranges):
-        if neighbor not in coord_map:
-            return False
-        if coord_map[neighbor]['Profit'] <= 0:
-            return False
-    return True
+def generate_heatmap(slice_df, col1, col2, value_col, global_params, best_candidate, output_dict):
+    fig, ax = plt.subplots(figsize=(5, 4))
+    try:
+        x_vals_global = global_params.get(col1, sorted(slice_df[col1].unique()))
+        y_vals_global = global_params.get(col2, sorted(slice_df[col2].unique()))
 
-def measure_max_box(center_coord, varying_cols, coord_map):
-    if center_coord not in coord_map or coord_map[center_coord]['Profit'] <= 0:
-        return 0, 0
+        pivot = slice_df.pivot_table(index=col2, columns=col1, values=value_col, aggfunc='mean')
+        pivot = pivot.reindex(index=y_vals_global, columns=x_vals_global)
 
-    inc = 0
-    dec = 0
+        data_min = np.nanmin(pivot.values)
+        data_max = np.nanmax(pivot.values)
+        center = 0 if value_col == 'Profit' else 25
 
-    # Greedily expand both
-    while True:
-        can_inc = check_box(center_coord, inc + 1, dec, coord_map)
-        can_dec = check_box(center_coord, inc, dec + 1, coord_map)
+        if np.isnan(data_min): data_min = 0
+        if np.isnan(data_max): data_max = 0
 
-        if can_inc and can_dec:
-            inc += 1
-            dec += 1
-        elif can_inc:
-            inc += 1
-        elif can_dec:
-            dec += 1
-        else:
-            break
+        vmin = min(data_min, center - 1e-9)
+        vmax = max(data_max, center + 1e-9)
 
-    return inc, dec
+        norm = TwoSlopeNorm(vmin=vmin, vcenter=center, vmax=vmax)
+        im = ax.imshow(pivot.values, cmap='RdYlGn', origin='lower', aspect='auto', norm=norm)
 
-def get_box_stats(center_coord, inc, dec, coord_map):
-    ranges = [range(c - dec, c + inc + 1) for c in center_coord]
-    profits = []
-    for neighbor in product(*ranges):
-        if neighbor in coord_map:
-            profits.append(coord_map[neighbor]['Profit'])
-    if not profits: return None, None
-    return min(profits), max(profits)
+        ax.set_xticks(np.arange(len(x_vals_global)))
+        ax.set_yticks(np.arange(len(y_vals_global)))
+        ax.set_xticklabels([f"{v:g}" for v in x_vals_global], rotation=45, ha='right')
+        ax.set_yticklabels([f"{v:g}" for v in y_vals_global])
+        ax.set_xlabel(col1)
+        ax.set_ylabel(col2)
+        ax.set_title(f"{value_col} Heatmap: {col1} vs {col2}")
+        plt.colorbar(im, ax=ax, label=value_col)
+
+        best_x = best_candidate['params'][col1]
+        best_y = best_candidate['params'][col2]
+
+        if best_x in x_vals_global and best_y in y_vals_global:
+            x_idx = x_vals_global.index(best_x)
+            y_idx = y_vals_global.index(best_y)
+            ax.plot(x_idx, y_idx, marker='*', color='blue', markersize=10, markeredgecolor='white')
+
+    except Exception as e:
+        ax.text(0.5, 0.5, f"Error: {str(e)}", ha='center', va='center')
+
+    plt.tight_layout()
+    output_dict[(col1, col2)] = plot_to_base64(fig)
+    plt.close(fig)
+
+def generate_violin(df, col, value_col, global_params, output_dict):
+    fig, ax = plt.subplots(figsize=(5, 4))
+    try:
+        global_vals = global_params.get(col, sorted(df[col].unique()))
+        data_to_plot = []
+        for val in global_vals:
+            subset = df[df[col] == val][value_col].values
+            data_to_plot.append(subset if len(subset) > 0 else [])
+
+        valid_data = []
+        valid_positions = []
+        for idx, d in enumerate(data_to_plot):
+            if len(d) > 0:
+                valid_data.append(d)
+                valid_positions.append(idx + 1)
+
+        if valid_data:
+            parts = ax.violinplot(valid_data, positions=valid_positions, showmeans=False, showmedians=True)
+            color = 'indianred' if value_col == 'Profit' else 'cornflowerblue'
+            for pc in parts['bodies']:
+                pc.set_facecolor(color)
+                pc.set_edgecolor('black')
+                pc.set_alpha(0.7)
+
+        ax.set_xticks(range(1, len(global_vals) + 1))
+        ax.set_xticklabels([str(v) for v in global_vals], rotation=45, ha='right')
+        ax.set_xlim(0.5, len(global_vals) + 0.5)
+        ax.set_title(f"{value_col} Dist. by {col}")
+        ax.set_xlabel(col)
+        ax.set_ylabel(value_col)
+        ax.grid(True, axis='y', linestyle=':', alpha=0.6)
+    except Exception as e:
+        ax.text(0.5, 0.5, f"Error: {str(e)}", ha='center', va='center')
+    plt.tight_layout()
+    output_dict[col] = plot_to_base64(fig)
+    plt.close(fig)
 
 def export_to_html(results_table, global_param_values, filename="Optimization_Report.html"):
     if not results_table:
@@ -800,17 +891,14 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
     file_names = [os.path.basename(res['file']) for res in results_table]
     x_indices = range(len(file_names))
 
-    # Collect max dimensions across all files to define consistent lines
     max_dims = 0
     for res in results_table:
         if 'multidim_robustness' in res:
              max_dims = max(max_dims, max(res['multidim_robustness'].keys(), default=0))
 
     if max_dims > 0:
-        # Common plot settings
         def create_robustness_graph(metric_key, title):
             fig, ax = plt.subplots(figsize=(12, 8))
-
             for d in range(1, max_dims + 1):
                 y_values = []
                 for res in results_table:
@@ -818,7 +906,6 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
                     if 'multidim_robustness' in res and d in res['multidim_robustness']:
                         val = res['multidim_robustness'][d][metric_key]
                     y_values.append(val)
-
                 label = f"{d} Variable{'s' if d>1 else ''}"
                 ax.plot(x_indices, y_values, marker='o', label=label)
 
@@ -829,7 +916,9 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
             ax.legend()
             ax.grid(True, linestyle='--', alpha=0.6)
             plt.tight_layout()
-            return plot_to_base64(fig)
+            b64 = plot_to_base64(fig)
+            plt.close(fig)
+            return b64
 
         graph_loss_b64 = create_robustness_graph('loss', "Robustness Limit: No Loss (Max Sum Inc+Dec)")
         graph_avg_b64 = create_robustness_graph('avg', "Robustness Limit: Average Profit > 0 (Max Sum Inc+Dec)")
@@ -890,11 +979,7 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
 
         vars_parts = []
         for k, v in res['params'].items():
-            step = res['step_sizes'].get(k, 0)
-            if step > 0:
-                vars_parts.append(f"{k}={v}")
-            else:
-                vars_parts.append(f"{k}={v}")
+            vars_parts.append(f"{k}={v}")
         vars_str = "\\n".join(vars_parts)
 
         html_content += f"""
@@ -941,19 +1026,15 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
             <h2>Detailed Analysis: Profit</h2>
     """
 
-    # SECTION 3: Variable Distributions (Violin Plots - PROFIT)
-    # Group by Variable
     all_vars = sorted(list(global_param_values.keys()))
     html_content += "<h3>Distribution Analysis (Profit Violin Plots)</h3>"
 
     for var in all_vars:
         html_content += f"<h4>Variable: {var}</h4>"
         html_content += '<div class="plot-container">'
-
         has_plots = False
         for res in results_table:
             file_name = os.path.basename(res['file'])
-            # Check if this file has a plot for this variable
             if 'violin_plots_dict' in res and var in res['violin_plots_dict']:
                 img_b64 = res['violin_plots_dict'][var]
                 html_content += f"""
@@ -963,30 +1044,22 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
                     </div>
                 """
                 has_plots = True
-
         if not has_plots:
             html_content += "<p>No distribution data for this variable.</p>"
+        html_content += '</div>'
 
-        html_content += '</div>' # End plot-container
-
-    # SECTION 4: 2D Heatmaps (PROFIT)
-    # Collect all pairs found across all files
     all_pairs = set()
     for res in results_table:
         if 'heatmaps_dict' in res:
             all_pairs.update(res['heatmaps_dict'].keys())
-
-    # Sort pairs for consistent order
     sorted_pairs = sorted(list(all_pairs))
 
     if sorted_pairs:
         html_content += "<h3>Interaction Analysis (Profit 2D Heatmaps)</h3>"
-
         for pair in sorted_pairs:
             var1, var2 = pair
             html_content += f"<h4>Interaction: {var1} vs {var2}</h4>"
             html_content += '<div class="plot-container">'
-
             has_plots = False
             for res in results_table:
                 file_name = os.path.basename(res['file'])
@@ -999,10 +1072,8 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
                         </div>
                     """
                     has_plots = True
-
             if not has_plots:
                 html_content += "<p>No interaction data for this pair.</p>"
-
             html_content += '</div>'
 
     html_content += """
@@ -1012,13 +1083,10 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
             <h2>Detailed Analysis: Results</h2>
     """
 
-    # SECTION 5: Variable Distributions (Violin Plots - RESULTS)
     html_content += "<h3>Distribution Analysis (Result Violin Plots)</h3>"
-
     for var in all_vars:
         html_content += f"<h4>Variable: {var}</h4>"
         html_content += '<div class="plot-container">'
-
         has_plots = False
         for res in results_table:
             file_name = os.path.basename(res['file'])
@@ -1031,22 +1099,16 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
                     </div>
                 """
                 has_plots = True
-
         if not has_plots:
             html_content += "<p>No distribution data for this variable.</p>"
-
         html_content += '</div>'
 
-    # SECTION 6: 2D Heatmaps (RESULTS)
-    # We can reuse sorted_pairs as the pairs are the same (based on variables)
     if sorted_pairs:
         html_content += "<h3>Interaction Analysis (Result 2D Heatmaps)</h3>"
-
         for pair in sorted_pairs:
             var1, var2 = pair
             html_content += f"<h4>Interaction: {var1} vs {var2}</h4>"
             html_content += '<div class="plot-container">'
-
             has_plots = False
             for res in results_table:
                 file_name = os.path.basename(res['file'])
@@ -1059,10 +1121,8 @@ def export_to_html(results_table, global_param_values, filename="Optimization_Re
                         </div>
                     """
                     has_plots = True
-
             if not has_plots:
                 html_content += "<p>No interaction data for this pair.</p>"
-
             html_content += '</div>'
 
     html_content += """
