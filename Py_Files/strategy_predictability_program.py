@@ -16,6 +16,7 @@ import multiprocessing
 from numpy.lib.stride_tricks import sliding_window_view
 from itertools import product
 from datetime import datetime, timedelta
+from collections import deque
 
 # Suppress Warnings and Logging
 warnings.filterwarnings("ignore")
@@ -490,9 +491,14 @@ def worker_predict_week(task_args):
     Worker function to process a single week/file.
     Executed in a separate process.
     """
+    start_time = time.time()
     try:
         # Unpack arguments
         file_name = task_args['file_name']
+
+        # Verbose Start
+        print(f"  [Worker {os.getpid()}] {file_name}: Processing started...", flush=True)
+
         history_best = task_args['history_best']
         slice_matrix = task_args['slice_matrix'] # Numpy array
 
@@ -529,7 +535,7 @@ def worker_predict_week(task_args):
         # 2. NeuralForecast
         if HAS_NF and 'NeuralForecastForecaster' in forecaster_classes:
             try:
-                # print(f"  [Worker] {file_name}: Starting NeuralForecast...", flush=True) # Verbose
+                print(f"  [Worker {os.getpid()}] {file_name}: Starting NeuralForecast...", flush=True) # Verbose
 
                 # Reconstruct DF slice for NF
                 nf_matrix = task_args.get('nf_matrix')
@@ -559,7 +565,7 @@ def worker_predict_week(task_args):
         # 3. Tsai
         if HAS_TSAI and 'TsaiForecaster' in forecaster_classes:
             try:
-                # print(f"  [Worker] {file_name}: Starting Tsai...", flush=True) # Verbose
+                print(f"  [Worker {os.getpid()}] {file_name}: Starting Tsai...", flush=True) # Verbose
 
                 TsaiForecaster = forecaster_classes['TsaiForecaster']
                 tsai_model = TsaiForecaster(global_param_config, var_cols, epochs=epochs['tsai'])
@@ -570,10 +576,11 @@ def worker_predict_week(task_args):
             except Exception as e:
                 pass
 
-        return {'file_name': file_name, 'results': results}
+        duration = time.time() - start_time
+        return {'file_name': file_name, 'results': results, 'duration': duration}
 
     except Exception as e:
-        return {'file_name': task_args.get('file_name', 'unknown'), 'results': {}, 'error': str(e)}
+        return {'file_name': task_args.get('file_name', 'unknown'), 'results': {}, 'error': str(e), 'duration': time.time() - start_time}
 
 # --- Main Execution ---
 
@@ -791,6 +798,7 @@ def main():
     print("Preparing Tasks for Parallel Execution...")
 
     start_time = time.time()
+    recent_completion_times = deque(maxlen=10) # Sliding window for ETA
     files_processed = 0
     total_files_to_process = len(files_data) - start_index
 
@@ -854,6 +862,7 @@ def main():
                         print(f"  [Error] {file_name}: {res['error']}")
                         continue
 
+                    duration = res.get('duration', 0)
                     preds_map = res['results']
 
                     # --- Verification (Main Process) ---
@@ -928,15 +937,26 @@ def main():
                     print(f"Error processing result for {file_name}: {e}")
                     traceback.print_exc()
 
-                # Progress
+                # Progress & ETA Calculation
                 files_processed += 1
-                elapsed = time.time() - start_time
-                avg = elapsed / files_processed
+                now = time.time()
+                recent_completion_times.append(now)
+
+                if len(recent_completion_times) > 1:
+                    # Calculate speed based on sliding window (ignoring initial warmup if deque is full/partial)
+                    # Time delta between oldest and newest in the window
+                    window_duration = recent_completion_times[-1] - recent_completion_times[0]
+                    # Number of intervals is len - 1
+                    avg_sec_per_file = window_duration / (len(recent_completion_times) - 1)
+                else:
+                    # Fallback to global average if not enough data
+                    avg_sec_per_file = (now - start_time) / files_processed
+
                 rem = total_files_to_process - files_processed
-                eta = avg * rem
+                eta_seconds = avg_sec_per_file * rem
 
                 status_str = " | ".join(status_msg)
-                print(f"  > [{files_processed}/{total_files_to_process}] {file_name} | {status_str} | ETA: {eta/60:.2f} min", flush=True)
+                print(f"  > [{files_processed}/{total_files_to_process}] {file_name} | {status_str} | Dur: {duration:.1f}s | ETA: {eta_seconds/60:.2f} min", flush=True)
 
     except KeyboardInterrupt:
         print("\nProcess cancelled by user. Outputting available results...")
@@ -949,7 +969,7 @@ def generate_html_report(results, output_dir):
 
     html_parts = []
 
-    html_parts.append(f"""
+    html_parts.append("""
     <!DOCTYPE html>
     <html>
     <head>
@@ -966,6 +986,9 @@ def generate_html_report(results, output_dir):
             .metric { font-size: 1.1em; font-weight: bold; margin: 10px 0; }
         </style>
     </head>
+    """)
+
+    html_parts.append(f"""
     <body>
         <h1>Strategy Predictability Report</h1>
         <div class="section">
