@@ -29,32 +29,16 @@ RESULT_CUTOFF = 25
 VECTOR_INPUT = 10  # Lookback window size (Model Lags)
 TRAINING_WINDOW = 30 # Size of the sliding window used for training (Must be > VECTOR_INPUT)
 
-# --- Library Imports ---
-print("Importing libraries...")
-try:
-    from darts import TimeSeries
-    from darts.models import RandomForest
-    HAS_DARTS = True
-except ImportError:
-    HAS_DARTS = False
-    print("Warning: Darts not found.")
+# --- Library Availability Flags (Lazy Check) ---
+# We check availability without importing to keep workers fast
+import importlib.util
 
-try:
-    from neuralforecast import NeuralForecast
-    from neuralforecast.models import NHITS, LSTM
-    import torch
-    torch.set_float32_matmul_precision('medium')
-    HAS_NF = True
-except ImportError:
-    HAS_NF = False
-    print("Warning: NeuralForecast not found.")
+def check_lib(name):
+    return importlib.util.find_spec(name) is not None
 
-try:
-    from tsai.all import *
-    HAS_TSAI = True
-except ImportError as e:
-    HAS_TSAI = False
-    print(f"Warning: tsai not found. Error: {e}")
+HAS_DARTS = check_lib("darts")
+HAS_NF = check_lib("neuralforecast")
+HAS_TSAI = check_lib("tsai")
 
 # --- Helper Functions ---
 
@@ -240,239 +224,204 @@ def lookup_stats(df, params, config):
     matched_params = {k: row[k] for k in params.keys() if k in row}
     return {'Result': float(row['Result']), 'Profit': float(row['Profit']), 'found': True, 'matched_params': matched_params}
 
-# --- Model Classes ---
+# --- Model Classes (Lazy Loading Wrapper) ---
 
-class DartsForecaster:
-    def __init__(self, global_config, var_cols):
-        self.config = global_config
-        self.var_cols = var_cols
-        if HAS_DARTS:
-            # Optimize: n_jobs=-1 to use all cores
-            self.model = RandomForest(lags=VECTOR_INPUT, n_estimators=50, random_state=42, n_jobs=-1)
-        else:
-            self.model = None
+def get_forecasters(flags):
+    """
+    Returns forecaster classes, importing libraries only when called.
+    Used inside worker process.
+    """
 
-    def predict(self, best_vectors_history):
-        # best_vectors_history is list of dicts: {'params': {...}, ...}
-        if not HAS_DARTS:
-            return None
+    classes = {}
 
-        # Filter out empty entries if any (or handle them)
-        valid_history = [bv for bv in best_vectors_history if bv['Result'] != 0 or bv['params']]
-
-        # We need at least VECTOR_INPUT + 1 data points to fit lags
-        if len(valid_history) < VECTOR_INPUT + 1:
-            return None
-
-        data_matrix = []
-        for bv in valid_history:
-            row_vec = []
-            for col in self.var_cols:
-                val = bv['params'].get(col, self.config[col]['min'])
-                cfg = self.config[col]
-                if cfg['step'] > 0:
-                    step_val = int(round((val - cfg['min']) / cfg['step']))
-                else:
-                    step_val = 0
-                row_vec.append(step_val)
-            data_matrix.append(row_vec)
-
-        data_np = np.array(data_matrix)
-        ts = TimeSeries.from_values(data_np)
-
-        self.model.fit(ts)
-        pred = self.model.predict(n=1)
-        pred_vals = pred.values()[0]
-
-        pred_params = {}
-        for idx, col in enumerate(self.var_cols):
-            cfg = self.config[col]
-            step_pred = int(round(pred_vals[idx]))
-            val_pred = cfg['min'] + step_pred * cfg['step']
-            pred_params[col] = val_pred
-
-        return pred_params
-
-class NeuralForecastForecaster:
-    def __init__(self, global_config, var_cols):
-        self.config = global_config
-        self.var_cols = var_cols
-        # Use NHITS - fast and effective
-        if HAS_NF:
-            # Check for GPU
-            accel = 'gpu' if torch.cuda.is_available() else 'cpu'
-            print(f"[NeuralForecast] Using accelerator: {accel}")
-            self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=100,
-                               enable_checkpointing=False, logger=False,
-                               accelerator=accel)
-        else:
-            self.model = None
-        self.nf = None
-
-    def predict(self, Y_df_global, window_start_idx, window_end_idx):
-        """
-        Takes the global long-format DataFrame and slices it for the current window.
-        window_start_idx / end_idx are integers referring to the file sequence index (0..N).
-        We assume 'ds' in Y_df_global corresponds to these indices (e.g. 2020-01-01 + i days).
-        """
-        if not HAS_NF or Y_df_global is None or Y_df_global.empty:
-            return None
-
-        # Calculate date range for the slice
-        # ds starts at 2020-01-01
-        start_date_base = datetime(2020, 1, 1)
-
-        # We need data from [window_start_idx, window_end_idx)
-        # The model needs history.
-
-        # Slicing via boolean mask is fast
-        # Note: We filter for ds >= start and ds < end
-
-        slice_start_date = start_date_base + timedelta(days=window_start_idx)
-        slice_end_date = start_date_base + timedelta(days=window_end_idx)
-
-        # Optimization: use searchsorted if sorted, but boolean mask is okay for millions of rows on modern RAM
-        mask = (Y_df_global['ds'] >= slice_start_date) & (Y_df_global['ds'] < slice_end_date)
-        Y_df_window = Y_df_global.loc[mask]
-
-        if Y_df_window.empty:
-            return None
-
-        # 2. Train and Predict
-        # We instantiate NF every time to avoid carrying over state from previous growing windows incorrectly
-        nf = NeuralForecast(models=[self.model], freq='D')
-        nf.fit(df=Y_df_window)
-
-        future_df = nf.predict()
-
-        # 3. Find Best
-        if future_df.empty:
-            return None
-
-        # future_df has columns [ds, NHITS]
-        # We want the row with max NHITS value
-        best_row = future_df.loc[future_df['NHITS'].idxmax()]
-
-        # Determine best_uid
-        # best_uid will be the index (int) or whatever was used as unique_id
-        if 'unique_id' in future_df.columns:
-            best_uid = future_df.loc[future_df['NHITS'].idxmax()]['unique_id']
-        else:
-            best_uid = future_df['NHITS'].idxmax()
-
-        # Return the identifier (index), let main process resolve it
-        return best_uid
-
-class TsaiForecaster:
-    def __init__(self, global_config, var_cols):
-        self.config = global_config
-        self.var_cols = var_cols
-
-    def predict(self, master_matrix, window_start_idx, window_end_idx):
-        """
-        master_matrix: (Num_Coords, Num_Files) dense array
-        """
-        if not HAS_TSAI:
-            return None
-
-        # Slice the matrix: O(1)
-        # X shape: (Samples, Time) -> (Num_Coords, Window_Size)
-        X_slice = master_matrix[:, window_start_idx:window_end_idx]
-
-        # X_slice shape: (N_Coords, Window_Len)
-        n_coords, win_len = X_slice.shape
-
-        if win_len < 2:
-            return None
-
-        # We need to forecast step T+1.
-        # Using InceptionTime or similar.
-        # Training data generation: Sliding window over the *current slice*?
-        # Or just use the slice as one sample?
-        # Usually we train on sub-windows within the history.
-
-        # Sliding Window Logic on the slice
-        w = min(VECTOR_INPUT, win_len - 1)
-        if w < 2:
-            return None
-
-        # Prepare X_train, y_train
-        # X_slice: (Samples, Time)
-        # We want to use all coords as independent samples.
-        # For each coord, we extract sub-windows.
-
-        # Fast strided windowing using sliding_window_view
-        # X_slice: (N_Coords, Win_Len)
-        # We want input of size w, target of size 1. Total window needed is w+1.
-
+    if flags['HAS_DARTS']:
         try:
-            # Check if we have enough length for w+1
-            if win_len < w + 1:
-                return None
+            from darts import TimeSeries
+            from darts.models import RandomForest
 
-            # Create sliding windows: (N_Coords, Num_Windows, w+1)
-            windows = sliding_window_view(X_slice, window_shape=w+1, axis=1)
+            class DartsForecaster:
+                def __init__(self, global_config, var_cols):
+                    self.config = global_config
+                    self.var_cols = var_cols
+                    # Optimize: n_jobs=-1 to use all cores
+                    self.model = RandomForest(lags=VECTOR_INPUT, n_estimators=50, random_state=42, n_jobs=-1)
 
-            # X_train: (N_Coords, Num_Windows, w)
-            X_train = windows[:, :, :-1]
-            # y_train: (N_Coords, Num_Windows)
-            y_train = windows[:, :, -1]
+                def predict(self, best_vectors_history):
+                    # Filter out empty entries if any (or handle them)
+                    valid_history = [bv for bv in best_vectors_history if bv['Result'] != 0 or bv['params']]
 
-            # Reshape to stack samples
-            # (N_Coords * Num_Windows, w)
-            X_train = X_train.reshape(-1, w)
-            y_train = y_train.flatten()
+                    # We need at least VECTOR_INPUT + 1 data points to fit lags
+                    if len(valid_history) < VECTOR_INPUT + 1:
+                        return None
 
+                    data_matrix = []
+                    for bv in valid_history:
+                        row_vec = []
+                        for col in self.var_cols:
+                            val = bv['params'].get(col, self.config[col]['min'])
+                            cfg = self.config[col]
+                            if cfg['step'] > 0:
+                                step_val = int(round((val - cfg['min']) / cfg['step']))
+                            else:
+                                step_val = 0
+                            row_vec.append(step_val)
+                        data_matrix.append(row_vec)
+
+                    data_np = np.array(data_matrix)
+                    ts = TimeSeries.from_values(data_np)
+
+                    self.model.fit(ts)
+                    pred = self.model.predict(n=1)
+                    pred_vals = pred.values()[0]
+
+                    pred_params = {}
+                    for idx, col in enumerate(self.var_cols):
+                        cfg = self.config[col]
+                        step_pred = int(round(pred_vals[idx]))
+                        val_pred = cfg['min'] + step_pred * cfg['step']
+                        pred_params[col] = val_pred
+
+                    return pred_params
+
+            classes['DartsForecaster'] = DartsForecaster
         except Exception as e:
-            print(f"Error in vectorized windowing: {e}")
-            return None
+            print(f"Lazy Import Error (Darts): {e}")
 
-        # Add channel dim: (Total_Samples, 1, w)
-        X_train = X_train[:, np.newaxis, :]
-
-        if len(X_train) == 0:
-            return None
-
-        # Model
-        model = InceptionTime(c_in=1, c_out=1)
-        splits = RandomSplitter()(range(len(X_train)))
-        tfms = [None, [TSRegression()]]
-        dsets = TSDatasets(X_train, y_train, tfms=tfms, splits=splits)
-
-        # High-performance DataLoaders
-        dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=4096, num_workers=8, pin_memory=True)
-
-        learn = ts_learner(dls, model, metrics=mae, verbose=False)
-        learn.fit_one_cycle(5, 1e-3) # Fast training
-
-        # Predict on latest window (the end of the slice)
-        # Shape (N_Coords, 1, w)
-        X_test = X_slice[:, -w:]
-        X_test = X_test[:, np.newaxis, :]
-
+    if flags['HAS_NF']:
         try:
-            learn.model.eval()
-
-            # Prepare tensor
+            from neuralforecast import NeuralForecast
+            from neuralforecast.models import NHITS
             import torch
-            input_tensor = torch.from_numpy(X_test).float()
+            torch.set_float32_matmul_precision('medium')
 
-            device = next(learn.model.parameters()).device
-            input_tensor = input_tensor.to(device)
+            class NeuralForecastForecaster:
+                def __init__(self, global_config, var_cols):
+                    self.config = global_config
+                    self.var_cols = var_cols
+                    # Use NHITS - fast and effective
+                    # Check for GPU
+                    accel = 'gpu' if torch.cuda.is_available() else 'cpu'
+                    # print(f"[NeuralForecast] Using accelerator: {accel}")
+                    self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=100,
+                                       enable_checkpointing=False, logger=False,
+                                       accelerator=accel)
 
-            with torch.no_grad():
-                preds = learn.model(input_tensor)
+                def predict(self, Y_df_global, window_start_idx, window_end_idx):
+                    if Y_df_global is None or Y_df_global.empty:
+                        return None
 
-            preds_np = preds.cpu().numpy().flatten()
+                    # Calculate date range for the slice
+                    # ds starts at 2020-01-01
+                    start_date_base = datetime(2020, 1, 1)
 
-            best_idx = np.argmax(preds_np)
+                    slice_start_date = start_date_base + timedelta(days=window_start_idx)
+                    slice_end_date = start_date_base + timedelta(days=window_end_idx)
 
-            # Return index, let main process resolve it
-            return int(best_idx)
+                    # Optimization: use searchsorted if sorted, but boolean mask is okay for millions of rows on modern RAM
+                    mask = (Y_df_global['ds'] >= slice_start_date) & (Y_df_global['ds'] < slice_end_date)
+                    Y_df_window = Y_df_global.loc[mask]
+
+                    if Y_df_window.empty:
+                        return None
+
+                    # 2. Train and Predict
+                    nf = NeuralForecast(models=[self.model], freq='D')
+                    nf.fit(df=Y_df_window)
+
+                    future_df = nf.predict()
+
+                    # 3. Find Best
+                    if future_df.empty:
+                        return None
+
+                    # future_df has columns [ds, NHITS]
+                    # Determine best_uid
+                    # best_uid will be the index (int) or whatever was used as unique_id
+                    if 'unique_id' in future_df.columns:
+                        best_uid = future_df.loc[future_df['NHITS'].idxmax()]['unique_id']
+                    else:
+                        best_uid = future_df['NHITS'].idxmax()
+
+                    # Return the identifier (index), let main process resolve it
+                    return best_uid
+
+            classes['NeuralForecastForecaster'] = NeuralForecastForecaster
         except Exception as e:
-            print(f"[DEBUG TSAI] Exception during prediction: {e}")
-            traceback.print_exc()
-            return None
+             print(f"Lazy Import Error (NF): {e}")
+
+    if flags['HAS_TSAI']:
+        try:
+            from tsai.all import InceptionTime, RandomSplitter, TSRegression, TSDatasets, TSDataLoaders, ts_learner, mae
+            import torch
+
+            class TsaiForecaster:
+                def __init__(self, global_config, var_cols):
+                    self.config = global_config
+                    self.var_cols = var_cols
+
+                def predict(self, master_matrix, window_start_idx, window_end_idx):
+                    # Slice the matrix: O(1)
+                    X_slice = master_matrix[:, window_start_idx:window_end_idx]
+                    n_coords, win_len = X_slice.shape
+
+                    if win_len < 2: return None
+
+                    # Sliding Window Logic on the slice
+                    w = min(VECTOR_INPUT, win_len - 1)
+                    if w < 2: return None
+
+                    # Fast strided windowing using sliding_window_view
+                    try:
+                        if win_len < w + 1: return None
+                        windows = sliding_window_view(X_slice, window_shape=w+1, axis=1)
+                        X_train = windows[:, :, :-1]
+                        y_train = windows[:, :, -1]
+                        X_train = X_train.reshape(-1, w)
+                        y_train = y_train.flatten()
+                    except Exception as e:
+                        print(f"Error in vectorized windowing: {e}")
+                        return None
+
+                    # Add channel dim: (Total_Samples, 1, w)
+                    X_train = X_train[:, np.newaxis, :]
+                    if len(X_train) == 0: return None
+
+                    # Model
+                    model = InceptionTime(c_in=1, c_out=1)
+                    splits = RandomSplitter()(range(len(X_train)))
+                    tfms = [None, [TSRegression()]]
+                    dsets = TSDatasets(X_train, y_train, tfms=tfms, splits=splits)
+
+                    # High-performance DataLoaders
+                    dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=4096, num_workers=8, pin_memory=True)
+
+                    learn = ts_learner(dls, model, metrics=mae, verbose=False)
+                    learn.fit_one_cycle(5, 1e-3)
+
+                    # Predict on latest window (the end of the slice)
+                    X_test = X_slice[:, -w:]
+                    X_test = X_test[:, np.newaxis, :]
+
+                    try:
+                        learn.model.eval()
+                        input_tensor = torch.from_numpy(X_test).float()
+                        device = next(learn.model.parameters()).device
+                        input_tensor = input_tensor.to(device)
+                        with torch.no_grad():
+                            preds = learn.model(input_tensor)
+                        preds_np = preds.cpu().numpy().flatten()
+                        best_idx = np.argmax(preds_np)
+                        return int(best_idx)
+                    except Exception as e:
+                        print(f"[DEBUG TSAI] Exception during prediction: {e}")
+                        traceback.print_exc()
+                        return None
+
+            classes['TsaiForecaster'] = TsaiForecaster
+        except Exception as e:
+            print(f"Lazy Import Error (Tsai): {e}")
+
+    return classes
 
 class ControlGroupForecaster:
     def __init__(self, global_config, var_cols):
@@ -551,6 +500,9 @@ def worker_predict_week(task_args):
         HAS_NF = flags['HAS_NF']
         HAS_TSAI = flags['HAS_TSAI']
 
+        # Lazy load forecaster classes inside the worker
+        forecaster_classes = get_forecasters(flags)
+
         results = {'control': None, 'darts': None, 'nf': None, 'tsai': None}
 
         # 0. Control Group
@@ -561,15 +513,16 @@ def worker_predict_week(task_args):
             pass
 
         # 1. Darts
-        if HAS_DARTS:
+        if HAS_DARTS and 'DartsForecaster' in forecaster_classes:
             try:
+                DartsForecaster = forecaster_classes['DartsForecaster']
                 darts_model = DartsForecaster(global_param_config, var_cols)
                 results['darts'] = darts_model.predict(history_best)
             except Exception as e:
                 pass
 
         # 2. NeuralForecast
-        if HAS_NF:
+        if HAS_NF and 'NeuralForecastForecaster' in forecaster_classes:
             try:
                 # Reconstruct DF slice for NF
                 nf_matrix = task_args.get('nf_matrix')
@@ -586,6 +539,7 @@ def worker_predict_week(task_args):
                      Y_df_window['ds'] = pd.to_datetime(Y_df_window['ds'])
                      Y_df_window['y'] = Y_df_window['y'].astype(np.float32)
 
+                     NeuralForecastForecaster = forecaster_classes['NeuralForecastForecaster']
                      nf_model = NeuralForecastForecaster(global_param_config, var_cols)
 
                      # Suppress output
@@ -596,8 +550,9 @@ def worker_predict_week(task_args):
                 pass
 
         # 3. Tsai
-        if HAS_TSAI:
+        if HAS_TSAI and 'TsaiForecaster' in forecaster_classes:
             try:
+                TsaiForecaster = forecaster_classes['TsaiForecaster']
                 tsai_model = TsaiForecaster(global_param_config, var_cols)
                 # slice_matrix is already sliced to [window_start:window_end]
                 # Pass 0 and width to predict
@@ -802,11 +757,8 @@ def main():
     # 4. Extract Best Vectors (Compatibility)
     best_vectors_history = [fd['best_vector'] for fd in files_data]
 
-    # Prepare Models
-    control_model = ControlGroupForecaster(global_param_config, var_cols)
-    darts_model = DartsForecaster(global_param_config, var_cols)
-    nf_model = NeuralForecastForecaster(global_param_config, var_cols)
-    tsai_model = TsaiForecaster(global_param_config, var_cols)
+    # Prepare Models (Main process only needs ControlGroup for non-parallel parts if any, but in parallel it's done in worker)
+    # We no longer instantiate Darts/NF/Tsai here to avoid importing them in main.
 
     # Predictions Storage
     # Structure: {'darts': [], 'nf': [], 'tsai': []}
