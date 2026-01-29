@@ -949,7 +949,7 @@ def generate_html_report(results, output_dir):
 
     html_parts = []
 
-    html_parts.append(f"""
+    html_parts.append("""
     <!DOCTYPE html>
     <html>
     <head>
@@ -966,6 +966,9 @@ def generate_html_report(results, output_dir):
             .metric { font-size: 1.1em; font-weight: bold; margin: 10px 0; }
         </style>
     </head>
+    """)
+
+    html_parts.append(f"""
     <body>
         <h1>Strategy Predictability Report</h1>
         <div class="section">
