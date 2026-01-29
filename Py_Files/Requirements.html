@@ -14,20 +14,33 @@
         li { margin-bottom: 5px; }
         code { background-color: #f1f1f1; padding: 2px 5px; border-radius: 3px; font-family: 'Consolas', monospace; color: #c7254e; }
         .note { font-style: italic; color: #666; font-size: 0.9em; }
+        .immutable { background-color: #ffdddd; border-left: 5px solid #d9534f; padding: 10px; margin-bottom: 20px; font-weight: bold; color: #a94442; }
+        .strict-rule { background-color: #fff3cd; border: 2px solid #ffeeba; padding: 15px; margin: 15px 0; font-weight: bold; color: #856404; text-transform: uppercase; text-align: center; }
     </style>
 </head>
 <body>
     <h1>Strategy Predictability Program Requirements</h1>
 
     <div class="req-box">
+        <div class="immutable">
+            CRITICAL NOTICE: Any programmer should never change the User Requirement part (Section 1). This section represents the immutable core logic defined by the user.
+        </div>
+
         <h2>1. Core User Requirements</h2>
+
+        <div class="strict-rule">
+            STRICT RULE: It should strictly NEVER LOOK AT OR TRAIN ON DATA THAT it uses for the prediction. The prediction should be totally based on previous data and not on future data.
+        </div>
+
         <p>The following requirements outline the intended logic for the strategy predictability analysis program:</p>
 
         <h3>1.1 Data Filtering & Vector Selection</h3>
         <ul>
             <li><strong>Input Data:</strong> Process a sequence of CSV files (optimization results).</li>
             <li><strong>Result Cutoff:</strong> Filter vectors inside each file where the result exceeds a defined threshold (<code>RESULT_CUTOFF</code>, e.g., 25).</li>
-            <li><strong>Hypercube Selection:</strong> Amongst the filtered vectors, identify the "Best Vector" by finding the one with the largest "Hypercube" (robustness area).</li>
+            <li><strong>Hypercube Selection (Basic & Darts Only):</strong> Amongst the filtered vectors, identify the "Best Vector" by finding the one with the largest "Hypercube" (robustness area).
+                <br><span class="note">Note: This "Best Vector" selection logic is exclusively for the Basic and Darts models.</span>
+            </li>
             <li><strong>History Window:</strong> Use a history of <code>VECTOR_INPUT</code> (e.g., 10) files to define the trajectory for sequential models.</li>
         </ul>
 
