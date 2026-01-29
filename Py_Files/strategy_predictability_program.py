@@ -971,8 +971,12 @@ def generate_html_report(results, output_dir):
         <div class="section">
             <h2>Definitions</h2>
             <ul>
+                <li><strong>RESULT_CUTOFF ({RESULT_CUTOFF}):</strong> Filter vectors inside each file where the result exceeds a defined threshold.</li>
                 <li><strong>VECTOR_INPUT ({VECTOR_INPUT}):</strong> Lookback window size (Model Lags). The number of past time steps (files/vectors) the model looks at to make a prediction.</li>
                 <li><strong>TRAINING_WINDOW ({TRAINING_WINDOW}):</strong> Size of the sliding window used for training. The number of recent files included in the training dataset for the model.</li>
+                <li><strong>MAX_WORKERS ({MAX_WORKERS}):</strong> Max parallel processes (Adjust based on VRAM).</li>
+                <li><strong>TSAI_EPOCHS ({TSAI_EPOCHS}):</strong> Epochs for Tsai InceptionTime model.</li>
+                <li><strong>NF_MAX_STEPS ({NF_MAX_STEPS}):</strong> Max steps for NeuralForecast NHITS.</li>
             </ul>
             <hr>
             <ul>
