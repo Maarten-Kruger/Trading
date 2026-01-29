@@ -1,6 +1,22 @@
 # Strategy Predictability Program Requirements
 
 > **CRITICAL NOTICE:** Any programmer should never change the User Requirement part (Section 1). This section represents the immutable core logic defined by the user.
+### Libaries to Install:
+1. **pandas**: Used for data manipulation (DataFrames, CSV reading).
+2. **numpy**: Used for numerical operations and array handling.
+3. **matplotlib**: Used for generating graphs and plotting results.
+4. **darts**: Used for the Random Forest time series forecasting model.
+5. **neuralforecast**: Used for the NHITS and LSTM neural network models.
+6. **tsai**: Used for state-of-the-art Time Series Classification/Regression (InceptionTime model).
+
+### **Installation Command**
+
+You can install all the required dependencies with the following pip command:
+
+```bash
+pip install pandas numpy matplotlib darts neuralforecast tsai scikit-learn
+
+```
 
 ## 1. Core User Requirements
 
