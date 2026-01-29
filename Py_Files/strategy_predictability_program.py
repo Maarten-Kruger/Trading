@@ -1,9 +1,18 @@
 
+import os
+import sys
+
+# Force thread limits for OpenBLAS/MKL/OMP to 1 to prevent "Resource temporarily unavailable"
+# when running multiple parallel workers. This MUST be done before importing numpy/pandas/torch.
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 import pandas as pd
 import numpy as np
-import os
 import glob
-import sys
 import matplotlib.pyplot as plt
 import io
 import base64
@@ -296,6 +305,21 @@ def get_gpu_forecasters(flags):
 
     if flags['HAS_NF']:
         try:
+            # Compatibility patch for PyTorch Lightning >= 2.0 vs NeuralForecast
+            # Some versions of NF expect pl.utilities.rank_zero_only which moved in PL 2.0
+            try:
+                import pytorch_lightning as pl
+                if not hasattr(pl, 'utilities'):
+                    # Force import if not lazy loaded
+                    import pytorch_lightning.utilities
+
+                # Check if rank_zero_only is missing in utilities and available in rank_zero
+                if hasattr(pl.utilities, 'rank_zero') and not hasattr(pl.utilities, 'rank_zero_only'):
+                     if hasattr(pl.utilities.rank_zero, 'rank_zero_only'):
+                        pl.utilities.rank_zero_only = pl.utilities.rank_zero.rank_zero_only
+            except Exception as e_compat:
+                pass # Attempted patch failed, proceed and hope for the best
+
             from neuralforecast import NeuralForecast
             from neuralforecast.models import NHITS
             import torch
