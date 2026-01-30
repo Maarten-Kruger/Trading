@@ -455,7 +455,7 @@ def get_forecasters(flags):
 
                     # --- BINARY CONVERSION ---
                     # Convert Target to Binary (0 or 1)
-                    y_train_bin = (y_train > self.result_cutoff).astype(np.float32)
+                    y_train_bin = (y_train > self.result_cutoff).astype(np.float32).reshape(-1, 1)
 
                     # Add channel dim: (Total_Samples, 1, w)
                     X_train = X_train[:, np.newaxis, :]
