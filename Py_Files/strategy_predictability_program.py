@@ -99,6 +99,9 @@ def process_file_load(filepath):
         if df.empty or 'Trades' not in df.columns or 'Result' not in df.columns:
             return None
 
+        if df['Result'].max() == 0:
+            print(f"[Warning] File {filepath} has max Result 0.0. Check parsing.")
+
         # Identify var cols (after Trades)
         if 'Trades' in df.columns:
             trades_idx = df.columns.get_loc("Trades")
@@ -595,7 +598,8 @@ def worker_predict_week(task_args):
             control_model = ControlGroupForecaster(global_param_config, var_cols)
             results['control'] = control_model.predict(history_best)
         except Exception as e:
-            pass
+            print(f"  [Worker {os.getpid()}] Control Group Error: {e}")
+            traceback.print_exc()
 
         # 1. Darts
         if HAS_DARTS and 'DartsForecaster' in forecaster_classes:
@@ -604,7 +608,8 @@ def worker_predict_week(task_args):
                 darts_model = DartsForecaster(global_param_config, var_cols)
                 results['darts'] = darts_model.predict(history_best)
             except Exception as e:
-                pass
+                print(f"  [Worker {os.getpid()}] Darts Error: {e}")
+                traceback.print_exc()
 
         # 2. NeuralForecast
         if HAS_NF and 'NeuralForecastForecaster' in forecaster_classes:
@@ -634,7 +639,8 @@ def worker_predict_week(task_args):
                          # Pass original window indices so predict calculates correct date filter
                          results['nf'] = nf_model.predict(Y_df_window, task_args['window_start'], task_args['window_end'])
             except Exception as e:
-                pass
+                print(f"  [Worker {os.getpid()}] NeuralForecast Error: {e}")
+                traceback.print_exc()
 
         # 3. Tsai
         if HAS_TSAI and 'TsaiForecaster' in forecaster_classes:
@@ -648,7 +654,8 @@ def worker_predict_week(task_args):
                 win_len = slice_matrix.shape[1]
                 results['tsai'] = tsai_model.predict(slice_matrix, 0, win_len)
             except Exception as e:
-                pass
+                print(f"  [Worker {os.getpid()}] Tsai Error: {e}")
+                traceback.print_exc()
 
         duration = time.time() - start_time
         return {'file_name': file_name, 'results': results, 'duration': duration}
