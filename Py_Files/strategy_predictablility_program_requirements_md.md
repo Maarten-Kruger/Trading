@@ -83,10 +83,13 @@ Analysis of the current codebase (`strategy_predictability_program.py`) highligh
     *   Runs on all CPU cores (`n_jobs=-1`).
 *   **NeuralForecast (NHITS):**
     *   Uses the `NHITS` model (Horizon=1, Input Size=`VECTOR_INPUT`).
+    *   **Objective:** Weighted Binary Classification. Predicts the *probability* (logits) of the Result being > `RESULT_CUTOFF`.
+    *   **Loss Function:** Custom `WeightedBCEWithLogits` (Weighted Binary Cross-Entropy). Penalizes missing a "Win" (1) 10x more than missing a "Loss" (0).
     *   Trains on the full "Result Surface" of the `TRAINING_WINDOW`.
-    *   Logging and checkpointing are disabled for performance.
 *   **Tsai (InceptionTime):**
     *   Uses the `InceptionTime` architecture (CNN/Transformer hybrid for time series).
+    *   **Objective:** Weighted Binary Classification.
+    *   **Loss Function:** `BCEWithLogitsLoss` with `pos_weight=10`.
     *   Trains on slices of the Master Matrix corresponding to the `TRAINING_WINDOW`.
     *   Currently configured for 5 epochs (`fit_one_cycle(5, 1e-3)`).
 

@@ -301,26 +301,29 @@ def get_forecasters(flags):
             torch.set_float32_matmul_precision('medium')
 
             # --- Custom Weighted Loss for Binary/Probability ---
-            class WeightedMSE(BasePointLoss):
+            class WeightedBCEWithLogits(BasePointLoss):
                 """
-                Weighted Mean Squared Error.
-                Penalizes errors on positive targets (1.0) 'weight' times more than negative targets (0.0).
+                Weighted Binary Cross Entropy with Logits.
+                Used for binary classification (0/1) where the model outputs unbounded logits.
+                Penalizes missing a "Win" (1) 'pos_weight' times more than missing a "Loss" (0).
                 """
-                def __init__(self, weight=10.0):
+                def __init__(self, pos_weight=10.0):
                     super().__init__(output_names=["y_hat"], outputsize=1, horizon_weight=None)
-                    self.weight = weight
+                    self.pos_weight = pos_weight
 
                 def forward(self, y, y_hat, mask=None):
-                    # y, y_hat shape: [batch, output_size]
-                    errors = (y - y_hat) ** 2
+                    # y: targets [batch, output_size] (0 or 1)
+                    # y_hat: logits [batch, output_size] (unbounded)
 
-                    # Weighting:
-                    # If y > 0.5 (Target is 1), apply weight.
-                    # Else (Target is 0), weight is 1.
-                    weights = torch.ones_like(y)
-                    weights[y > 0.5] = self.weight
+                    # Create weight tensor
+                    pos_weight_tensor = torch.tensor([self.pos_weight], device=y.device)
 
-                    loss = weights * errors
+                    # BCEWithLogitsLoss combines Sigmoid + BCE for numerical stability
+                    # reduction='none' so we can handle mask if needed, but BasePointLoss usually averages.
+                    # We use functional interface.
+                    loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                        y_hat, y, pos_weight=pos_weight_tensor, reduction='none'
+                    )
 
                     if mask is not None:
                         loss = loss * mask
@@ -336,11 +339,10 @@ def get_forecasters(flags):
                     # Check for GPU
                     accel = 'gpu' if torch.cuda.is_available() else 'cpu'
 
-                    # Use NHITS with Custom Loss
-                    # We treat this as a regression problem on 0/1 data.
-                    # The output will be a "score" (probability-like).
+                    # Use NHITS with Custom BCE Loss
+                    # The output y_hat will be LOGITS (unbounded scores).
                     self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=max_steps,
-                                       loss=WeightedMSE(weight=10.0), # Priority on finding Winners
+                                       loss=WeightedBCEWithLogits(pos_weight=10.0), # Priority on finding Winners
                                        enable_checkpointing=False, logger=False,
                                        accelerator=accel)
 
