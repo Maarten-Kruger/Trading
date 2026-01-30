@@ -379,15 +379,23 @@ def get_forecasters(flags):
                         return None
 
                     # future_df has columns [ds, NHITS]
-                    # The values in 'NHITS' are now "Predicted Scores/Probabilities"
-                    # We want the highest score.
+                    # The values in 'NHITS' are logits/scores.
+                    # We need to apply sigmoid to get probability/confidence if it's raw logits.
+                    # NHITS with custom loss usually outputs raw values.
+
+                    # Find max
+                    best_idx_row = future_df['NHITS'].idxmax()
+                    best_logit = future_df.loc[best_idx_row]['NHITS']
+
+                    # Sigmoid for confidence
+                    confidence = 1.0 / (1.0 + np.exp(-best_logit))
 
                     if 'unique_id' in future_df.columns:
-                        best_uid = future_df.loc[future_df['NHITS'].idxmax()]['unique_id']
+                        best_uid = future_df.loc[best_idx_row]['unique_id']
                     else:
-                        best_uid = future_df['NHITS'].idxmax()
+                        best_uid = best_idx_row
 
-                    return best_uid
+                    return {'id': best_uid, 'conf': confidence}
 
             classes['NeuralForecastForecaster'] = NeuralForecastForecaster
         except Exception as e:
@@ -475,7 +483,12 @@ def get_forecasters(flags):
                         # We just want the index of the MAX probability.
                         preds_np = preds_logits.cpu().numpy().flatten()
                         best_idx = np.argmax(preds_np)
-                        return int(best_idx)
+                        best_logit = preds_np[best_idx]
+
+                        # Sigmoid for confidence
+                        confidence = 1.0 / (1.0 + np.exp(-best_logit))
+
+                        return {'id': int(best_idx), 'conf': float(confidence)}
                     except Exception as e:
                         print(f"[DEBUG TSAI] Exception during prediction: {e}")
                         traceback.print_exc()
@@ -929,12 +942,20 @@ def main():
                     # --- Verification (Main Process) ---
                     status_msg = []
 
+                    # Calculate Missing Data Count for this file
+                    # Approx: Total Global Coords - Unique Coords in File
+                    # (Assuming file has unique coords. If file has fewer rows than global coords, diff is missing)
+                    # More precise: global 'num_coords' - count of rows in target_file_data['df']
+                    # This assumes every row in file is a unique coord which is usually true for optimization results.
+                    missing_count = num_coords - len(target_file_data['df'])
+                    if missing_count < 0: missing_count = 0 # Should not happen unless global list is outdated
+
                     # Control
                     if preds_map.get('control'):
                         stats = lookup_stats(target_file_data['df'], preds_map['control'], global_param_config)
                         if stats['found'] and 'matched_params' in stats:
                             preds_map['control'] = stats['matched_params']
-                        results['control'].append({'file': file_name, 'pred': preds_map['control'], 'stats': stats})
+                        results['control'].append({'file': file_name, 'pred': preds_map['control'], 'stats': stats, 'conf': None, 'missing': missing_count})
                         status_msg.append(f"C:{'Y' if stats['found'] else 'N'}")
 
                     # Darts
@@ -943,17 +964,27 @@ def main():
                             stats = lookup_stats(target_file_data['df'], preds_map['darts'], global_param_config)
                             if stats['found'] and 'matched_params' in stats:
                                 preds_map['darts'] = stats['matched_params']
-                            results['darts'].append({'file': file_name, 'pred': preds_map['darts'], 'stats': stats})
+                            results['darts'].append({'file': file_name, 'pred': preds_map['darts'], 'stats': stats, 'conf': None, 'missing': missing_count})
                             status_msg.append(f"D:{'Y' if stats['found'] else 'N'}")
 
                     # NF
                     if HAS_NF:
-                        nf_res = preds_map.get('nf')
-                        if nf_res is not None:
-                            # Resolve index to params if int/str
-                            if isinstance(nf_res, (int, np.integer, str)):
+                        nf_res_obj = preds_map.get('nf')
+                        nf_res = {}
+                        conf = None
+
+                        if nf_res_obj is not None:
+                            # Handle new dict return {'id': ..., 'conf': ...} or old direct return
+                            if isinstance(nf_res_obj, dict) and 'id' in nf_res_obj:
+                                raw_id = nf_res_obj['id']
+                                conf = nf_res_obj.get('conf')
+                            else:
+                                raw_id = nf_res_obj
+
+                            # Resolve index
+                            if isinstance(raw_id, (int, np.integer, str)):
                                 try:
-                                    idx = int(nf_res)
+                                    idx = int(raw_id)
                                     if 0 <= idx < len(coords_list):
                                         nf_res = coords_to_params(coords_list[idx], var_cols, global_param_config)
                                     else:
@@ -963,21 +994,33 @@ def main():
 
                             stats = lookup_stats(target_file_data['df'], nf_res, global_param_config)
                             if stats['found'] and 'matched_params' in stats:
-                                preds_map['nf'] = stats['matched_params']
-                            results['nf'].append({'file': file_name, 'pred': preds_map['nf'], 'stats': stats})
+                                preds_map['nf'] = stats['matched_params'] # Update with matched params
+                                nf_res = stats['matched_params']
+
+                            results['nf'].append({'file': file_name, 'pred': nf_res, 'stats': stats, 'conf': conf, 'missing': missing_count})
                             status_msg.append(f"NF:{'Y' if stats['found'] else 'N'}")
                         else:
-                            results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+                            results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}, 'conf': None, 'missing': missing_count})
                             status_msg.append("NF:-")
 
                     # Tsai
                     if HAS_TSAI:
-                        tsai_res = preds_map.get('tsai')
-                        if tsai_res is not None:
-                             # Resolve index to params if int
-                            if isinstance(tsai_res, (int, np.integer)):
+                        tsai_res_obj = preds_map.get('tsai')
+                        tsai_res = {}
+                        conf = None
+
+                        if tsai_res_obj is not None:
+                            # Handle new dict return
+                            if isinstance(tsai_res_obj, dict) and 'id' in tsai_res_obj:
+                                raw_id = tsai_res_obj['id']
+                                conf = tsai_res_obj.get('conf')
+                            else:
+                                raw_id = tsai_res_obj
+
+                             # Resolve index
+                            if isinstance(raw_id, (int, np.integer)):
                                 try:
-                                    idx = int(tsai_res)
+                                    idx = int(raw_id)
                                     if 0 <= idx < len(coords_list):
                                         tsai_res = coords_to_params(coords_list[idx], var_cols, global_param_config)
                                     else:
@@ -988,10 +1031,12 @@ def main():
                             stats = lookup_stats(target_file_data['df'], tsai_res, global_param_config)
                             if stats['found'] and 'matched_params' in stats:
                                 preds_map['tsai'] = stats['matched_params']
-                            results['tsai'].append({'file': file_name, 'pred': preds_map['tsai'], 'stats': stats})
+                                tsai_res = stats['matched_params']
+
+                            results['tsai'].append({'file': file_name, 'pred': tsai_res, 'stats': stats, 'conf': conf, 'missing': missing_count})
                             status_msg.append(f"Tsai:{'Y' if stats['found'] else 'N'}")
                         else:
-                            results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
+                            results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}, 'conf': None, 'missing': missing_count})
                             status_msg.append("Tsai:-")
 
                 except Exception as e:
@@ -1150,6 +1195,8 @@ def generate_html_report(results, output_dir):
                     <tr>
                         <th>File</th>
                         <th>Found?</th>
+                        <th>Missing Pts</th>
+                        <th>Confidence</th>
                         <th>Result</th>
                         <th>Profit</th>
                         <th>Params</th>
@@ -1161,10 +1208,19 @@ def generate_html_report(results, output_dir):
         for d in data:
             params_str = ", ".join([f"{k}={v:.2f}" for k,v in d['pred'].items()])
             color = "green" if d['stats']['found'] else "red"
+
+            conf_str = "N/A"
+            if d.get('conf') is not None:
+                conf_str = f"{d['conf']*100:.1f}%"
+
+            missing_count = d.get('missing', 0)
+
             html_parts.append(f"""
                 <tr>
                     <td>{d['file']}</td>
                     <td style="color:{color}">{d['stats']['found']}</td>
+                    <td>{missing_count}</td>
+                    <td>{conf_str}</td>
                     <td>{d['stats']['Result']:.2f}</td>
                     <td>{d['stats']['Profit']:.2f}</td>
                     <td>{params_str}</td>
