@@ -455,7 +455,8 @@ def get_forecasters(flags):
                     dsets = TSDatasets(X_train, y_train_bin, tfms=tfms, splits=splits)
 
                     # High-performance DataLoaders
-                    dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=4096, num_workers=8, pin_memory=True)
+                    # num_workers=0 to avoid nested multiprocessing crash (Main Worker -> DataLoader Workers)
+                    dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=4096, num_workers=0, pin_memory=True)
 
                     # LOSS FUNCTION: Weighted BCE
                     # Pos_weight = 10.0 (Prioritize finding winners)
