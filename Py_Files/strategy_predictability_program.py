@@ -71,11 +71,16 @@ def read_csv_robust(filepath):
              return pd.DataFrame()
 
     # Post-load cleanup
+    df.columns = df.columns.str.strip()
+
     # Ensure Result and Profit are numeric
     cols_to_numeric = ['Result', 'Profit', 'Trades']
     for c in cols_to_numeric:
         if c in df.columns and df[c].dtype == 'object':
              df[c] = pd.to_numeric(df[c].astype(str).str.replace(',', '.'), errors='coerce').fillna(0.0)
+
+    if 'Result' in df.columns and df['Result'].isna().all():
+        print(f"[Warning] File {filepath}: 'Result' column is all NaN after parsing.")
 
     # Attempt to convert other object columns that might be numeric (parameters)
     # Only iterate object columns to save time
@@ -96,7 +101,14 @@ def process_file_load(filepath):
     """
     try:
         df = read_csv_robust(filepath)
-        if df.empty or 'Trades' not in df.columns or 'Result' not in df.columns:
+        if df.empty:
+            print(f"[Skip] {os.path.basename(filepath)}: Empty DataFrame")
+            return None
+
+        required_cols = ['Trades', 'Result']
+        missing = [c for c in required_cols if c not in df.columns]
+        if missing:
+            print(f"[Skip] {os.path.basename(filepath)}: Missing columns {missing}")
             return None
 
         if df['Result'].max() == 0:
@@ -223,6 +235,7 @@ def lookup_stats(df, params, config):
             valid_cols += 1
 
     if valid_cols == 0:
+         # print(f"[Lookup] No valid columns found for params: {params.keys()}") # Commented out to reduce noise if frequent
          return {'Result': 0, 'Profit': 0, 'found': False}
 
     best_idx = total_dist_sq.idxmin()
@@ -596,7 +609,10 @@ def worker_predict_week(task_args):
         # 0. Control Group
         try:
             control_model = ControlGroupForecaster(global_param_config, var_cols)
-            results['control'] = control_model.predict(history_best)
+            pred = control_model.predict(history_best)
+            if pred is None:
+                print(f"  [Worker {os.getpid()}] Control Group returned None (insufficient history or bad data).")
+            results['control'] = pred
         except Exception as e:
             print(f"  [Worker {os.getpid()}] Control Group Error: {e}")
             traceback.print_exc()
