@@ -828,14 +828,15 @@ def main():
     # We need to melt the master matrix
     # DataFrame(master_matrix, index=coords_strs, columns=dates) -> melt
 
-    coords_strs = [str(c) for c in coords_list]
+    # Use Integer Index for unique_id to allow fast lookup later
+    # coords_strs = [str(c) for c in coords_list] # Deprecated: caused casting issues
 
     # Create a DataFrame for easy melting
     # This consumes RAM but is fast.
     # If 860,000 rows * 30 cols = 25M elements. Float32 ~ 100MB. Pandas overhead x5 ~ 500MB.
     # This is fine for "nice computer".
 
-    temp_df = pd.DataFrame(master_matrix, index=coords_strs, columns=dates)
+    temp_df = pd.DataFrame(master_matrix, index=np.arange(num_coords), columns=dates)
     temp_df.index.name = 'unique_id'
 
     # Reset index to make unique_id a column
