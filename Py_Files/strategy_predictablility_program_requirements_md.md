@@ -51,6 +51,10 @@ The following requirements outline the intended logic for the strategy predictab
 *   **Prediction Check:** Compare the model predictions against the actual next sequential document (the file immediately following the input window).
 *   **Matching Logic:** Check for an "Exact" or "Close Match" (within tolerance) in the target file.
 
+### 1.5 Future Enhancements (Technical Analysis)
+*   **Pandas-TA:** In future versions, incorporate [pandas-ta](https://pypi.org/project/pandas-ta/) to add technical indicators to the feature set.
+*   **TA-Lib:** Incorporate [TA-Lib](https://ta-lib.org/) for advanced technical analysis functions.
+
 ---
 
 ## 2. Technical Specifications & Current Implementation

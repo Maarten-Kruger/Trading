@@ -244,7 +244,7 @@ def get_forecasters(flags):
             from darts.models import RandomForest
 
             class DartsForecaster:
-                def __init__(self, global_config, var_cols):
+                def __init__(self, global_config, var_cols, **kwargs):
                     self.config = global_config
                     self.var_cols = var_cols
                     # Optimize: n_jobs=-1 to use all cores
@@ -295,18 +295,52 @@ def get_forecasters(flags):
         try:
             from neuralforecast import NeuralForecast
             from neuralforecast.models import NHITS
+            from neuralforecast.losses.pytorch import BasePointLoss
             import torch
+            import torch.nn as nn
             torch.set_float32_matmul_precision('medium')
 
+            # --- Custom Weighted Loss for Binary/Probability ---
+            class WeightedMSE(BasePointLoss):
+                """
+                Weighted Mean Squared Error.
+                Penalizes errors on positive targets (1.0) 'weight' times more than negative targets (0.0).
+                """
+                def __init__(self, weight=10.0):
+                    super().__init__(output_names=["y_hat"], outputsize=1, horizon_weight=None)
+                    self.weight = weight
+
+                def forward(self, y, y_hat, mask=None):
+                    # y, y_hat shape: [batch, output_size]
+                    errors = (y - y_hat) ** 2
+
+                    # Weighting:
+                    # If y > 0.5 (Target is 1), apply weight.
+                    # Else (Target is 0), weight is 1.
+                    weights = torch.ones_like(y)
+                    weights[y > 0.5] = self.weight
+
+                    loss = weights * errors
+
+                    if mask is not None:
+                        loss = loss * mask
+
+                    return torch.mean(loss)
+
             class NeuralForecastForecaster:
-                def __init__(self, global_config, var_cols, max_steps=100):
+                def __init__(self, global_config, var_cols, max_steps=100, result_cutoff=25):
                     self.config = global_config
                     self.var_cols = var_cols
-                    # Use NHITS - fast and effective
+                    self.result_cutoff = result_cutoff
+
                     # Check for GPU
                     accel = 'gpu' if torch.cuda.is_available() else 'cpu'
-                    # print(f"[NeuralForecast] Using accelerator: {accel}")
+
+                    # Use NHITS with Custom Loss
+                    # We treat this as a regression problem on 0/1 data.
+                    # The output will be a "score" (probability-like).
                     self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=max_steps,
+                                       loss=WeightedMSE(weight=10.0), # Priority on finding Winners
                                        enable_checkpointing=False, logger=False,
                                        accelerator=accel)
 
@@ -321,12 +355,16 @@ def get_forecasters(flags):
                     slice_start_date = start_date_base + timedelta(days=window_start_idx)
                     slice_end_date = start_date_base + timedelta(days=window_end_idx)
 
-                    # Optimization: use searchsorted if sorted, but boolean mask is okay for millions of rows on modern RAM
                     mask = (Y_df_global['ds'] >= slice_start_date) & (Y_df_global['ds'] < slice_end_date)
-                    Y_df_window = Y_df_global.loc[mask]
+                    Y_df_window = Y_df_global.loc[mask].copy()
 
                     if Y_df_window.empty:
                         return None
+
+                    # --- BINARY CONVERSION ---
+                    # Convert Result (y) to Binary (0 or 1) based on Cutoff
+                    # Also handles the -1000.0 missing values (they become 0)
+                    Y_df_window['y'] = (Y_df_window['y'] > self.result_cutoff).astype(np.float32)
 
                     # 2. Train and Predict
                     nf = NeuralForecast(models=[self.model], freq='D')
@@ -339,14 +377,14 @@ def get_forecasters(flags):
                         return None
 
                     # future_df has columns [ds, NHITS]
-                    # Determine best_uid
-                    # best_uid will be the index (int) or whatever was used as unique_id
+                    # The values in 'NHITS' are now "Predicted Scores/Probabilities"
+                    # We want the highest score.
+
                     if 'unique_id' in future_df.columns:
                         best_uid = future_df.loc[future_df['NHITS'].idxmax()]['unique_id']
                     else:
                         best_uid = future_df['NHITS'].idxmax()
 
-                    # Return the identifier (index), let main process resolve it
                     return best_uid
 
             classes['NeuralForecastForecaster'] = NeuralForecastForecaster
@@ -355,14 +393,16 @@ def get_forecasters(flags):
 
     if flags['HAS_TSAI']:
         try:
-            from tsai.all import InceptionTime, RandomSplitter, TSRegression, TSDatasets, TSDataLoaders, ts_learner, mae
+            from tsai.all import InceptionTime, RandomSplitter, TSRegression, TSDatasets, TSDataLoaders, ts_learner, mae, TSClassification
             import torch
+            import torch.nn as nn
 
             class TsaiForecaster:
-                def __init__(self, global_config, var_cols, epochs=5):
+                def __init__(self, global_config, var_cols, epochs=5, result_cutoff=25):
                     self.config = global_config
                     self.var_cols = var_cols
                     self.epochs = epochs
+                    self.result_cutoff = result_cutoff
 
                 def predict(self, master_matrix, window_start_idx, window_end_idx):
                     # Slice the matrix: O(1)
@@ -387,20 +427,34 @@ def get_forecasters(flags):
                         print(f"Error in vectorized windowing: {e}")
                         return None
 
+                    # --- BINARY CONVERSION ---
+                    # Convert Target to Binary (0 or 1)
+                    y_train_bin = (y_train > self.result_cutoff).astype(np.float32)
+
                     # Add channel dim: (Total_Samples, 1, w)
                     X_train = X_train[:, np.newaxis, :]
                     if len(X_train) == 0: return None
 
-                    # Model
+                    # Model: CLASSIFICATION MODE
+                    # We output 1 value (logit) representing probability of class 1.
                     model = InceptionTime(c_in=1, c_out=1)
                     splits = RandomSplitter()(range(len(X_train)))
-                    tfms = [None, [TSRegression()]]
-                    dsets = TSDatasets(X_train, y_train, tfms=tfms, splits=splits)
+
+                    # Use TSDatasets with binary targets
+                    tfms = [None, [TSRegression()]] # We keep TSRegression wrapper for float targets, but loss treats it as binary
+                    dsets = TSDatasets(X_train, y_train_bin, tfms=tfms, splits=splits)
 
                     # High-performance DataLoaders
                     dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=4096, num_workers=8, pin_memory=True)
 
-                    learn = ts_learner(dls, model, metrics=mae, verbose=False)
+                    # LOSS FUNCTION: Weighted BCE
+                    # Pos_weight = 10.0 (Prioritize finding winners)
+                    pos_weight = torch.tensor([10.0])
+                    if torch.cuda.is_available():
+                        pos_weight = pos_weight.cuda()
+                    loss_func = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+                    learn = ts_learner(dls, model, loss_func=loss_func, metrics=[], verbose=False)
                     learn.fit_one_cycle(self.epochs, 1e-3)
 
                     # Predict on latest window (the end of the slice)
@@ -413,8 +467,11 @@ def get_forecasters(flags):
                         device = next(learn.model.parameters()).device
                         input_tensor = input_tensor.to(device)
                         with torch.no_grad():
-                            preds = learn.model(input_tensor)
-                        preds_np = preds.cpu().numpy().flatten()
+                            preds_logits = learn.model(input_tensor)
+
+                        # Preds are logits. Higher logit = Higher probability of being > Cutoff.
+                        # We just want the index of the MAX probability.
+                        preds_np = preds_logits.cpu().numpy().flatten()
                         best_idx = np.argmax(preds_np)
                         return int(best_idx)
                     except Exception as e:
@@ -429,7 +486,7 @@ def get_forecasters(flags):
     return classes
 
 class ControlGroupForecaster:
-    def __init__(self, global_config, var_cols):
+    def __init__(self, global_config, var_cols, **kwargs):
         self.config = global_config
         self.var_cols = var_cols
 
@@ -506,6 +563,7 @@ def worker_predict_week(task_args):
         var_cols = task_args['var_cols']
         flags = task_args['flags']
         epochs = task_args.get('epochs', {'tsai': 5, 'nf': 100})
+        result_cutoff = task_args.get('result_cutoff', 25)
 
         HAS_DARTS = flags['HAS_DARTS']
         HAS_NF = flags['HAS_NF']
@@ -553,7 +611,7 @@ def worker_predict_week(task_args):
                      Y_df_window['y'] = Y_df_window['y'].astype(np.float32)
 
                      NeuralForecastForecaster = forecaster_classes['NeuralForecastForecaster']
-                     nf_model = NeuralForecastForecaster(global_param_config, var_cols, max_steps=epochs['nf'])
+                     nf_model = NeuralForecastForecaster(global_param_config, var_cols, max_steps=epochs['nf'], result_cutoff=result_cutoff)
 
                      # Suppress output
                      with open(os.devnull, 'w') as devnull:
@@ -568,7 +626,7 @@ def worker_predict_week(task_args):
                 print(f"  [Worker {os.getpid()}] {file_name}: Starting Tsai...", flush=True) # Verbose
 
                 TsaiForecaster = forecaster_classes['TsaiForecaster']
-                tsai_model = TsaiForecaster(global_param_config, var_cols, epochs=epochs['tsai'])
+                tsai_model = TsaiForecaster(global_param_config, var_cols, epochs=epochs['tsai'], result_cutoff=result_cutoff)
                 # slice_matrix is already sliced to [window_start:window_end]
                 # Pass 0 and width to predict
                 win_len = slice_matrix.shape[1]
@@ -626,8 +684,8 @@ def main():
     print("-" * 30)
     print("Control Group: Calculates the average of the parameter steps from the last VECTOR_INPUT best vectors.")
     print("Darts (Random Forest): Trains a Random Forest regressor on the trajectory of the best vectors within the TRAINING_WINDOW to predict the next best vector coordinates.")
-    print("NeuralForecast (NHITS): Trains a specialized neural network (NHITS) on the entire result surface history within the TRAINING_WINDOW to forecast the result of every parameter combination.")
-    print("Tsai (InceptionTime): Trains a Time Series Transformer/CNN (InceptionTime) on the result history of all coordinates within the TRAINING_WINDOW to predict the next best vector.")
+    print("NeuralForecast (NHITS): Trains a specialized neural network (NHITS) on the entire result surface history within the TRAINING_WINDOW to forecast the Chance of a Good Result.")
+    print("Tsai (InceptionTime): Trains a Time Series Transformer/CNN (InceptionTime) on the result history of all coordinates within the TRAINING_WINDOW to predict the Chance of a Good Result.")
     print("===================\n")
 
     # Global Scan (Parallel Loading)
@@ -834,7 +892,8 @@ def main():
             'window_start': window_start,
             'window_end': window_end,
             'flags': flags,
-            'epochs': {'tsai': TSAI_EPOCHS, 'nf': NF_MAX_STEPS}
+            'epochs': {'tsai': TSAI_EPOCHS, 'nf': NF_MAX_STEPS},
+            'result_cutoff': RESULT_CUTOFF
         }
         tasks.append((i, task))
 
@@ -1005,8 +1064,8 @@ def generate_html_report(results, output_dir):
             <ul>
                 <li><strong>Control Group:</strong> Calculates the average of the parameter steps from the last VECTOR_INPUT best vectors.</li>
                 <li><strong>Darts (Random Forest):</strong> Trains a Random Forest regressor on the trajectory of the best vectors within the TRAINING_WINDOW to predict the next best vector coordinates.</li>
-                <li><strong>NeuralForecast (NHITS):</strong> Trains a specialized neural network (NHITS) on the entire result surface history within the TRAINING_WINDOW to forecast the result of every parameter combination.</li>
-                <li><strong>Tsai (InceptionTime):</strong> Trains a Time Series Transformer/CNN (InceptionTime) on the result history of all coordinates within the TRAINING_WINDOW to predict the next best vector.</li>
+                <li><strong>NeuralForecast (NHITS):</strong> Trains a specialized neural network (NHITS) on the entire result surface history within the TRAINING_WINDOW to forecast the Chance of a Good Result.</li>
+                <li><strong>Tsai (InceptionTime):</strong> Trains a Time Series Transformer/CNN (InceptionTime) on the result history of all coordinates within the TRAINING_WINDOW to predict the Chance of a Good Result.</li>
             </ul>
         </div>
         <p>Comparison of Control Group (Avg Best Vectors), Darts (Vector Trajectory), NeuralForecast (Panel Surface), and Tsai (Panel Surface).</p>
