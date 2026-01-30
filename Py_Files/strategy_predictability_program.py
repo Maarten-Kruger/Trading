@@ -316,36 +316,6 @@ def get_forecasters(flags):
             import torch.nn as nn
             torch.set_float32_matmul_precision('medium')
 
-            # --- Custom Weighted Loss for Binary/Probability ---
-            class WeightedBCEWithLogits(BasePointLoss):
-                """
-                Weighted Binary Cross Entropy with Logits.
-                Used for binary classification (0/1) where the model outputs unbounded logits.
-                Penalizes missing a "Win" (1) 'pos_weight' times more than missing a "Loss" (0).
-                """
-                def __init__(self, pos_weight=10.0):
-                    super().__init__(output_names=["y_hat"], outputsize=1, horizon_weight=None)
-                    self.pos_weight = pos_weight
-
-                def forward(self, y, y_hat, mask=None):
-                    # y: targets [batch, output_size] (0 or 1)
-                    # y_hat: logits [batch, output_size] (unbounded)
-
-                    # Create weight tensor
-                    pos_weight_tensor = torch.tensor([self.pos_weight], device=y.device)
-
-                    # BCEWithLogitsLoss combines Sigmoid + BCE for numerical stability
-                    # reduction='none' so we can handle mask if needed, but BasePointLoss usually averages.
-                    # We use functional interface.
-                    loss = torch.nn.functional.binary_cross_entropy_with_logits(
-                        y_hat, y, pos_weight=pos_weight_tensor, reduction='none'
-                    )
-
-                    if mask is not None:
-                        loss = loss * mask
-
-                    return torch.mean(loss)
-
             class NeuralForecastForecaster:
                 def __init__(self, global_config, var_cols, max_steps=100, result_cutoff=25):
                     self.config = global_config
@@ -355,10 +325,8 @@ def get_forecasters(flags):
                     # Check for GPU
                     accel = 'gpu' if torch.cuda.is_available() else 'cpu'
 
-                    # Use NHITS with Custom BCE Loss
-                    # The output y_hat will be LOGITS (unbounded scores).
+                    # Use NHITS with Default Loss (Regression/Probability)
                     self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=max_steps,
-                                       loss=WeightedBCEWithLogits(pos_weight=10.0), # Priority on finding Winners
                                        enable_checkpointing=False, logger=False,
                                        accelerator=accel)
 
@@ -395,23 +363,21 @@ def get_forecasters(flags):
                         return None
 
                     # future_df has columns [ds, NHITS]
-                    # The values in 'NHITS' are logits/scores.
-                    # We need to apply sigmoid to get probability/confidence if it's raw logits.
-                    # NHITS with custom loss usually outputs raw values.
+                    # The values in 'NHITS' are values (probabilities if MSE on 0/1).
 
                     # Find max
                     best_idx_row = future_df['NHITS'].idxmax()
-                    best_logit = future_df.loc[best_idx_row]['NHITS']
+                    best_val = future_df.loc[best_idx_row]['NHITS']
 
-                    # Sigmoid for confidence
-                    confidence = 1.0 / (1.0 + np.exp(-best_logit))
+                    # Raw confidence (clamped)
+                    confidence = np.clip(best_val, 0.0, 1.0)
 
                     if 'unique_id' in future_df.columns:
                         best_uid = future_df.loc[best_idx_row]['unique_id']
                     else:
                         best_uid = best_idx_row
 
-                    return {'id': best_uid, 'conf': confidence}
+                    return {'id': best_uid, 'conf': float(confidence)}
 
             classes['NeuralForecastForecaster'] = NeuralForecastForecaster
         except Exception as e:
@@ -474,12 +440,8 @@ def get_forecasters(flags):
                     # num_workers=0 to avoid nested multiprocessing crash (Main Worker -> DataLoader Workers)
                     dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=4096, num_workers=0, pin_memory=True)
 
-                    # LOSS FUNCTION: Weighted BCE
-                    # Pos_weight = 10.0 (Prioritize finding winners)
-                    pos_weight = torch.tensor([10.0])
-                    if torch.cuda.is_available():
-                        pos_weight = pos_weight.cuda()
-                    loss_func = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+                    # LOSS FUNCTION: Standard BCE (Unweighted)
+                    loss_func = nn.BCEWithLogitsLoss()
 
                     learn = ts_learner(dls, model, loss_func=loss_func, metrics=[], verbose=False)
                     learn.fit_one_cycle(self.epochs, 1e-3)
