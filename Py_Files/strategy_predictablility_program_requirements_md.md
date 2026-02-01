@@ -1,6 +1,6 @@
 # Strategy Predictability Program Requirements
 
-> **CRITICAL NOTICE:** Any programmer should never change the User Requirement part (Section 1). This section represents the immutable core logic defined by the user.
+
 ### Libaries to Install:
 1. **pandas**: Used for data manipulation (DataFrames, CSV reading).
 2. **numpy**: Used for numerical operations and array handling.
@@ -15,13 +15,18 @@ You can install all the required dependencies with the following pip command:
 
 ```bash
 pip install pandas numpy matplotlib darts neuralforecast tsai scikit-learn
-
+python strategy_predictability_program.py
 ```
-## The Goal:
-The goal of this script/project is to make a succesfull model or python script that helps to optimize a strategies parameters to future data. It will succeed if we get a higher baseline profit than our Control Group on our optimizations.
+---
+
 
 
 ## 1. Core User Requirements
+
+>**CRITICAL NOTICE:** Any programmer should never change the User Requirement part (Section 1). This section represents the immutable core logic defined by the user.
+
+## The Goal:
+The goal of this script/project is to make a succesfull model or python script that helps to optimize a strategies parameters to future data. It will succeed if we get a higher baseline profit than our Control Group on our optimizations. To "over-fit" my strategy for future data.
 
 > **STRICT RULE:** It should strictly NEVER LOOK AT OR TRAIN ON DATA THAT it uses for the prediction. The prediction should be totally based on previous data and not on future data.
 
@@ -30,8 +35,7 @@ The following requirements outline the intended logic for the strategy predictab
 
 ### 1.1 Data Filtering & Vector Selection
 *   **Input Data:** Process a sequence of CSV files (optimization results).
-*   **Result Cutoff:** Filter vectors inside each file where the result exceeds a defined threshold (`RESULT_CUTOFF`, e.g., 25).
-*   **Hypercube Selection (Basic & Darts Only):** Amongst the filtered vectors, identify the "Best Vector" by finding the one with the largest "Hypercube" (robustness area).
+*   **Hypercube Selection (Basic & Darts Only):** Filter vectors inside each file where the result exceeds a defined threshold (`RESULT_CUTOFF`, e.g., 25). Amongst the filtered vectors, identify the "Best Vector" by finding the one with the largest "Hypercube" (robustness area).
     *   *Note: This "Best Vector" selection logic is exclusively for the Basic and Darts models.*
 *   **History Window:** Use a history of `VECTOR_INPUT` (e.g., 10) files to define the trajectory for sequential models.
 
