@@ -295,7 +295,7 @@ def get_forecasters(flags):
         try:
             from neuralforecast import NeuralForecast
             from neuralforecast.models import NHITS
-            from neuralforecast.losses.pytorch import TweedieLoss
+            from neuralforecast.losses.pytorch import DistributionLoss
             import torch
             torch.set_float32_matmul_precision('medium')
 
@@ -308,8 +308,9 @@ def get_forecasters(flags):
                     accel = 'gpu' if torch.cuda.is_available() else 'cpu'
                     # print(f"[NeuralForecast] Using accelerator: {accel}")
                     # Use TweedieLoss as requested (rho=1.5)
+                    # TweedieLoss is not directly available, so we use DistributionLoss with Tweedie distribution
                     self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=max_steps,
-                                       loss=TweedieLoss(rho=1.5),
+                                       loss=DistributionLoss(distribution='Tweedie', rho=1.5),
                                        enable_checkpointing=False, logger=False,
                                        accelerator=accel)
 
@@ -542,10 +543,16 @@ def get_forecasters(flags):
                         print(f"[DEBUG TSAI] Exception during prediction: {e}")
                         traceback.print_exc()
                         return None
+                    except:
+                         print(f"[DEBUG TSAI] Unknown error during prediction")
+                         traceback.print_exc()
+                         return None
+
 
             classes['TsaiForecaster'] = TsaiForecaster
         except Exception as e:
             print(f"Lazy Import Error (Tsai): {e}")
+            traceback.print_exc()
 
     return classes
 
