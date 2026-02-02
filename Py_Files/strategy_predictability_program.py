@@ -295,6 +295,7 @@ def get_forecasters(flags):
         try:
             from neuralforecast import NeuralForecast
             from neuralforecast.models import NHITS
+            from neuralforecast.losses.pytorch import TweedieLoss
             import torch
             torch.set_float32_matmul_precision('medium')
 
@@ -306,11 +307,13 @@ def get_forecasters(flags):
                     # Check for GPU
                     accel = 'gpu' if torch.cuda.is_available() else 'cpu'
                     # print(f"[NeuralForecast] Using accelerator: {accel}")
+                    # Use TweedieLoss as requested (rho=1.5)
                     self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=max_steps,
+                                       loss=TweedieLoss(rho=1.5),
                                        enable_checkpointing=False, logger=False,
                                        accelerator=accel)
 
-                def predict(self, Y_df_global, window_start_idx, window_end_idx):
+                def predict(self, Y_df_global, window_start_idx, window_end_idx, coords_list):
                     if Y_df_global is None or Y_df_global.empty:
                         return None
 
@@ -328,19 +331,61 @@ def get_forecasters(flags):
                     if Y_df_window.empty:
                         return None
 
+                    # --- Preprocessing (New Requirement) ---
+                    # Add 4.33 to Results, then clip negative to 0
+                    Y_df_window = Y_df_window.copy() # Avoid SettingWithCopy
+                    Y_df_window['y'] = (Y_df_window['y'] + 4.33).clip(lower=0)
+
+                    # --- Static Covariances (New Requirement) ---
+                    # Build static_df from coords_list
+                    # unique_id is the index (int) which maps to coords_list[i]
+                    # We need to build a DF: unique_id | param1 | param2 ...
+
+                    static_data = []
+                    # Optimization: Only build for unique_ids present in Y_df_window?
+                    # NHITS needs static vars for all series it trains on.
+                    # Since we train on the window which contains all series (ids), we need all.
+
+                    # Assuming coords_list indices match unique_id 0..N
+                    # coords_list contains tuples of steps. Convert to real values.
+
+                    # This might be heavy if coords_list is huge.
+                    # But it's necessary for the requirement.
+
+                    # Vectorized approach to build static_df
+                    # unique_ids = np.arange(len(coords_list))
+
+                    # Extract params into lists
+                    # keys: var_cols
+
+                    # Pre-calculate params for all coords
+                    # This is better done outside but we do it here.
+
+                    param_dict_list = []
+                    for coord in coords_list:
+                        # coords_to_params returns dict
+                        p = coords_to_params(coord, self.var_cols, self.config)
+                        param_dict_list.append(p)
+
+                    static_df = pd.DataFrame(param_dict_list)
+                    static_df['unique_id'] = np.arange(len(coords_list))
+
+                    # Reorder: unique_id first
+                    cols = ['unique_id'] + [c for c in static_df.columns if c != 'unique_id']
+                    static_df = static_df[cols]
+
                     # 2. Train and Predict
                     nf = NeuralForecast(models=[self.model], freq='D')
-                    nf.fit(df=Y_df_window)
+                    nf.fit(df=Y_df_window, static_df=static_df)
 
-                    future_df = nf.predict()
+                    future_df = nf.predict(static_df=static_df)
 
                     # 3. Find Best
                     if future_df.empty:
                         return None
 
                     # future_df has columns [ds, NHITS]
-                    # Determine best_uid
-                    # best_uid will be the index (int) or whatever was used as unique_id
+                    # Predict high result (regression)
                     if 'unique_id' in future_df.columns:
                         best_uid = future_df.loc[future_df['NHITS'].idxmax()]['unique_id']
                     else:
@@ -355,8 +400,9 @@ def get_forecasters(flags):
 
     if flags['HAS_TSAI']:
         try:
-            from tsai.all import InceptionTime, RandomSplitter, TSRegression, TSDatasets, TSDataLoaders, ts_learner, mae
+            from tsai.all import InceptionTime, RandomSplitter, TSClassifier, TSDatasets, TSDataLoaders, ts_learner, accuracy
             import torch
+            import torch.nn as nn
 
             class TsaiForecaster:
                 def __init__(self, global_config, var_cols, epochs=5):
@@ -364,7 +410,7 @@ def get_forecasters(flags):
                     self.var_cols = var_cols
                     self.epochs = epochs
 
-                def predict(self, master_matrix, window_start_idx, window_end_idx):
+                def predict(self, master_matrix, window_start_idx, window_end_idx, coords_list):
                     # Slice the matrix: O(1)
                     X_slice = master_matrix[:, window_start_idx:window_end_idx]
                     n_coords, win_len = X_slice.shape
@@ -378,44 +424,119 @@ def get_forecasters(flags):
                     # Fast strided windowing using sliding_window_view
                     try:
                         if win_len < w + 1: return None
+                        # Shape: (n_coords, num_windows, window_size)
                         windows = sliding_window_view(X_slice, window_shape=w+1, axis=1)
-                        X_train = windows[:, :, :-1]
-                        y_train = windows[:, :, -1]
-                        X_train = X_train.reshape(-1, w)
-                        y_train = y_train.flatten()
+                        # X_train_raw: (n_coords, num_windows, w)
+                        X_train_raw = windows[:, :, :-1]
+                        # y_train_raw: (n_coords, num_windows) - The target value at end of window
+                        y_train_raw = windows[:, :, -1]
+
+                        # Flatten coords and windows together
+                        # (Total_Samples, w)
+                        X_train_res = X_train_raw.reshape(-1, w)
+                        y_train_flat = y_train_raw.flatten()
                     except Exception as e:
                         print(f"Error in vectorized windowing: {e}")
                         return None
 
-                    # Add channel dim: (Total_Samples, 1, w)
-                    X_train = X_train[:, np.newaxis, :]
-                    if len(X_train) == 0: return None
+                    if len(X_train_res) == 0: return None
+
+                    # --- Static Covariances Integration ---
+                    # We need to append static params as constant channels.
+                    # 1. Build params array (n_coords, n_params)
+                    n_params = len(self.var_cols)
+                    params_array = np.zeros((n_coords, n_params), dtype=np.float32)
+
+                    for i, coord in enumerate(coords_list):
+                        p_dict = coords_to_params(coord, self.var_cols, self.config)
+                        for j, col in enumerate(self.var_cols):
+                            params_array[i, j] = p_dict[col]
+
+                    # 2. Expand params to match X_train structure
+                    # X_train_raw shape: (n_coords, num_windows, w)
+                    num_windows = X_train_raw.shape[1]
+
+                    # Repeat params for each window
+                    # (n_coords, num_windows, n_params)
+                    params_expanded = np.repeat(params_array[:, np.newaxis, :], num_windows, axis=1)
+
+                    # Flatten to (Total_Samples, n_params)
+                    params_flat = params_expanded.reshape(-1, n_params)
+
+                    # 3. Create Constant Channels
+                    # X_train_res: (Total, w) -> (Total, 1, w)
+                    X_res_chan = X_train_res[:, np.newaxis, :]
+
+                    # Params: (Total, n_params) -> (Total, n_params, w) (Broadcast)
+                    params_chan = np.repeat(params_flat[:, :, np.newaxis], w, axis=2)
+
+                    # Concatenate: (Total, 1 + n_params, w)
+                    X_final = np.concatenate([X_res_chan, params_chan], axis=1)
+
+                    # --- Classification Targets ---
+                    # 0: DNC (y <= 0)
+                    # 1: LR (0 < y <= CUTOFF)
+                    # 2: HR (y > CUTOFF)
+                    y_class = np.zeros_like(y_train_flat, dtype=np.longlong)
+
+                    # Vectorized binning
+                    mask_pos = y_train_flat > 0
+                    mask_hr = y_train_flat > RESULT_CUTOFF
+
+                    # Default is 0 (DNC)
+                    y_class[mask_pos] = 1 # LR
+                    y_class[mask_hr] = 2  # HR
 
                     # Model
-                    model = InceptionTime(c_in=1, c_out=1)
-                    splits = RandomSplitter()(range(len(X_train)))
-                    tfms = [None, [TSRegression()]]
-                    dsets = TSDatasets(X_train, y_train, tfms=tfms, splits=splits)
+                    c_in = 1 + n_params
+                    c_out = 3 # 3 classes
+
+                    model = InceptionTime(c_in=c_in, c_out=c_out)
+                    splits = RandomSplitter()(range(len(X_final)))
+
+                    # TSDatasets for Classification (y is long)
+                    tfms = [None, [TSClassifier()]]
+                    dsets = TSDatasets(X_final, y_class, tfms=tfms, splits=splits)
 
                     # High-performance DataLoaders
-                    dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=4096, num_workers=8, pin_memory=True)
+                    dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=4096, num_workers=0, pin_memory=True) # Workers=0 for safety in spawn
 
-                    learn = ts_learner(dls, model, metrics=mae, verbose=False)
+                    learn = ts_learner(dls, model, metrics=accuracy, loss_func=nn.CrossEntropyLoss(), verbose=False)
                     learn.fit_one_cycle(self.epochs, 1e-3)
 
-                    # Predict on latest window (the end of the slice)
-                    X_test = X_slice[:, -w:]
-                    X_test = X_test[:, np.newaxis, :]
+                    # --- Prediction ---
+                    # Predict on latest window
+                    # X_slice: (n_coords, win_len)
+                    # Latest window: X_slice[:, -w:]
+                    X_test_res = X_slice[:, -w:] # (n_coords, w)
+
+                    # Add channel dim
+                    X_test_res = X_test_res[:, np.newaxis, :] # (n_coords, 1, w)
+
+                    # Add params channels
+                    # params_array: (n_coords, n_params)
+                    # Broadcast to (n_coords, n_params, w)
+                    params_test = np.repeat(params_array[:, :, np.newaxis], w, axis=2)
+
+                    # Concat
+                    X_test = np.concatenate([X_test_res, params_test], axis=1) # (n_coords, 1+n_params, w)
 
                     try:
                         learn.model.eval()
                         input_tensor = torch.from_numpy(X_test).float()
                         device = next(learn.model.parameters()).device
                         input_tensor = input_tensor.to(device)
+
                         with torch.no_grad():
-                            preds = learn.model(input_tensor)
-                        preds_np = preds.cpu().numpy().flatten()
-                        best_idx = np.argmax(preds_np)
+                            logits = learn.model(input_tensor) # (n_coords, 3)
+                            probs = torch.softmax(logits, dim=1) # (n_coords, 3)
+
+                        probs_np = probs.cpu().numpy()
+
+                        # Select candidate with highest confidence in HR (Class 2)
+                        hr_probs = probs_np[:, 2]
+                        best_idx = np.argmax(hr_probs)
+
                         return int(best_idx)
                     except Exception as e:
                         print(f"[DEBUG TSAI] Exception during prediction: {e}")
@@ -540,9 +661,9 @@ def worker_predict_week(task_args):
                 # Reconstruct DF slice for NF
                 nf_matrix = task_args.get('nf_matrix')
                 nf_dates = task_args.get('nf_dates')
-                # nf_coords removed to reduce payload
+                coords_list = task_args.get('coords_list')
 
-                if nf_matrix is not None and nf_dates is not None:
+                if nf_matrix is not None and nf_dates is not None and coords_list is not None:
                      # Efficiently create DF
                      # Use integer index as unique_id
                      num_coords = nf_matrix.shape[0]
@@ -558,7 +679,7 @@ def worker_predict_week(task_args):
                      # Suppress output
                      with open(os.devnull, 'w') as devnull:
                          # Pass original window indices so predict calculates correct date filter
-                         results['nf'] = nf_model.predict(Y_df_window, task_args['window_start'], task_args['window_end'])
+                         results['nf'] = nf_model.predict(Y_df_window, task_args['window_start'], task_args['window_end'], coords_list)
             except Exception as e:
                 pass
 
@@ -567,12 +688,14 @@ def worker_predict_week(task_args):
             try:
                 print(f"  [Worker {os.getpid()}] {file_name}: Starting Tsai...", flush=True) # Verbose
 
-                TsaiForecaster = forecaster_classes['TsaiForecaster']
-                tsai_model = TsaiForecaster(global_param_config, var_cols, epochs=epochs['tsai'])
-                # slice_matrix is already sliced to [window_start:window_end]
-                # Pass 0 and width to predict
-                win_len = slice_matrix.shape[1]
-                results['tsai'] = tsai_model.predict(slice_matrix, 0, win_len)
+                coords_list = task_args.get('coords_list')
+                if coords_list is not None:
+                    TsaiForecaster = forecaster_classes['TsaiForecaster']
+                    tsai_model = TsaiForecaster(global_param_config, var_cols, epochs=epochs['tsai'])
+                    # slice_matrix is already sliced to [window_start:window_end]
+                    # Pass 0 and width to predict
+                    win_len = slice_matrix.shape[1]
+                    results['tsai'] = tsai_model.predict(slice_matrix, 0, win_len, coords_list)
             except Exception as e:
                 pass
 
@@ -830,7 +953,7 @@ def main():
             # 'nf_coords': coords_strs if HAS_NF else None, # Removed to reduce payload
             'config': global_param_config,
             'var_cols': var_cols,
-            # 'coords_list': coords_list, # Removed to reduce payload
+            'coords_list': coords_list, # Passed for static covariances
             'window_start': window_start,
             'window_end': window_end,
             'flags': flags,
