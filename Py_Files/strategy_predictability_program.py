@@ -416,15 +416,21 @@ def get_forecasters(flags):
                     X_slice = master_matrix[:, window_start_idx:window_end_idx]
                     n_coords, win_len = X_slice.shape
 
-                    if win_len < 2: return None
+                    if win_len < 2:
+                        print(f"[DEBUG TSAI] win_len < 2 ({win_len})")
+                        return None
 
                     # Sliding Window Logic on the slice
                     w = min(VECTOR_INPUT, win_len - 1)
-                    if w < 2: return None
+                    if w < 2:
+                        print(f"[DEBUG TSAI] w < 2 ({w})")
+                        return None
 
                     # Fast strided windowing using sliding_window_view
                     try:
-                        if win_len < w + 1: return None
+                        if win_len < w + 1:
+                            print(f"[DEBUG TSAI] win_len ({win_len}) < w+1 ({w+1})")
+                            return None
                         # Shape: (n_coords, num_windows, window_size)
                         windows = sliding_window_view(X_slice, window_shape=w+1, axis=1)
                         # X_train_raw: (n_coords, num_windows, w)
@@ -440,7 +446,9 @@ def get_forecasters(flags):
                         print(f"Error in vectorized windowing: {e}")
                         return None
 
-                    if len(X_train_res) == 0: return None
+                    if len(X_train_res) == 0:
+                        print(f"[DEBUG TSAI] X_train_res is empty")
+                        return None
 
                     # --- Static Covariances Integration ---
                     # We need to append static params as constant channels.
@@ -496,7 +504,13 @@ def get_forecasters(flags):
                     splits = RandomSplitter()(range(len(X_final)))
 
                     # TSDatasets for Classification (y is long)
-                    tfms = [None, [TSClassifier()]]
+                    # For classification, we use Categorize if strings, but here y is already int.
+                    # We typically don't need explicit transforms for int targets in TSDatasets unless we want one-hot encoding or similar.
+                    # TSClassifier is a Learner factory, NOT a transform.
+                    # Passing TSClassifier() as a transform was the error.
+
+                    # We just use [None, None] or [None, [Categorize()]] if needed, but for ints None is usually fine.
+                    tfms = [None, None]
                     dsets = TSDatasets(X_final, y_class, tfms=tfms, splits=splits)
 
                     # High-performance DataLoaders
