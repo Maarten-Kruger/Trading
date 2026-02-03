@@ -31,7 +31,7 @@ VECTOR_INPUT = 10  # Lookback window size (Model Lags)
 TRAINING_WINDOW = 30 # Size of the sliding window used for training (Must be > VECTOR_INPUT)
 MAX_WORKERS = 4      # Max parallel processes (Adjust based on VRAM)
 TSAI_EPOCHS = 5      # Epochs for Tsai InceptionTime model
-NF_MAX_STEPS = 100   # Max steps for NeuralForecast NHITS
+NF_MAX_STEPS = 250   # Max steps for NeuralForecast NHITS
 
 # --- Library Availability Flags (Lazy Check) ---
 # We check availability without importing to keep workers fast
@@ -312,7 +312,7 @@ def get_forecasters(flags):
                     self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=max_steps,
                                        loss=DistributionLoss(distribution='Tweedie', rho=1.5),
                                        enable_checkpointing=False, logger=False,
-                                       accelerator=accel)
+                                       accelerator=accel, batch_size=4096)
 
                 def predict(self, Y_df_global, window_start_idx, window_end_idx, coords_list):
                     if Y_df_global is None or Y_df_global.empty:
