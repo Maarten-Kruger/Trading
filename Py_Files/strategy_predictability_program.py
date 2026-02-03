@@ -385,15 +385,31 @@ def get_forecasters(flags):
                     if future_df.empty:
                         return None
 
-                    # future_df has columns [ds, NHITS]
-                    # Predict high result (regression)
-                    if 'unique_id' in future_df.columns:
-                        best_uid = future_df.loc[future_df['NHITS'].idxmax()]['unique_id']
-                    else:
-                        best_uid = future_df['NHITS'].idxmax()
+                    # Calculate Stats (B) - Model Prediction
+                    pred_col = 'NHITS'
+                    avg_pred = float(future_df[pred_col].mean())
+                    count_above = int((future_df[pred_col] > RESULT_CUTOFF).sum())
+                    count_neg = int((future_df[pred_col] <= 0).sum())
 
-                    # Return the identifier (index), let main process resolve it
-                    return best_uid
+                    # Predict high result (regression)
+                    best_row_idx = future_df[pred_col].idxmax()
+                    best_row = future_df.loc[best_row_idx]
+
+                    if 'unique_id' in future_df.columns:
+                        best_uid = best_row['unique_id']
+                    else:
+                        best_uid = best_row_idx
+
+                    pred_val = float(best_row[pred_col])
+
+                    # Return dict with metadata
+                    return {
+                        'id': best_uid,
+                        'pred_val': pred_val,
+                        'avg_pred': avg_pred,
+                        'count_above': count_above,
+                        'count_neg': count_neg
+                    }
 
             classes['NeuralForecastForecaster'] = NeuralForecastForecaster
         except Exception as e:
@@ -552,7 +568,26 @@ def get_forecasters(flags):
                         hr_probs = probs_np[:, 2]
                         best_idx = np.argmax(hr_probs)
 
-                        return int(best_idx)
+                        # Diagnostic Stats
+                        confidence = float(hr_probs[best_idx])
+                        pred_class = int(np.argmax(probs_np[best_idx]))
+
+                        all_preds = np.argmax(probs_np, axis=1)
+                        count_class_0 = int((all_preds == 0).sum())
+                        count_class_1 = int((all_preds == 1).sum())
+                        count_class_2 = int((all_preds == 2).sum())
+
+                        avg_hr_prob = float(np.mean(hr_probs))
+
+                        return {
+                            'id': int(best_idx),
+                            'confidence': confidence,
+                            'pred_class': pred_class,
+                            'count_class_0': count_class_0,
+                            'count_class_1': count_class_1,
+                            'count_class_2': count_class_2,
+                            'avg_hr_prob': avg_hr_prob
+                        }
                     except Exception as e:
                         print(f"[DEBUG TSAI] Exception during prediction: {e}")
                         traceback.print_exc()
@@ -1009,7 +1044,21 @@ def main():
                     duration = res.get('duration', 0)
                     preds_map = res['results']
 
-                    # --- Verification (Main Process) ---
+                    # --- Verification & Stats (Main Process) ---
+
+                    # 1. Ground Truth Stats (A)
+                    grid_vals = list(target_file_data['grid_summary'].values())
+                    gt_avg = np.mean(grid_vals) if grid_vals else 0
+                    gt_count = sum(1 for v in grid_vals if v > RESULT_CUTOFF)
+                    gt_neg_count = sum(1 for v in grid_vals if v <= 0)
+
+                    # Store global stats for reporting
+                    global_stats = {
+                        'avg': gt_avg,
+                        'count_above': gt_count,
+                        'count_neg': gt_neg_count
+                    }
+
                     status_msg = []
 
                     # Control
@@ -1031,51 +1080,70 @@ def main():
 
                     # NF
                     if HAS_NF:
-                        nf_res = preds_map.get('nf')
-                        if nf_res is not None:
-                            # Resolve index to params if int/str
-                            if isinstance(nf_res, (int, np.integer, str)):
-                                try:
-                                    idx = int(nf_res)
-                                    if 0 <= idx < len(coords_list):
-                                        nf_res = coords_to_params(coords_list[idx], var_cols, global_param_config)
-                                    else:
-                                        nf_res = {}
-                                except:
-                                    nf_res = {}
+                        nf_raw = preds_map.get('nf')
+                        nf_meta = {}
+                        nf_params = {}
 
-                            stats = lookup_stats(target_file_data['df'], nf_res, global_param_config)
+                        if nf_raw:
+                            nf_meta = nf_raw # It is a dict now
+                            nf_id = nf_raw.get('id')
+
+                            # Resolve ID
+                            if isinstance(nf_id, (int, np.integer, str)):
+                                try:
+                                    idx = int(nf_id)
+                                    if 0 <= idx < len(coords_list):
+                                        nf_params = coords_to_params(coords_list[idx], var_cols, global_param_config)
+                                except:
+                                    pass
+
+                            stats = lookup_stats(target_file_data['df'], nf_params, global_param_config)
                             if stats['found'] and 'matched_params' in stats:
-                                preds_map['nf'] = stats['matched_params']
-                            results['nf'].append({'file': file_name, 'pred': preds_map['nf'], 'stats': stats})
-                            status_msg.append(f"NF:{'Y' if stats['found'] else 'N'}")
+                                nf_params = stats['matched_params'] # Snap to grid
+
+                            results['nf'].append({'file': file_name, 'pred': nf_params, 'stats': stats, 'model_meta': nf_meta, 'global_stats': global_stats})
+
+                            # Verbose status
+                            # Show Predicted Value and Avg Prediction
+                            p_val = nf_meta.get('pred_val', 0)
+                            p_avg = nf_meta.get('avg_pred', 0)
+                            status_msg.append(f"NF[Y, P:{p_val:.1f}, Avg:{p_avg:.1f}]" if stats['found'] else "NF[N]")
                         else:
-                            results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
-                            status_msg.append("NF:-")
+                            results['nf'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}, 'model_meta': {}, 'global_stats': global_stats})
+                            status_msg.append("NF[-]")
 
                     # Tsai
                     if HAS_TSAI:
-                        tsai_res = preds_map.get('tsai')
-                        if tsai_res is not None:
-                             # Resolve index to params if int
-                            if isinstance(tsai_res, (int, np.integer)):
-                                try:
-                                    idx = int(tsai_res)
-                                    if 0 <= idx < len(coords_list):
-                                        tsai_res = coords_to_params(coords_list[idx], var_cols, global_param_config)
-                                    else:
-                                        tsai_res = {}
-                                except:
-                                    tsai_res = {}
+                        tsai_raw = preds_map.get('tsai')
+                        tsai_meta = {}
+                        tsai_params = {}
 
-                            stats = lookup_stats(target_file_data['df'], tsai_res, global_param_config)
+                        if tsai_raw:
+                            tsai_meta = tsai_raw
+                            tsai_id = tsai_raw.get('id')
+
+                             # Resolve index
+                            if isinstance(tsai_id, (int, np.integer)):
+                                try:
+                                    idx = int(tsai_id)
+                                    if 0 <= idx < len(coords_list):
+                                        tsai_params = coords_to_params(coords_list[idx], var_cols, global_param_config)
+                                except:
+                                    pass
+
+                            stats = lookup_stats(target_file_data['df'], tsai_params, global_param_config)
                             if stats['found'] and 'matched_params' in stats:
-                                preds_map['tsai'] = stats['matched_params']
-                            results['tsai'].append({'file': file_name, 'pred': preds_map['tsai'], 'stats': stats})
-                            status_msg.append(f"Tsai:{'Y' if stats['found'] else 'N'}")
+                                tsai_params = stats['matched_params']
+
+                            results['tsai'].append({'file': file_name, 'pred': tsai_params, 'stats': stats, 'model_meta': tsai_meta, 'global_stats': global_stats})
+
+                            # Verbose status
+                            conf = tsai_meta.get('confidence', 0)
+                            cls = tsai_meta.get('pred_class', 0)
+                            status_msg.append(f"Tsai[Y, C:{conf:.2f}, Cls:{cls}]" if stats['found'] else "Tsai[N]")
                         else:
-                            results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}})
-                            status_msg.append("Tsai:-")
+                            results['tsai'].append({'file': file_name, 'pred': {}, 'stats': {'Result': 0, 'Profit': 0, 'found': False}, 'model_meta': {}, 'global_stats': global_stats})
+                            status_msg.append("Tsai[-]")
 
                 except Exception as e:
                     print(f"Error processing result for {file_name}: {e}")
@@ -1100,13 +1168,138 @@ def main():
                 eta_seconds = avg_sec_per_file * rem
 
                 status_str = " | ".join(status_msg)
-                print(f"  > [{files_processed}/{total_files_to_process}] {file_name} | {status_str} | Dur: {duration:.1f}s | ETA: {eta_seconds/60:.2f} min", flush=True)
+
+                # Ground Truth info in terminal
+                gt_str = f"GT[Avg:{gt_avg:.1f}, >25:{gt_count}]"
+
+                print(f"  > [{files_processed}/{total_files_to_process}] {file_name} | {gt_str} | {status_str} | Dur: {duration:.1f}s | ETA: {eta_seconds/60:.2f} min", flush=True)
 
     except KeyboardInterrupt:
         print("\nProcess cancelled by user. Outputting available results...")
 
     # Generate Report
     generate_html_report(results, target_dir)
+
+def generate_diagnostics_section(results):
+    html = """
+    <div class="section">
+        <h2>Master Diagnostics</h2>
+        <p>Detailed analysis of Ground Truth (Actual File Data) vs Model Internal Predictions.</p>
+    """
+
+    # NeuralForecast Diagnostics
+    nf_data = results.get('nf', [])
+    if nf_data:
+        html += """
+        <h3>NeuralForecast Diagnostics</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>File</th>
+                    <th style="background-color: #e6f7ff;">Act Avg</th>
+                    <th style="background-color: #e6f7ff;">Act > 25</th>
+                    <th style="background-color: #e6f7ff;">Act <= 0</th>
+                    <th style="background-color: #fff0f6;">Model Avg</th>
+                    <th style="background-color: #fff0f6;">Model > 25</th>
+                    <th style="background-color: #fff0f6;">Model <= 0</th>
+                    <th style="background-color: #f9f0ff;">Optimism Ratio</th>
+                </tr>
+            </thead>
+            <tbody>
+        """
+        for d in nf_data:
+            g_stats = d.get('global_stats', {})
+            m_meta = d.get('model_meta', {})
+
+            act_avg = g_stats.get('avg', 0)
+            act_high = g_stats.get('count_above', 0)
+            act_neg = g_stats.get('count_neg', 0)
+
+            mod_avg = m_meta.get('avg_pred', 0)
+            mod_high = m_meta.get('count_above', 0)
+            mod_neg = m_meta.get('count_neg', 0)
+
+            # Optimism: Model Avg / Actual Avg
+            # Handle division by zero or negative flip scenarios roughly
+            if abs(act_avg) < 1e-5:
+                optimism = 0.0
+            else:
+                optimism = mod_avg / act_avg
+
+            opt_color = "black"
+            if optimism > 1.2: opt_color = "red" # Over-optimistic
+            elif optimism < 0.8: opt_color = "blue" # Pessimistic
+
+            html += f"""
+            <tr>
+                <td>{d['file']}</td>
+                <td style="background-color: #e6f7ff;">{act_avg:.2f}</td>
+                <td style="background-color: #e6f7ff;">{act_high}</td>
+                <td style="background-color: #e6f7ff;">{act_neg}</td>
+                <td style="background-color: #fff0f6;">{mod_avg:.2f}</td>
+                <td style="background-color: #fff0f6;">{mod_high}</td>
+                <td style="background-color: #fff0f6;">{mod_neg}</td>
+                <td style="background-color: #f9f0ff; color: {opt_color}; font-weight: bold;">{optimism:.2f}x</td>
+            </tr>
+            """
+        html += "</tbody></table>"
+
+    # Tsai Diagnostics
+    tsai_data = results.get('tsai', [])
+    if tsai_data:
+        html += """
+        <h3>Tsai Diagnostics</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>File</th>
+                    <th style="background-color: #e6f7ff;">Act Avg</th>
+                    <th style="background-color: #e6f7ff;">Act > 25</th>
+                    <th style="background-color: #fff0f6;">Conf Score</th>
+                    <th style="background-color: #fff0f6;">Pred Class</th>
+                    <th style="background-color: #fff0f6;">Class 0 (Loss)</th>
+                    <th style="background-color: #fff0f6;">Class 1 (Profit)</th>
+                    <th style="background-color: #fff0f6;">Class 2 (High)</th>
+                </tr>
+            </thead>
+            <tbody>
+        """
+        for d in tsai_data:
+            g_stats = d.get('global_stats', {})
+            m_meta = d.get('model_meta', {})
+
+            act_avg = g_stats.get('avg', 0)
+            act_high = g_stats.get('count_above', 0)
+
+            conf = m_meta.get('confidence', 0)
+            cls = m_meta.get('pred_class', -1)
+
+            c0 = m_meta.get('count_class_0', 0)
+            c1 = m_meta.get('count_class_1', 0)
+            c2 = m_meta.get('count_class_2', 0)
+
+            # Highlight chosen class
+            cls_str = "Unknown"
+            if cls == 0: cls_str = "<span style='color:red'>DNC (0)</span>"
+            elif cls == 1: cls_str = "<span style='color:orange'>Low (1)</span>"
+            elif cls == 2: cls_str = "<span style='color:green'>High (2)</span>"
+
+            html += f"""
+            <tr>
+                <td>{d['file']}</td>
+                <td style="background-color: #e6f7ff;">{act_avg:.2f}</td>
+                <td style="background-color: #e6f7ff;">{act_high}</td>
+                <td style="background-color: #fff0f6;">{conf:.1%}</td>
+                <td style="background-color: #fff0f6;">{cls_str}</td>
+                <td style="background-color: #fff0f6;">{c0}</td>
+                <td style="background-color: #fff0f6;">{c1}</td>
+                <td style="background-color: #fff0f6;">{c2}</td>
+            </tr>
+            """
+        html += "</tbody></table>"
+
+    html += "</div>"
+    return html
 
 def generate_html_report(results, output_dir):
     print("Generating Report...")
@@ -1155,6 +1348,9 @@ def generate_html_report(results, output_dir):
         </div>
         <p>Comparison of Control Group (Avg Best Vectors), Darts (Vector Trajectory), NeuralForecast (Panel Surface), and Tsai (Panel Surface).</p>
     """)
+
+    # --- Diagnostics Section ---
+    html_parts.append(generate_diagnostics_section(results))
 
     models = [('Control Group', 'control'), ('Darts', 'darts'), ('NeuralForecast', 'nf'), ('Tsai', 'tsai')]
 
@@ -1229,6 +1425,41 @@ def generate_html_report(results, output_dir):
                 <img src="data:image/png;base64,{img2_b64}" />
             </div>
             <table>
+        """)
+
+        # Dynamic Headers
+        if key == 'nf':
+            html_parts.append("""
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Found?</th>
+                        <th>Result</th>
+                        <th>Profit</th>
+                        <th>Params</th>
+                        <th>Model Pred</th>
+                        <th>Model Avg</th>
+                        <th>Count > 25</th>
+                    </tr>
+                </thead>
+            """)
+        elif key == 'tsai':
+            html_parts.append("""
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Found?</th>
+                        <th>Result</th>
+                        <th>Profit</th>
+                        <th>Params</th>
+                        <th>Confidence</th>
+                        <th>Pred Class</th>
+                        <th>Count HR</th>
+                    </tr>
+                </thead>
+            """)
+        else:
+            html_parts.append("""
                 <thead>
                     <tr>
                         <th>File</th>
@@ -1238,12 +1469,28 @@ def generate_html_report(results, output_dir):
                         <th>Params</th>
                     </tr>
                 </thead>
-                <tbody>
-        """)
+            """)
+
+        html_parts.append("<tbody>")
 
         for d in data:
             params_str = ", ".join([f"{k}={v:.2f}" for k,v in d['pred'].items()])
             color = "green" if d['stats']['found'] else "red"
+
+            meta = d.get('model_meta', {})
+            extra_cols = ""
+
+            if key == 'nf':
+                p_val = meta.get('pred_val', 0)
+                p_avg = meta.get('avg_pred', 0)
+                cnt = meta.get('count_above', 0)
+                extra_cols = f"<td>{p_val:.2f}</td><td>{p_avg:.2f}</td><td>{cnt}</td>"
+            elif key == 'tsai':
+                conf = meta.get('confidence', 0)
+                cls = meta.get('pred_class', 0)
+                cnt = meta.get('count_class_2', 0)
+                extra_cols = f"<td>{conf:.2%}</td><td>{cls}</td><td>{cnt}</td>"
+
             html_parts.append(f"""
                 <tr>
                     <td>{d['file']}</td>
@@ -1251,6 +1498,7 @@ def generate_html_report(results, output_dir):
                     <td>{d['stats']['Result']:.2f}</td>
                     <td>{d['stats']['Profit']:.2f}</td>
                     <td>{params_str}</td>
+                    {extra_cols}
                 </tr>
             """)
 
