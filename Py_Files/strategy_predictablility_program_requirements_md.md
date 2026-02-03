@@ -51,10 +51,6 @@ The following requirements outline the intended logic for the strategy predictab
     *   **NeuralForecast:** Neural forecasting model (NHITS).
 *   **Epochs:** Models should process the data multiple times (e.g., `EPOCHS_NUMBER = 3`). *(Note: Implementation pending/configurable)*
 
-### 1.4 Validation & Verification
-*   **Prediction Check:** Compare the model predictions against the actual next sequential document (the file immediately following the input window).
-*   **Matching Logic:** Check for an "Exact" or "Close Match" (within tolerance) in the target file.
-
 ---
 
 ## 2. Technical Specifications & Current Implementation
@@ -76,19 +72,34 @@ Analysis of the current codebase (`strategy_predictability_program.py`) highligh
     *   `torch.set_float32_matmul_precision('medium')` is set for Tensor Core optimization.
 
 ### 2.2 Model Implementations
-*   **Control Group:** Calculates the average of normalized parameter "steps" (integer grid coordinates) over the `VECTOR_INPUT` window.
-*   **Darts (Random Forest):**
-    *   Uses `RandomForest` regressor with `n_estimators=50`.
-    *   Trains on the trajectory of the "Best Vector" (currently selected by Max Result).
-    *   Runs on all CPU cores (`n_jobs=-1`).
-*   **NeuralForecast (NHITS):**
-    *   Uses the `NHITS` model (Horizon=1, Input Size=`VECTOR_INPUT`).
-    *   Trains on the full "Result Surface" of the `TRAINING_WINDOW`.
-    *   Logging and checkpointing are disabled for performance.
-*   **Tsai (InceptionTime):**
-    *   Uses the `InceptionTime` architecture (CNN/Transformer hybrid for time series).
-    *   Trains on slices of the Master Matrix corresponding to the `TRAINING_WINDOW`.
-    *   Currently configured for 5 epochs (`fit_one_cycle(5, 1e-3)`).
+
+#### **Control Group**
+*   Calculates the average of normalized parameter "steps" (integer grid coordinates) over the `VECTOR_INPUT` window.
+
+#### **Darts (Random Forest)**
+*   Uses `RandomForest` regressor with `n_estimators=50`.
+*   Trains on the trajectory of the "Best Vector" (currently selected by Max Result).
+*   Runs on all CPU cores (`n_jobs=-1`).
+
+#### **NeuralForecast (NHITS)**
+*   **Loss Function:** `TweedieLoss(rho=1.5)` (Optimized for zero-inflated data).
+*   **Data Preprocessing:**
+    *   `y_new = max(0, y_old + 4.33)`
+    *   Static Covariances: Strategy parameter values are passed as static variables (`static_df`) mapped to `unique_id`.
+*   **Training:** Trains on the full "Result Surface" of the `TRAINING_WINDOW`.
+*   **Prediction:** Selects the parameter set with the **Highest Predicted Result**.
+
+#### **Tsai (InceptionTime)**
+*   **Type:** Time Series Classification (TSClassifier).
+*   **Loss Function:** `CrossEntropyLoss`.
+*   **Inputs:**
+    *   Dynamic: History of Results (Length `VECTOR_INPUT`).
+    *   Static: Strategy parameter values are included as **Constant Channels** (broadcasted across the time window) to match the "Static Covariances" logic of NeuralForecast.
+*   **Targets (Bins):**
+    *   **DNC (Class 0):** `Result <= 0` (Do Not Care / Loss).
+    *   **LR (Class 1):** `0 < Result <= RESULT_CUTOFF` (Low Result).
+    *   **HR (Class 2):** `Result > RESULT_CUTOFF` (High Result).
+*   **Prediction:** Selects the parameter set with the **Highest Confidence (Probability)** in the **HR (High Result)** class.
 
 ### 2.3 Data Handling & Robustness
 *   **Robust CSV Reader:** Custom `read_csv_robust` function detects separators (`;` vs `,`) and decimal formats (European vs US) automatically using the C engine for speed.
