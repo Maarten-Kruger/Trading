@@ -15,6 +15,9 @@ You can install all the required dependencies with the following pip command:
 
 ```bash
 pip install pandas numpy matplotlib darts neuralforecast tsai scikit-learn
+```
+
+```bash
 python strategy_predictability_program.py
 ```
 ---
