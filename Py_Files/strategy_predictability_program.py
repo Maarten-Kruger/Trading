@@ -31,7 +31,7 @@ VECTOR_INPUT = 10  # Lookback window size (Model Lags)
 TRAINING_WINDOW = 30 # Size of the sliding window used for training (Must be > VECTOR_INPUT)
 MAX_WORKERS = 4      # Max parallel processes (Adjust based on VRAM)
 TSAI_EPOCHS = 5      # Epochs for Tsai InceptionTime model
-NF_MAX_STEPS = 250   # Max steps for NeuralForecast NHITS
+NF_MAX_STEPS = 1000  # Max steps for NeuralForecast NHITS
 
 # --- Library Availability Flags (Lazy Check) ---
 # We check availability without importing to keep workers fast
@@ -362,13 +362,8 @@ def get_forecasters(flags):
                     # Pre-calculate params for all coords
                     # This is better done outside but we do it here.
 
-                    param_dict_list = []
-                    for coord in coords_list:
-                        # coords_to_params returns dict
-                        p = coords_to_params(coord, self.var_cols, self.config)
-                        param_dict_list.append(p)
-
-                    static_df = pd.DataFrame(param_dict_list)
+                    # Use integer step coordinates directly for static features to ensure normalization
+                    static_df = pd.DataFrame(coords_list, columns=self.var_cols)
                     static_df['unique_id'] = np.arange(len(coords_list))
 
                     # Reorder: unique_id first
