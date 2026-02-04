@@ -307,10 +307,9 @@ def get_forecasters(flags):
                     # Check for GPU
                     accel = 'gpu' if torch.cuda.is_available() else 'cpu'
                     # print(f"[NeuralForecast] Using accelerator: {accel}")
-                    # Use TweedieLoss as requested (rho=1.5)
-                    # TweedieLoss is not directly available, so we use DistributionLoss with Tweedie distribution
+                    # Use Bernoulli Distribution for binary classification (High Profit Probability)
                     self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=max_steps,
-                                       loss=DistributionLoss(distribution='Tweedie', rho=1.5),
+                                       loss=DistributionLoss(distribution='Bernoulli', return_params=True),
                                        enable_checkpointing=False, logger=False,
                                        accelerator=accel, batch_size=4096,
                                        stat_cat_exog_list=self.var_cols)
@@ -333,10 +332,10 @@ def get_forecasters(flags):
                     if Y_df_window.empty:
                         return None
 
-                    # --- Preprocessing (New Requirement) ---
-                    # Add 4.33 to Results, then clip negative to 0
+                    # --- Preprocessing (Classification Target) ---
+                    # Target is 1.0 if Result > RESULT_CUTOFF, else 0.0
                     Y_df_window = Y_df_window.copy() # Avoid SettingWithCopy
-                    Y_df_window['y'] = (Y_df_window['y'] + 4.33).clip(lower=0)
+                    Y_df_window['y'] = (Y_df_window['y'] > RESULT_CUTOFF).astype(np.float32)
 
                     # --- Static Covariances (New Requirement) ---
                     # Build static_df from coords_list
