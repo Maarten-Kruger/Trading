@@ -31,7 +31,7 @@ VECTOR_INPUT = 10  # Lookback window size (Model Lags)
 TRAINING_WINDOW = 30 # Size of the sliding window used for training (Must be > VECTOR_INPUT)
 MAX_WORKERS = 4      # Max parallel processes (Adjust based on VRAM)
 TSAI_EPOCHS = 5      # Epochs for Tsai InceptionTime model
-NF_MAX_STEPS = 100   # Max steps for NeuralForecast NHITS (Reduced for speed)
+NF_EPOCHS = 5        # Epochs for NeuralForecast NHITS
 
 # --- Library Availability Flags (Lazy Check) ---
 # We check availability without importing to keep workers fast
@@ -305,14 +305,24 @@ def get_forecasters(flags):
                     self.var_cols = var_cols
                     # Use NHITS - fast and effective
                     # Check for GPU
-                    accel = 'gpu' if torch.cuda.is_available() else 'cpu'
-                    # print(f"[NeuralForecast] Using accelerator: {accel}")
+                    if torch.cuda.is_available():
+                        accel = 'gpu'
+                    else:
+                        accel = 'cpu'
+
+                    # Always set devices=1.
+                    # On CPU, this prevents "devices selected with CPUAccelerator should be an int > 0" error.
+                    # On GPU, this ensures we use 1 GPU per process (we are already in a worker process).
+                    devices = 1
+
+                    print(f"    [NeuralForecast] Using accelerator: {accel}, devices: {devices}", flush=True)
+
                     # Use Bernoulli Distribution for binary classification (High Profit Probability)
                     # explicitly set scaler_type='identity' to avoid scaling 0/1 targets
                     self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=max_steps,
                                        loss=DistributionLoss(distribution='Bernoulli', return_params=True),
                                        enable_checkpointing=False, logger=False,
-                                       accelerator=accel, batch_size=4096,
+                                       accelerator=accel, devices=devices, batch_size=4096,
                                        scaler_type='identity')
 
                 def predict(self, Y_df_global, window_start_idx, window_end_idx, coords_list):
@@ -686,7 +696,7 @@ def worker_predict_week(task_args):
         global_param_config = task_args['config']
         var_cols = task_args['var_cols']
         flags = task_args['flags']
-        epochs = task_args.get('epochs', {'tsai': 5, 'nf': 100})
+        epochs = task_args.get('epochs', {'tsai': 5, 'nf': 5})
 
         HAS_DARTS = flags['HAS_DARTS']
         HAS_NF = flags['HAS_NF']
@@ -734,8 +744,27 @@ def worker_predict_week(task_args):
                      Y_df_window['ds'] = pd.to_datetime(Y_df_window['ds'])
                      Y_df_window['y'] = Y_df_window['y'].astype(np.float32)
 
+                     # Calculate max_steps dynamically based on data size and desired epochs
+                     # Total Samples = Num Coords * (Time Window - Input Lag)
+                     # Steps = ceil(Total Samples / Batch Size) * Epochs
+                     # Note: num_coords and nf_dates are defined in the block above
+                     time_window_calc = len(nf_dates)
+                     samples_per_series = max(0, time_window_calc - VECTOR_INPUT)
+                     total_samples = num_coords * samples_per_series
+                     batch_size_nf = 4096
+                     nf_epochs_val = epochs.get('nf', 5)
+
+                     if total_samples > 0:
+                         steps_per_epoch = int(np.ceil(total_samples / batch_size_nf))
+                     else:
+                         steps_per_epoch = 1
+
+                     max_steps_calc = max(1, steps_per_epoch * nf_epochs_val)
+
+                     print(f"  [Worker {os.getpid()}] {file_name}: [NF] Calculated max_steps: {max_steps_calc} (Epochs: {nf_epochs_val}, Samples: {total_samples})", flush=True)
+
                      NeuralForecastForecaster = forecaster_classes['NeuralForecastForecaster']
-                     nf_model = NeuralForecastForecaster(global_param_config, var_cols, max_steps=epochs['nf'])
+                     nf_model = NeuralForecastForecaster(global_param_config, var_cols, max_steps=max_steps_calc)
 
                      # Pass original window indices so predict calculates correct date filter
                      results['nf'] = nf_model.predict(Y_df_window, task_args['window_start'], task_args['window_end'], coords_list)
@@ -808,9 +837,33 @@ def main():
 
     # Warning for CPU usage with high workers
     import torch
-    if not torch.cuda.is_available() and MAX_WORKERS > 2:
-        print(f"[WARNING] GPU not detected. Running {MAX_WORKERS} workers on CPU may be very slow.")
-        print("Consider reducing MAX_WORKERS to 1 or 2, or enabling GPU acceleration.")
+    if not torch.cuda.is_available():
+        if MAX_WORKERS > 2:
+            print(f"[WARNING] GPU not detected. Running {MAX_WORKERS} workers on CPU may be very slow.")
+            print("Consider reducing MAX_WORKERS to 1 or 2, or enabling GPU acceleration.")
+
+        # Debug info for user claiming to have GPU
+        print("\n--- GPU Debug Info ---")
+        print(f"PyTorch Version: {torch.__version__}")
+        print(f"CUDA Available: {torch.cuda.is_available()}")
+        print(f"CUDA Version: {torch.version.cuda}")
+
+        if "+cu" in torch.__version__ and not torch.cuda.is_available():
+            print("\n[HINT] PyTorch is installed with CUDA support, but cannot detect the GPU.")
+            print("       This usually means your NVIDIA Drivers are missing or outdated.")
+            print("       Please update your NVIDIA Drivers from https://www.nvidia.com/Download/index.aspx")
+        else:
+            print("If you have a GPU, ensure you installed the CUDA-enabled version of PyTorch.")
+            print("Run: pip install torch --index-url https://download.pytorch.org/whl/cu118 (or appropriate version)")
+
+        print("----------------------\n")
+    else:
+        print("\n--- System Status ---")
+        n_gpus = torch.cuda.device_count()
+        print(f"GPU Detected: {torch.cuda.get_device_name(0)} (Total: {n_gpus})")
+        print("CUDA: Available")
+        print("Status: Ready to process")
+        print("---------------------\n")
 
     print(f"VECTOR_INPUT ({VECTOR_INPUT}): Lookback window size (Model Lags). The number of past time steps (files/vectors) the model looks at to make a prediction.")
     print(f"TRAINING_WINDOW ({TRAINING_WINDOW}): Size of the sliding window used for training. The number of recent files included in the training dataset for the model.")
@@ -1025,7 +1078,7 @@ def main():
             'window_start': window_start,
             'window_end': window_end,
             'flags': flags,
-            'epochs': {'tsai': TSAI_EPOCHS, 'nf': NF_MAX_STEPS}
+            'epochs': {'tsai': TSAI_EPOCHS, 'nf': NF_EPOCHS}
         }
         tasks.append((i, task))
 
@@ -1039,6 +1092,10 @@ def main():
             future_to_idx = {executor.submit(worker_predict_week, t[1]): t[0] for t in tasks}
 
             print("\n--- Parallel Processing Started ---")
+
+            # Timing variables
+            last_batch_time = time.time()
+            batch_times = deque(maxlen=10) # Stores duration for each batch of MAX_WORKERS
 
             for future in concurrent.futures.as_completed(future_to_idx):
                 i = future_to_idx[future]
@@ -1166,23 +1223,23 @@ def main():
                 # Progress & ETA Calculation
                 files_processed += 1
                 now = time.time()
-                recent_completion_times.append(now)
-
-                if len(recent_completion_times) > 1:
-                    # Calculate speed based on sliding window (ignoring initial warmup if deque is full/partial)
-                    # Time delta between oldest and newest in the window
-                    window_duration = recent_completion_times[-1] - recent_completion_times[0]
-                    # Number of intervals is len - 1
-                    avg_sec_per_file = window_duration / (len(recent_completion_times) - 1)
-                else:
-                    # Fallback to global average if not enough data
-                    avg_sec_per_file = (now - start_time) / files_processed
-
-                rem = total_files_to_process - files_processed
-                eta_seconds = avg_sec_per_file * rem
 
                 # Check if we should print based on MAX_WORKERS batch or completion
+                # We assume MAX_WORKERS files are done when this condition hits (roughly)
                 if files_processed % MAX_WORKERS == 0 or files_processed == total_files_to_process:
+
+                    # Calculate time for this batch
+                    current_batch_duration = now - last_batch_time
+                    last_batch_time = now
+                    batch_times.append(current_batch_duration)
+
+                    # Avg time per batch (of MAX_WORKERS files)
+                    avg_batch_time = sum(batch_times) / len(batch_times)
+
+                    # ETA = ((files left) * (time per max workers files)) / MAX_WORKERS
+                    files_left = total_files_to_process - files_processed
+                    eta_seconds = (files_left * avg_batch_time) / MAX_WORKERS
+
                     total_elapsed = now - start_time
                     print(f"\n\n\n Files Completed: {files_processed}/{total_files_to_process} | Time: {total_elapsed:.0f} sec | ETA: {eta_seconds/60:.2f} min \n\n\n", flush=True)
 
