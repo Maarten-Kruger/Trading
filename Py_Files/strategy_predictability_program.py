@@ -31,7 +31,7 @@ VECTOR_INPUT = 10  # Lookback window size (Model Lags)
 TRAINING_WINDOW = 30 # Size of the sliding window used for training (Must be > VECTOR_INPUT)
 MAX_WORKERS = 4      # Max parallel processes (Adjust based on VRAM)
 TSAI_EPOCHS = 5      # Epochs for Tsai InceptionTime model
-NF_MAX_STEPS = 1000  # Max steps for NeuralForecast NHITS
+NF_MAX_STEPS = 100   # Max steps for NeuralForecast NHITS (Reduced for speed)
 
 # --- Library Availability Flags (Lazy Check) ---
 # We check availability without importing to keep workers fast
@@ -308,11 +308,12 @@ def get_forecasters(flags):
                     accel = 'gpu' if torch.cuda.is_available() else 'cpu'
                     # print(f"[NeuralForecast] Using accelerator: {accel}")
                     # Use Bernoulli Distribution for binary classification (High Profit Probability)
+                    # explicitly set scaler_type='identity' to avoid scaling 0/1 targets
                     self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=max_steps,
                                        loss=DistributionLoss(distribution='Bernoulli', return_params=True),
                                        enable_checkpointing=False, logger=False,
                                        accelerator=accel, batch_size=4096,
-                                       stat_cat_exog_list=self.var_cols)
+                                       scaler_type='identity')
 
                 def predict(self, Y_df_global, window_start_idx, window_end_idx, coords_list):
                     if Y_df_global is None or Y_df_global.empty:
@@ -380,10 +381,18 @@ def get_forecasters(flags):
                     if future_df.empty:
                         return None
 
-                    # Calculate Stats (B) - Model Prediction
+                    # Debug Stats
                     pred_col = 'NHITS'
+                    if pred_col in future_df.columns:
+                        d_min = future_df[pred_col].min()
+                        d_max = future_df[pred_col].max()
+                        d_mean = future_df[pred_col].mean()
+                        print(f"    [NF DEBUG] Pred Range: Min={d_min:.4f}, Max={d_max:.4f}, Mean={d_mean:.4f}")
+
+                    # Calculate Stats (B) - Model Prediction
+                    # Model predicts Probability (0-1)
                     avg_pred = float(future_df[pred_col].mean())
-                    count_above = int((future_df[pred_col] > RESULT_CUTOFF).sum())
+                    count_above = int((future_df[pred_col] > 0.5).sum()) # Check > 50% confidence
                     count_neg = int((future_df[pred_col] <= 0).sum())
 
                     # Predict high result (regression)
@@ -702,7 +711,8 @@ def worker_predict_week(task_args):
                 darts_model = DartsForecaster(global_param_config, var_cols)
                 results['darts'] = darts_model.predict(history_best)
             except Exception as e:
-                pass
+                print(f"  [Worker {os.getpid()}] {file_name}: Darts Error: {e}", flush=True)
+                traceback.print_exc()
 
         # 2. NeuralForecast
         if HAS_NF and 'NeuralForecastForecaster' in forecaster_classes:
@@ -727,12 +737,11 @@ def worker_predict_week(task_args):
                      NeuralForecastForecaster = forecaster_classes['NeuralForecastForecaster']
                      nf_model = NeuralForecastForecaster(global_param_config, var_cols, max_steps=epochs['nf'])
 
-                     # Suppress output
-                     with open(os.devnull, 'w') as devnull:
-                         # Pass original window indices so predict calculates correct date filter
-                         results['nf'] = nf_model.predict(Y_df_window, task_args['window_start'], task_args['window_end'], coords_list)
+                     # Pass original window indices so predict calculates correct date filter
+                     results['nf'] = nf_model.predict(Y_df_window, task_args['window_start'], task_args['window_end'], coords_list)
             except Exception as e:
-                pass
+                print(f"  [Worker {os.getpid()}] {file_name}: NeuralForecast Error: {e}", flush=True)
+                traceback.print_exc()
 
         # 3. Tsai
         if HAS_TSAI and 'TsaiForecaster' in forecaster_classes:
@@ -748,7 +757,8 @@ def worker_predict_week(task_args):
                     win_len = slice_matrix.shape[1]
                     results['tsai'] = tsai_model.predict(slice_matrix, 0, win_len, coords_list)
             except Exception as e:
-                pass
+                print(f"  [Worker {os.getpid()}] {file_name}: Tsai Error: {e}", flush=True)
+                traceback.print_exc()
 
         duration = time.time() - start_time
         return {'file_name': file_name, 'results': results, 'duration': duration}
@@ -795,6 +805,13 @@ def main():
     print(f"Found {len(csv_files)} files.")
 
     print("\n=== Definitions ===")
+
+    # Warning for CPU usage with high workers
+    import torch
+    if not torch.cuda.is_available() and MAX_WORKERS > 2:
+        print(f"[WARNING] GPU not detected. Running {MAX_WORKERS} workers on CPU may be very slow.")
+        print("Consider reducing MAX_WORKERS to 1 or 2, or enabling GPU acceleration.")
+
     print(f"VECTOR_INPUT ({VECTOR_INPUT}): Lookback window size (Model Lags). The number of past time steps (files/vectors) the model looks at to make a prediction.")
     print(f"TRAINING_WINDOW ({TRAINING_WINDOW}): Size of the sliding window used for training. The number of recent files included in the training dataset for the model.")
     print("-" * 30)
@@ -1046,12 +1063,14 @@ def main():
                     gt_avg = np.mean(grid_vals) if grid_vals else 0
                     gt_count = sum(1 for v in grid_vals if v > RESULT_CUTOFF)
                     gt_neg_count = sum(1 for v in grid_vals if v <= 0)
+                    gt_total = len(grid_vals)
 
                     # Store global stats for reporting
                     global_stats = {
                         'avg': gt_avg,
                         'count_above': gt_count,
-                        'count_neg': gt_neg_count
+                        'count_neg': gt_neg_count,
+                        'total': gt_total
                     }
 
                     status_msg = []
@@ -1185,16 +1204,16 @@ def generate_diagnostics_section(results):
     if nf_data:
         html += """
         <h3>NeuralForecast Diagnostics</h3>
+        <p>Model predicts Probability (0-1). Comparing 'Win Rate' (Probability) instead of raw Result.</p>
         <table>
             <thead>
                 <tr>
                     <th>File</th>
-                    <th style="background-color: #e6f7ff;">Act Avg</th>
+                    <th style="background-color: #e6f7ff;">Act Win Rate</th>
                     <th style="background-color: #e6f7ff;">Act > 25</th>
-                    <th style="background-color: #e6f7ff;">Act <= 0</th>
-                    <th style="background-color: #fff0f6;">Model Avg</th>
-                    <th style="background-color: #fff0f6;">Model > 25</th>
-                    <th style="background-color: #fff0f6;">Model <= 0</th>
+                    <th style="background-color: #e6f7ff;">Total</th>
+                    <th style="background-color: #fff0f6;">Model Win Rate</th>
+                    <th style="background-color: #fff0f6;">Model > 50%</th>
                     <th style="background-color: #f9f0ff;">Optimism Ratio</th>
                 </tr>
             </thead>
@@ -1204,20 +1223,19 @@ def generate_diagnostics_section(results):
             g_stats = d.get('global_stats', {})
             m_meta = d.get('model_meta', {})
 
-            act_avg = g_stats.get('avg', 0)
             act_high = g_stats.get('count_above', 0)
-            act_neg = g_stats.get('count_neg', 0)
+            total = g_stats.get('total', 1)
+            if total == 0: total = 1
+            act_prob = act_high / total
 
-            mod_avg = m_meta.get('avg_pred', 0)
-            mod_high = m_meta.get('count_above', 0)
-            mod_neg = m_meta.get('count_neg', 0)
+            mod_avg = m_meta.get('avg_pred', 0) # Average Probability
+            mod_high = m_meta.get('count_above', 0) # Count > 0.5
 
-            # Optimism: Model Avg / Actual Avg
-            # Handle division by zero or negative flip scenarios roughly
-            if abs(act_avg) < 1e-5:
+            # Optimism: Model Avg Prob / Actual Win Rate
+            if act_prob < 1e-5:
                 optimism = 0.0
             else:
-                optimism = mod_avg / act_avg
+                optimism = mod_avg / act_prob
 
             opt_color = "black"
             if optimism > 1.2: opt_color = "red" # Over-optimistic
@@ -1226,12 +1244,11 @@ def generate_diagnostics_section(results):
             html += f"""
             <tr>
                 <td>{d['file']}</td>
-                <td style="background-color: #e6f7ff;">{act_avg:.2f}</td>
+                <td style="background-color: #e6f7ff;">{act_prob:.2%}</td>
                 <td style="background-color: #e6f7ff;">{act_high}</td>
-                <td style="background-color: #e6f7ff;">{act_neg}</td>
-                <td style="background-color: #fff0f6;">{mod_avg:.2f}</td>
+                <td style="background-color: #e6f7ff;">{total}</td>
+                <td style="background-color: #fff0f6;">{mod_avg:.2%}</td>
                 <td style="background-color: #fff0f6;">{mod_high}</td>
-                <td style="background-color: #fff0f6;">{mod_neg}</td>
                 <td style="background-color: #f9f0ff; color: {opt_color}; font-weight: bold;">{optimism:.2f}x</td>
             </tr>
             """
@@ -1430,9 +1447,9 @@ def generate_html_report(results, output_dir):
                         <th>Result</th>
                         <th>Profit</th>
                         <th>Params</th>
-                        <th>Model Pred</th>
+                        <th>Confidence</th>
                         <th>Model Avg</th>
-                        <th>Count > 25</th>
+                        <th>Count > 50%</th>
                     </tr>
                 </thead>
             """)
@@ -1477,7 +1494,7 @@ def generate_html_report(results, output_dir):
                 p_val = meta.get('pred_val', 0)
                 p_avg = meta.get('avg_pred', 0)
                 cnt = meta.get('count_above', 0)
-                extra_cols = f"<td>{p_val:.2f}</td><td>{p_avg:.2f}</td><td>{cnt}</td>"
+                extra_cols = f"<td>{p_val:.4f}</td><td>{p_avg:.4f}</td><td>{cnt}</td>"
             elif key == 'tsai':
                 conf = meta.get('confidence', 0)
                 cls = meta.get('pred_class', 0)
