@@ -313,7 +313,6 @@ def get_forecasters(flags):
                                        loss=DistributionLoss(distribution='Bernoulli', return_params=True),
                                        enable_checkpointing=False, logger=False,
                                        accelerator=accel, batch_size=4096,
-                                       stat_cat_exog_list=self.var_cols,
                                        scaler_type='identity')
 
                 def predict(self, Y_df_global, window_start_idx, window_end_idx, coords_list):
