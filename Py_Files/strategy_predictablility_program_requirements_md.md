@@ -23,6 +23,13 @@ pip install pandas numpy matplotlib darts neuralforecast tsai scikit-learn
 ```bash
 python strategy_predictability_program.py
 ```
+
+```bash
+pip install tensorflow[and-cuda]
+```
+
+
+
 ---
 
 
