@@ -857,6 +857,13 @@ def main():
             print("Run: pip install torch --index-url https://download.pytorch.org/whl/cu118 (or appropriate version)")
 
         print("----------------------\n")
+    else:
+        print("\n--- System Status ---")
+        n_gpus = torch.cuda.device_count()
+        print(f"GPU Detected: {torch.cuda.get_device_name(0)} (Total: {n_gpus})")
+        print("CUDA: Available")
+        print("Status: Ready to process")
+        print("---------------------\n")
 
     print(f"VECTOR_INPUT ({VECTOR_INPUT}): Lookback window size (Model Lags). The number of past time steps (files/vectors) the model looks at to make a prediction.")
     print(f"TRAINING_WINDOW ({TRAINING_WINDOW}): Size of the sliding window used for training. The number of recent files included in the training dataset for the model.")
