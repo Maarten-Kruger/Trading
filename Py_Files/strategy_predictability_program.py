@@ -312,7 +312,8 @@ def get_forecasters(flags):
                     self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=max_steps,
                                        loss=DistributionLoss(distribution='Tweedie', rho=1.5),
                                        enable_checkpointing=False, logger=False,
-                                       accelerator=accel, batch_size=4096)
+                                       accelerator=accel, batch_size=4096,
+                                       stat_cat_exog_list=self.var_cols)
 
                 def predict(self, Y_df_global, window_start_idx, window_end_idx, coords_list):
                     if Y_df_global is None or Y_df_global.empty:
@@ -1162,12 +1163,10 @@ def main():
                 rem = total_files_to_process - files_processed
                 eta_seconds = avg_sec_per_file * rem
 
-                status_str = " | ".join(status_msg)
-
-                # Ground Truth info in terminal
-                gt_str = f"GT[Avg:{gt_avg:.1f}, >25:{gt_count}]"
-
-                print(f"  > [{files_processed}/{total_files_to_process}] {file_name} | {gt_str} | {status_str} | Dur: {duration:.1f}s | ETA: {eta_seconds/60:.2f} min", flush=True)
+                # Check if we should print based on MAX_WORKERS batch or completion
+                if files_processed % MAX_WORKERS == 0 or files_processed == total_files_to_process:
+                    total_elapsed = now - start_time
+                    print(f"\n\n\n Files Completed: {files_processed}/{total_files_to_process} | Time: {total_elapsed:.0f} sec | ETA: {eta_seconds/60:.2f} min \n\n\n", flush=True)
 
     except KeyboardInterrupt:
         print("\nProcess cancelled by user. Outputting available results...")
