@@ -31,7 +31,7 @@ VECTOR_INPUT = 10  # Lookback window size (Model Lags)
 TRAINING_WINDOW = 30 # Size of the sliding window used for training (Must be > VECTOR_INPUT)
 MAX_WORKERS = 4      # Max parallel processes (Adjust based on VRAM)
 TSAI_EPOCHS = 5      # Epochs for Tsai InceptionTime model
-NF_MAX_STEPS = 1000  # Max steps for NeuralForecast NHITS
+NF_MAX_STEPS = 100   # Max steps for NeuralForecast NHITS (Reduced for speed)
 
 # --- Library Availability Flags (Lazy Check) ---
 # We check availability without importing to keep workers fast
@@ -805,6 +805,13 @@ def main():
     print(f"Found {len(csv_files)} files.")
 
     print("\n=== Definitions ===")
+
+    # Warning for CPU usage with high workers
+    import torch
+    if not torch.cuda.is_available() and MAX_WORKERS > 2:
+        print(f"[WARNING] GPU not detected. Running {MAX_WORKERS} workers on CPU may be very slow.")
+        print("Consider reducing MAX_WORKERS to 1 or 2, or enabling GPU acceleration.")
+
     print(f"VECTOR_INPUT ({VECTOR_INPUT}): Lookback window size (Model Lags). The number of past time steps (files/vectors) the model looks at to make a prediction.")
     print(f"TRAINING_WINDOW ({TRAINING_WINDOW}): Size of the sliding window used for training. The number of recent files included in the training dataset for the model.")
     print("-" * 30)
