@@ -712,7 +712,8 @@ def worker_predict_week(task_args):
                 darts_model = DartsForecaster(global_param_config, var_cols)
                 results['darts'] = darts_model.predict(history_best)
             except Exception as e:
-                pass
+                print(f"  [Worker {os.getpid()}] {file_name}: Darts Error: {e}", flush=True)
+                traceback.print_exc()
 
         # 2. NeuralForecast
         if HAS_NF and 'NeuralForecastForecaster' in forecaster_classes:
@@ -737,12 +738,11 @@ def worker_predict_week(task_args):
                      NeuralForecastForecaster = forecaster_classes['NeuralForecastForecaster']
                      nf_model = NeuralForecastForecaster(global_param_config, var_cols, max_steps=epochs['nf'])
 
-                     # Suppress output
-                     with open(os.devnull, 'w') as devnull:
-                         # Pass original window indices so predict calculates correct date filter
-                         results['nf'] = nf_model.predict(Y_df_window, task_args['window_start'], task_args['window_end'], coords_list)
+                     # Pass original window indices so predict calculates correct date filter
+                     results['nf'] = nf_model.predict(Y_df_window, task_args['window_start'], task_args['window_end'], coords_list)
             except Exception as e:
-                pass
+                print(f"  [Worker {os.getpid()}] {file_name}: NeuralForecast Error: {e}", flush=True)
+                traceback.print_exc()
 
         # 3. Tsai
         if HAS_TSAI and 'TsaiForecaster' in forecaster_classes:
@@ -758,7 +758,8 @@ def worker_predict_week(task_args):
                     win_len = slice_matrix.shape[1]
                     results['tsai'] = tsai_model.predict(slice_matrix, 0, win_len, coords_list)
             except Exception as e:
-                pass
+                print(f"  [Worker {os.getpid()}] {file_name}: Tsai Error: {e}", flush=True)
+                traceback.print_exc()
 
         duration = time.time() - start_time
         return {'file_name': file_name, 'results': results, 'duration': duration}
