@@ -307,12 +307,15 @@ def get_forecasters(flags):
                     # Check for GPU
                     if torch.cuda.is_available():
                         accel = 'gpu'
-                        devices = 1
                     else:
                         accel = 'cpu'
-                        devices = None
 
-                    print(f"    [NeuralForecast] Using accelerator: {accel}", flush=True)
+                    # Always set devices=1.
+                    # On CPU, this prevents "devices selected with CPUAccelerator should be an int > 0" error.
+                    # On GPU, this ensures we use 1 GPU per process (we are already in a worker process).
+                    devices = 1
+
+                    print(f"    [NeuralForecast] Using accelerator: {accel}, devices: {devices}", flush=True)
 
                     # Use Bernoulli Distribution for binary classification (High Profit Probability)
                     # explicitly set scaler_type='identity' to avoid scaling 0/1 targets
@@ -744,10 +747,10 @@ def worker_predict_week(task_args):
                      # Calculate max_steps dynamically based on data size and desired epochs
                      # Total Samples = Num Coords * (Time Window - Input Lag)
                      # Steps = ceil(Total Samples / Batch Size) * Epochs
-                     num_coords_calc = nf_matrix.shape[0]
-                     time_window_calc = nf_matrix.shape[1]
+                     # Note: num_coords and nf_dates are defined in the block above
+                     time_window_calc = len(nf_dates)
                      samples_per_series = max(0, time_window_calc - VECTOR_INPUT)
-                     total_samples = num_coords_calc * samples_per_series
+                     total_samples = num_coords * samples_per_series
                      batch_size_nf = 4096
                      nf_epochs_val = epochs.get('nf', 5)
 
@@ -834,9 +837,26 @@ def main():
 
     # Warning for CPU usage with high workers
     import torch
-    if not torch.cuda.is_available() and MAX_WORKERS > 2:
-        print(f"[WARNING] GPU not detected. Running {MAX_WORKERS} workers on CPU may be very slow.")
-        print("Consider reducing MAX_WORKERS to 1 or 2, or enabling GPU acceleration.")
+    if not torch.cuda.is_available():
+        if MAX_WORKERS > 2:
+            print(f"[WARNING] GPU not detected. Running {MAX_WORKERS} workers on CPU may be very slow.")
+            print("Consider reducing MAX_WORKERS to 1 or 2, or enabling GPU acceleration.")
+
+        # Debug info for user claiming to have GPU
+        print("\n--- GPU Debug Info ---")
+        print(f"PyTorch Version: {torch.__version__}")
+        print(f"CUDA Available: {torch.cuda.is_available()}")
+        print(f"CUDA Version: {torch.version.cuda}")
+
+        if "+cu" in torch.__version__ and not torch.cuda.is_available():
+            print("\n[HINT] PyTorch is installed with CUDA support, but cannot detect the GPU.")
+            print("       This usually means your NVIDIA Drivers are missing or outdated.")
+            print("       Please update your NVIDIA Drivers from https://www.nvidia.com/Download/index.aspx")
+        else:
+            print("If you have a GPU, ensure you installed the CUDA-enabled version of PyTorch.")
+            print("Run: pip install torch --index-url https://download.pytorch.org/whl/cu118 (or appropriate version)")
+
+        print("----------------------\n")
 
     print(f"VECTOR_INPUT ({VECTOR_INPUT}): Lookback window size (Model Lags). The number of past time steps (files/vectors) the model looks at to make a prediction.")
     print(f"TRAINING_WINDOW ({TRAINING_WINDOW}): Size of the sliding window used for training. The number of recent files included in the training dataset for the model.")
