@@ -9,6 +9,9 @@
 5. **neuralforecast**: Used for the NHITS and LSTM neural network models.
 6. **tsai**: Used for state-of-the-art Time Series Classification/Regression (InceptionTime model).
 
+### **Hardware Requirements**
+*   **GPU:** NVIDIA GPU with CUDA support is highly recommended for `neuralforecast` and `tsai`. Running on CPU may be extremely slow.
+
 ### **Installation Command**
 
 You can install all the required dependencies with the following pip command:
@@ -73,6 +76,7 @@ Analysis of the current codebase (`strategy_predictability_program.py`) highligh
     *   `NeuralForecast` is configured to use GPU (`accelerator='gpu'`) if available.
     *   `Tsai` models leverage PyTorch/FastAI GPU capabilities.
     *   `torch.set_float32_matmul_precision('medium')` is set for Tensor Core optimization.
+    *   **Note:** GPU acceleration (NVIDIA CUDA) is strongly recommended/required for NeuralForecast and Tsai models to achieve reasonable processing times.
 
 ### 2.2 Model Implementations
 
