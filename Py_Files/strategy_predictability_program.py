@@ -31,7 +31,7 @@ VECTOR_INPUT = 10  # Lookback window size (Model Lags)
 TRAINING_WINDOW = 30 # Size of the sliding window used for training (Must be > VECTOR_INPUT)
 MAX_WORKERS = 4      # Max parallel processes (Adjust based on VRAM)
 TSAI_EPOCHS = 5      # Epochs for Tsai InceptionTime model
-NF_MAX_STEPS = 100   # Max steps for NeuralForecast NHITS
+NF_MAX_STEPS = 1000  # Max steps for NeuralForecast NHITS
 
 # --- Library Availability Flags (Lazy Check) ---
 # We check availability without importing to keep workers fast
@@ -307,12 +307,12 @@ def get_forecasters(flags):
                     # Check for GPU
                     accel = 'gpu' if torch.cuda.is_available() else 'cpu'
                     # print(f"[NeuralForecast] Using accelerator: {accel}")
-                    # Use TweedieLoss as requested (rho=1.5)
-                    # TweedieLoss is not directly available, so we use DistributionLoss with Tweedie distribution
+                    # Use Bernoulli Distribution for binary classification (High Profit Probability)
                     self.model = NHITS(h=1, input_size=VECTOR_INPUT, max_steps=max_steps,
-                                       loss=DistributionLoss(distribution='Tweedie', rho=1.5),
+                                       loss=DistributionLoss(distribution='Bernoulli', return_params=True),
                                        enable_checkpointing=False, logger=False,
-                                       accelerator=accel)
+                                       accelerator=accel, batch_size=4096,
+                                       stat_cat_exog_list=self.var_cols)
 
                 def predict(self, Y_df_global, window_start_idx, window_end_idx, coords_list):
                     if Y_df_global is None or Y_df_global.empty:
@@ -332,10 +332,10 @@ def get_forecasters(flags):
                     if Y_df_window.empty:
                         return None
 
-                    # --- Preprocessing (New Requirement) ---
-                    # Add 4.33 to Results, then clip negative to 0
+                    # --- Preprocessing (Classification Target) ---
+                    # Target is 1.0 if Result > RESULT_CUTOFF, else 0.0
                     Y_df_window = Y_df_window.copy() # Avoid SettingWithCopy
-                    Y_df_window['y'] = (Y_df_window['y'] + 4.33).clip(lower=0)
+                    Y_df_window['y'] = (Y_df_window['y'] > RESULT_CUTOFF).astype(np.float32)
 
                     # --- Static Covariances (New Requirement) ---
                     # Build static_df from coords_list
@@ -362,13 +362,8 @@ def get_forecasters(flags):
                     # Pre-calculate params for all coords
                     # This is better done outside but we do it here.
 
-                    param_dict_list = []
-                    for coord in coords_list:
-                        # coords_to_params returns dict
-                        p = coords_to_params(coord, self.var_cols, self.config)
-                        param_dict_list.append(p)
-
-                    static_df = pd.DataFrame(param_dict_list)
+                    # Use integer step coordinates directly for static features to ensure normalization
+                    static_df = pd.DataFrame(coords_list, columns=self.var_cols)
                     static_df['unique_id'] = np.arange(len(coords_list))
 
                     # Reorder: unique_id first
@@ -1167,12 +1162,10 @@ def main():
                 rem = total_files_to_process - files_processed
                 eta_seconds = avg_sec_per_file * rem
 
-                status_str = " | ".join(status_msg)
-
-                # Ground Truth info in terminal
-                gt_str = f"GT[Avg:{gt_avg:.1f}, >25:{gt_count}]"
-
-                print(f"  > [{files_processed}/{total_files_to_process}] {file_name} | {gt_str} | {status_str} | Dur: {duration:.1f}s | ETA: {eta_seconds/60:.2f} min", flush=True)
+                # Check if we should print based on MAX_WORKERS batch or completion
+                if files_processed % MAX_WORKERS == 0 or files_processed == total_files_to_process:
+                    total_elapsed = now - start_time
+                    print(f"\n\n\n Files Completed: {files_processed}/{total_files_to_process} | Time: {total_elapsed:.0f} sec | ETA: {eta_seconds/60:.2f} min \n\n\n", flush=True)
 
     except KeyboardInterrupt:
         print("\nProcess cancelled by user. Outputting available results...")
