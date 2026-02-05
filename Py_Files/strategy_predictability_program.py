@@ -1403,7 +1403,7 @@ def generate_html_report(results, output_dir):
                 <li><strong>TRAINING_WINDOW ({TRAINING_WINDOW}):</strong> Size of the sliding window used for training. The number of recent files included in the training dataset for the model.</li>
                 <li><strong>MAX_WORKERS ({MAX_WORKERS}):</strong> Max parallel processes (Adjust based on VRAM).</li>
                 <li><strong>TSAI_EPOCHS ({TSAI_EPOCHS}):</strong> Epochs for Tsai InceptionTime model.</li>
-                <li><strong>NF_MAX_STEPS ({NF_MAX_STEPS}):</strong> Max steps for NeuralForecast NHITS.</li>
+                <li><strong>NF_EPOCHS ({NF_EPOCHS}):</strong> Epochs for NeuralForecast NHITS (Steps calculated dynamically).</li>
             </ul>
             <hr>
             <ul>
