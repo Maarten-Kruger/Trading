@@ -615,18 +615,25 @@ def get_forecasters(flags):
                     best_idx = np.argmax(scores_np)
                     best_score = float(scores_np[best_idx])
 
-                    # Diagnostics
-                    avg_score = float(np.mean(scores_np))
-                    count_above_avg = int((scores_np > avg_score).sum())
+                    # Diagnostics (Ranking Metrics)
+                    worst_score = float(np.min(scores_np))
+                    mean_score = float(np.mean(scores_np))
+                    std_score = float(np.std(scores_np))
+
+                    # Win Margin (Best - 2nd Best)
+                    sorted_scores = np.sort(scores_np)
+                    if len(sorted_scores) > 1:
+                        win_margin = float(sorted_scores[-1] - sorted_scores[-2])
+                    else:
+                        win_margin = 0.0
 
                     return {
                         'id': int(best_idx),
-                        'confidence': best_score, # Using score as confidence
-                        'pred_class': 0, # N/A
-                        'count_class_0': 0,
-                        'count_class_1': 0,
-                        'count_class_2': count_above_avg, # Reusing this field
-                        'avg_hr_prob': avg_score # Reusing this field
+                        'best_score': best_score,
+                        'worst_score': worst_score,
+                        'mean_score': mean_score,
+                        'std_score': std_score,
+                        'win_margin': win_margin
                     }
 
 
@@ -1334,7 +1341,7 @@ def generate_diagnostics_section(results):
     if tsai_data:
         html += """
         <h3>Tsai Diagnostics</h3>
-        <p>Model predicts Pairwise Ranking Score. Higher is better.</p>
+        <p>Model predicts Pairwise Ranking Score. Higher is better. Robustness metrics help identify clear winners.</p>
         <table>
             <thead>
                 <tr>
@@ -1342,8 +1349,10 @@ def generate_diagnostics_section(results):
                     <th style="background-color: #e6f7ff;">Act Avg</th>
                     <th style="background-color: #e6f7ff;">Act > 25</th>
                     <th style="background-color: #fff0f6;">Best Score</th>
-                    <th style="background-color: #fff0f6;">Count > Avg</th>
-                    <th style="background-color: #fff0f6;">Avg Score</th>
+                    <th style="background-color: #fff0f6;">Worst Score</th>
+                    <th style="background-color: #fff0f6;">Mean Score</th>
+                    <th style="background-color: #fff0f6;">Std Dev</th>
+                    <th style="background-color: #f9f0ff;">Win Margin</th>
                 </tr>
             </thead>
             <tbody>
@@ -1355,18 +1364,25 @@ def generate_diagnostics_section(results):
             act_avg = g_stats.get('avg', 0)
             act_high = g_stats.get('count_above', 0)
 
-            conf = m_meta.get('confidence', 0) # Best Score
-            c2 = m_meta.get('count_class_2', 0) # Count > Avg
-            avg_score = m_meta.get('avg_hr_prob', 0) # Avg Score
+            best = m_meta.get('best_score', 0)
+            worst = m_meta.get('worst_score', 0)
+            mean = m_meta.get('mean_score', 0)
+            std = m_meta.get('std_score', 0)
+            margin = m_meta.get('win_margin', 0)
+
+            # Highlight robust wins
+            margin_style = "color: green; font-weight: bold;" if margin > (std * 0.1) else ""
 
             html += f"""
             <tr>
                 <td>{d['file']}</td>
                 <td style="background-color: #e6f7ff;">{act_avg:.2f}</td>
                 <td style="background-color: #e6f7ff;">{act_high}</td>
-                <td style="background-color: #fff0f6;">{conf:.4f}</td>
-                <td style="background-color: #fff0f6;">{c2}</td>
-                <td style="background-color: #fff0f6;">{avg_score:.4f}</td>
+                <td style="background-color: #fff0f6;">{best:.4f}</td>
+                <td style="background-color: #fff0f6;">{worst:.4f}</td>
+                <td style="background-color: #fff0f6;">{mean:.4f}</td>
+                <td style="background-color: #fff0f6;">{std:.4f}</td>
+                <td style="background-color: #f9f0ff; {margin_style}">{margin:.4f}</td>
             </tr>
             """
         html += "</tbody></table>"
@@ -1526,8 +1542,8 @@ def generate_html_report(results, output_dir):
                         <th>Profit</th>
                         <th>Params</th>
                         <th>Best Score</th>
-                        <th>Count > Avg</th>
-                        <th>Avg Score</th>
+                        <th>Mean Score</th>
+                        <th>Win Margin</th>
                     </tr>
                 </thead>
             """)
@@ -1559,10 +1575,10 @@ def generate_html_report(results, output_dir):
                 cnt = meta.get('count_above', 0)
                 extra_cols = f"<td>{p_val:.4f}</td><td>{p_avg:.4f}</td><td>{cnt}</td>"
             elif key == 'tsai':
-                conf = meta.get('confidence', 0)
-                cnt = meta.get('count_class_2', 0)
-                avg_score = meta.get('avg_hr_prob', 0)
-                extra_cols = f"<td>{conf:.4f}</td><td>{cnt}</td><td>{avg_score:.4f}</td>"
+                best = meta.get('best_score', 0)
+                mean = meta.get('mean_score', 0)
+                margin = meta.get('win_margin', 0)
+                extra_cols = f"<td>{best:.4f}</td><td>{mean:.4f}</td><td>{margin:.4f}</td>"
 
             html_parts.append(f"""
                 <tr>
