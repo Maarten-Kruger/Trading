@@ -434,6 +434,20 @@ def get_forecasters(flags):
             from tsai.all import InceptionTime, RandomSplitter, TSClassifier, TSDatasets, TSDataLoaders, ts_learner, accuracy
             import torch
             import torch.nn as nn
+            from torch.utils.data import DataLoader, TensorDataset
+
+            class SiameseInceptionTime(nn.Module):
+                def __init__(self, c_in, c_out=1):
+                    super().__init__()
+                    self.backbone = InceptionTime(c_in=c_in, c_out=c_out)
+
+                def forward(self, x1, x2):
+                    s1 = self.backbone(x1)
+                    s2 = self.backbone(x2)
+                    return s1 - s2
+
+                def predict_score(self, x):
+                    return self.backbone(x)
 
             class TsaiForecaster:
                 def __init__(self, global_config, var_cols, epochs=5):
@@ -447,19 +461,16 @@ def get_forecasters(flags):
                     n_coords, win_len = X_slice.shape
 
                     if win_len < 2:
-                        print(f"[DEBUG TSAI] win_len < 2 ({win_len})")
                         return None
 
                     # Sliding Window Logic on the slice
                     w = min(VECTOR_INPUT, win_len - 1)
                     if w < 2:
-                        print(f"[DEBUG TSAI] w < 2 ({w})")
                         return None
 
                     # Fast strided windowing using sliding_window_view
                     try:
                         if win_len < w + 1:
-                            print(f"[DEBUG TSAI] win_len ({win_len}) < w+1 ({w+1})")
                             return None
                         # Shape: (n_coords, num_windows, window_size)
                         windows = sliding_window_view(X_slice, window_shape=w+1, axis=1)
@@ -477,7 +488,6 @@ def get_forecasters(flags):
                         return None
 
                     if len(X_train_res) == 0:
-                        print(f"[DEBUG TSAI] X_train_res is empty")
                         return None
 
                     # --- Static Covariances Integration ---
@@ -492,124 +502,139 @@ def get_forecasters(flags):
                             params_array[i, j] = p_dict[col]
 
                     # 2. Expand params to match X_train structure
-                    # X_train_raw shape: (n_coords, num_windows, w)
                     num_windows = X_train_raw.shape[1]
-
-                    # Repeat params for each window
-                    # (n_coords, num_windows, n_params)
                     params_expanded = np.repeat(params_array[:, np.newaxis, :], num_windows, axis=1)
-
-                    # Flatten to (Total_Samples, n_params)
                     params_flat = params_expanded.reshape(-1, n_params)
 
                     # 3. Create Constant Channels
-                    # X_train_res: (Total, w) -> (Total, 1, w)
                     X_res_chan = X_train_res[:, np.newaxis, :]
-
-                    # Params: (Total, n_params) -> (Total, n_params, w) (Broadcast)
                     params_chan = np.repeat(params_flat[:, :, np.newaxis], w, axis=2)
-
-                    # Concatenate: (Total, 1 + n_params, w)
                     X_final = np.concatenate([X_res_chan, params_chan], axis=1)
 
-                    # --- Classification Targets ---
-                    # 0: DNC (y <= 0)
-                    # 1: LR (0 < y <= CUTOFF)
-                    # 2: HR (y > CUTOFF)
-                    y_class = np.zeros_like(y_train_flat, dtype=np.longlong)
+                    # --- Pairwise Data Generation (King of the Hill) ---
+                    all_idx_a = []
+                    all_idx_b = []
+                    all_labels = []
 
-                    # Vectorized binning
-                    mask_pos = y_train_flat > 0
-                    mask_hr = y_train_flat > RESULT_CUTOFF
+                    for w_idx in range(num_windows):
+                        # Get indices for this week
+                        week_indices = np.arange(w_idx, len(X_final), num_windows)
+                        week_scores = y_train_flat[week_indices]
 
-                    # Default is 0 (DNC)
-                    y_class[mask_pos] = 1 # LR
-                    y_class[mask_hr] = 2  # HR
+                        n_c = len(week_indices)
+                        start_node = np.random.randint(0, n_c)
 
-                    # Model
-                    c_in = 1 + n_params
-                    c_out = 3 # 3 classes
+                        scan_order = np.concatenate([np.arange(start_node, n_c), np.arange(0, start_node)])
 
-                    model = InceptionTime(c_in=c_in, c_out=c_out)
-                    splits = RandomSplitter()(range(len(X_final)))
+                        curr_idx_local = scan_order[0]
+                        curr_score = week_scores[curr_idx_local]
+                        curr_idx_global = week_indices[curr_idx_local]
 
-                    # TSDatasets for Classification (y is long)
-                    # For classification, we use Categorize if strings, but here y is already int.
-                    # We typically don't need explicit transforms for int targets in TSDatasets unless we want one-hot encoding or similar.
-                    # TSClassifier is a Learner factory, NOT a transform.
-                    # Passing TSClassifier() as a transform was the error.
+                        for next_idx_local in scan_order[1:]:
+                            next_score = week_scores[next_idx_local]
+                            next_idx_global = week_indices[next_idx_local]
 
-                    # We just use [None, None] or [None, [Categorize()]] if needed, but for ints None is usually fine.
-                    tfms = [None, None]
-                    dsets = TSDatasets(X_final, y_class, tfms=tfms, splits=splits)
+                            if next_score > curr_score:
+                                # Next wins.
+                                all_idx_a.append(next_idx_global)
+                                all_idx_b.append(curr_idx_global)
+                                all_labels.append(1.0) # A > B
 
-                    # High-performance DataLoaders
-                    dls = TSDataLoaders.from_dsets(dsets.train, dsets.valid, bs=4096, num_workers=0, pin_memory=True) # Workers=0 for safety in spawn
+                                curr_idx_local = next_idx_local
+                                curr_score = next_score
+                                curr_idx_global = next_idx_global
+                            else:
+                                # Curr wins
+                                all_idx_a.append(curr_idx_global)
+                                all_idx_b.append(next_idx_global)
+                                all_labels.append(1.0) # A > B
 
-                    learn = ts_learner(dls, model, metrics=accuracy, loss_func=nn.CrossEntropyLoss(), verbose=False)
-                    learn.fit_one_cycle(self.epochs, 1e-3)
+                    # Convert to Tensor
+                    idx_a = np.array(all_idx_a)
+                    idx_b = np.array(all_idx_b)
+                    labels = np.array(all_labels, dtype=np.float32).reshape(-1, 1)
 
-                    # --- Prediction ---
+                    if len(idx_a) == 0:
+                        return None
+
+                    # Prepare DataLoaders
+                    # We pass INDICES to DataLoader to avoid duplicating huge X_final
+                    # But X_final is numpy.
+                    # Let's just create TensorDataset with full data if memory allows.
+                    # 28k pairs * 2 * (1+params)*window * float32.
+                    # 28000 * 2 * 10 * 10 * 4 bytes ~ 22MB. Very small.
+
+                    X_a = X_final[idx_a]
+                    X_b = X_final[idx_b]
+
+                    # Tensor conversion
+                    t_X_a = torch.tensor(X_a, dtype=torch.float32)
+                    t_X_b = torch.tensor(X_b, dtype=torch.float32)
+                    t_y = torch.tensor(labels, dtype=torch.float32)
+
+                    dataset = TensorDataset(t_X_a, t_X_b, t_y)
+                    loader = DataLoader(dataset, batch_size=4096, shuffle=True, num_workers=0)
+
+                    # --- Siamese Model Training ---
+                    c_in = X_final.shape[1]
+                    model = SiameseInceptionTime(c_in=c_in, c_out=1)
+
+                    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                    model.to(device)
+                    model.train()
+
+                    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+                    loss_fn = nn.BCEWithLogitsLoss()
+
+                    for epoch in range(self.epochs):
+                        for batch in loader:
+                            xa, xb, y = [b.to(device) for b in batch]
+                            optimizer.zero_grad()
+                            diff = model(xa, xb)
+                            loss = loss_fn(diff, y)
+                            loss.backward()
+                            optimizer.step()
+
+                    # --- Prediction (Batch Scoring) ---
+                    # Prepare Test Data
                     # Predict on latest window
-                    # X_slice: (n_coords, win_len)
-                    # Latest window: X_slice[:, -w:]
                     X_test_res = X_slice[:, -w:] # (n_coords, w)
-
-                    # Add channel dim
                     X_test_res = X_test_res[:, np.newaxis, :] # (n_coords, 1, w)
-
-                    # Add params channels
-                    # params_array: (n_coords, n_params)
-                    # Broadcast to (n_coords, n_params, w)
                     params_test = np.repeat(params_array[:, :, np.newaxis], w, axis=2)
-
-                    # Concat
                     X_test = np.concatenate([X_test_res, params_test], axis=1) # (n_coords, 1+n_params, w)
 
-                    try:
-                        learn.model.eval()
-                        input_tensor = torch.from_numpy(X_test).float()
-                        device = next(learn.model.parameters()).device
-                        input_tensor = input_tensor.to(device)
+                    model.eval()
+                    t_X_test = torch.tensor(X_test, dtype=torch.float32).to(device)
 
-                        with torch.no_grad():
-                            logits = learn.model(input_tensor) # (n_coords, 3)
-                            probs = torch.softmax(logits, dim=1) # (n_coords, 3)
+                    with torch.no_grad():
+                        # Use predict_score (backbone only)
+                        scores = model.predict_score(t_X_test) # (n_coords, 1)
 
-                        probs_np = probs.cpu().numpy()
+                    scores_np = scores.cpu().numpy().flatten()
 
-                        # Select candidate with highest confidence in HR (Class 2)
-                        hr_probs = probs_np[:, 2]
-                        best_idx = np.argmax(hr_probs)
+                    best_idx = np.argmax(scores_np)
+                    best_score = float(scores_np[best_idx])
 
-                        # Diagnostic Stats
-                        confidence = float(hr_probs[best_idx])
-                        pred_class = int(np.argmax(probs_np[best_idx]))
+                    # Diagnostics (Ranking Metrics)
+                    worst_score = float(np.min(scores_np))
+                    mean_score = float(np.mean(scores_np))
+                    std_score = float(np.std(scores_np))
 
-                        all_preds = np.argmax(probs_np, axis=1)
-                        count_class_0 = int((all_preds == 0).sum())
-                        count_class_1 = int((all_preds == 1).sum())
-                        count_class_2 = int((all_preds == 2).sum())
+                    # Win Margin (Best - 2nd Best)
+                    sorted_scores = np.sort(scores_np)
+                    if len(sorted_scores) > 1:
+                        win_margin = float(sorted_scores[-1] - sorted_scores[-2])
+                    else:
+                        win_margin = 0.0
 
-                        avg_hr_prob = float(np.mean(hr_probs))
-
-                        return {
-                            'id': int(best_idx),
-                            'confidence': confidence,
-                            'pred_class': pred_class,
-                            'count_class_0': count_class_0,
-                            'count_class_1': count_class_1,
-                            'count_class_2': count_class_2,
-                            'avg_hr_prob': avg_hr_prob
-                        }
-                    except Exception as e:
-                        print(f"[DEBUG TSAI] Exception during prediction: {e}")
-                        traceback.print_exc()
-                        return None
-                    except:
-                         print(f"[DEBUG TSAI] Unknown error during prediction")
-                         traceback.print_exc()
-                         return None
+                    return {
+                        'id': int(best_idx),
+                        'best_score': best_score,
+                        'worst_score': worst_score,
+                        'mean_score': mean_score,
+                        'std_score': std_score,
+                        'win_margin': win_margin
+                    }
 
 
             classes['TsaiForecaster'] = TsaiForecaster
@@ -1262,6 +1287,14 @@ def generate_diagnostics_section(results):
         html += """
         <h3>NeuralForecast Diagnostics</h3>
         <p>Model predicts Probability (0-1). Comparing 'Win Rate' (Probability) instead of raw Result.</p>
+        <ul>
+            <li><strong>Act Win Rate:</strong> The actual probability/frequency of positive results in the file.</li>
+            <li><strong>Act > 25:</strong> Count of actual results greater than the cutoff.</li>
+            <li><strong>Total:</strong> Total number of vectors in the file.</li>
+            <li><strong>Model Win Rate:</strong> The average probability predicted by the model across all vectors.</li>
+            <li><strong>Model > 50%:</strong> Count of predictions where the model has > 50% confidence.</li>
+            <li><strong>Optimism Ratio:</strong> Ratio of Model Win Rate to Actual Win Rate. (> 1.0 means model is overconfident).</li>
+        </ul>
         <table>
             <thead>
                 <tr>
@@ -1316,17 +1349,27 @@ def generate_diagnostics_section(results):
     if tsai_data:
         html += """
         <h3>Tsai Diagnostics</h3>
+        <p>Model predicts Pairwise Ranking Score. Higher is better. Robustness metrics help identify clear winners.</p>
+        <ul>
+            <li><strong>Act Avg:</strong> The average of actual results in the file.</li>
+            <li><strong>Act > 25:</strong> Count of actual results greater than the cutoff.</li>
+            <li><strong>Best Score:</strong> The highest ranking score assigned by the model to any vector.</li>
+            <li><strong>Worst Score:</strong> The lowest ranking score assigned by the model.</li>
+            <li><strong>Mean Score:</strong> The average ranking score across all vectors.</li>
+            <li><strong>Std Dev:</strong> The standard deviation of ranking scores (indicates spread/variance).</li>
+            <li><strong>Win Margin:</strong> The difference between the Best Score and the 2nd Best Score. (Higher margin indicates a clearer winner).</li>
+        </ul>
         <table>
             <thead>
                 <tr>
                     <th>File</th>
                     <th style="background-color: #e6f7ff;">Act Avg</th>
                     <th style="background-color: #e6f7ff;">Act > 25</th>
-                    <th style="background-color: #fff0f6;">Conf Score</th>
-                    <th style="background-color: #fff0f6;">Pred Class</th>
-                    <th style="background-color: #fff0f6;">Class 0 (Loss)</th>
-                    <th style="background-color: #fff0f6;">Class 1 (Profit)</th>
-                    <th style="background-color: #fff0f6;">Class 2 (High)</th>
+                    <th style="background-color: #fff0f6;">Best Score</th>
+                    <th style="background-color: #fff0f6;">Worst Score</th>
+                    <th style="background-color: #fff0f6;">Mean Score</th>
+                    <th style="background-color: #fff0f6;">Std Dev</th>
+                    <th style="background-color: #f9f0ff;">Win Margin</th>
                 </tr>
             </thead>
             <tbody>
@@ -1338,29 +1381,25 @@ def generate_diagnostics_section(results):
             act_avg = g_stats.get('avg', 0)
             act_high = g_stats.get('count_above', 0)
 
-            conf = m_meta.get('confidence', 0)
-            cls = m_meta.get('pred_class', -1)
+            best = m_meta.get('best_score', 0)
+            worst = m_meta.get('worst_score', 0)
+            mean = m_meta.get('mean_score', 0)
+            std = m_meta.get('std_score', 0)
+            margin = m_meta.get('win_margin', 0)
 
-            c0 = m_meta.get('count_class_0', 0)
-            c1 = m_meta.get('count_class_1', 0)
-            c2 = m_meta.get('count_class_2', 0)
-
-            # Highlight chosen class
-            cls_str = "Unknown"
-            if cls == 0: cls_str = "<span style='color:red'>DNC (0)</span>"
-            elif cls == 1: cls_str = "<span style='color:orange'>Low (1)</span>"
-            elif cls == 2: cls_str = "<span style='color:green'>High (2)</span>"
+            # Highlight robust wins
+            margin_style = "color: green; font-weight: bold;" if margin > (std * 0.1) else ""
 
             html += f"""
             <tr>
                 <td>{d['file']}</td>
                 <td style="background-color: #e6f7ff;">{act_avg:.2f}</td>
                 <td style="background-color: #e6f7ff;">{act_high}</td>
-                <td style="background-color: #fff0f6;">{conf:.1%}</td>
-                <td style="background-color: #fff0f6;">{cls_str}</td>
-                <td style="background-color: #fff0f6;">{c0}</td>
-                <td style="background-color: #fff0f6;">{c1}</td>
-                <td style="background-color: #fff0f6;">{c2}</td>
+                <td style="background-color: #fff0f6;">{best:.4f}</td>
+                <td style="background-color: #fff0f6;">{worst:.4f}</td>
+                <td style="background-color: #fff0f6;">{mean:.4f}</td>
+                <td style="background-color: #fff0f6;">{std:.4f}</td>
+                <td style="background-color: #f9f0ff; {margin_style}">{margin:.4f}</td>
             </tr>
             """
         html += "</tbody></table>"
@@ -1519,9 +1558,9 @@ def generate_html_report(results, output_dir):
                         <th>Result</th>
                         <th>Profit</th>
                         <th>Params</th>
-                        <th>Confidence</th>
-                        <th>Pred Class</th>
-                        <th>Count HR</th>
+                        <th>Best Score</th>
+                        <th>Mean Score</th>
+                        <th>Win Margin</th>
                     </tr>
                 </thead>
             """)
@@ -1553,10 +1592,10 @@ def generate_html_report(results, output_dir):
                 cnt = meta.get('count_above', 0)
                 extra_cols = f"<td>{p_val:.4f}</td><td>{p_avg:.4f}</td><td>{cnt}</td>"
             elif key == 'tsai':
-                conf = meta.get('confidence', 0)
-                cls = meta.get('pred_class', 0)
-                cnt = meta.get('count_class_2', 0)
-                extra_cols = f"<td>{conf:.2%}</td><td>{cls}</td><td>{cnt}</td>"
+                best = meta.get('best_score', 0)
+                mean = meta.get('mean_score', 0)
+                margin = meta.get('win_margin', 0)
+                extra_cols = f"<td>{best:.4f}</td><td>{mean:.4f}</td><td>{margin:.4f}</td>"
 
             html_parts.append(f"""
                 <tr>
