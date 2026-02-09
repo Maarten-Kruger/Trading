@@ -638,6 +638,56 @@ def main():
 
     generate_html_report(results, target_dir)
 
+def generate_diagnostics_section(results):
+    html = """
+    <div class="section">
+        <h2>Master Diagnostics</h2>
+        <p>Detailed analysis of Ground Truth vs Model Predictions.</p>
+    """
+
+    # Genetic Diagnostics
+    ga_data = results.get('genetic', [])
+    if ga_data:
+        html += """
+        <h3>Genetic Algorithm Diagnostics</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>File</th>
+                    <th style="background-color: #e6f7ff;">Found?</th>
+                    <th style="background-color: #e6f7ff;">Best Fitness</th>
+                    <th style="background-color: #fff0f6;">Gens Run</th>
+                    <th style="background-color: #fff0f6;">Training Score</th>
+                    <th style="background-color: #f9f0ff;">Profit (Actual)</th>
+                </tr>
+            </thead>
+            <tbody>
+        """
+        for d in ga_data:
+            m = d.get('meta', {})
+            found = d['stats']['found']
+            fitness = m.get('fitness', 0)
+            gens = m.get('generations_run', 0)
+            profit = d['stats']['Profit']
+
+            # Highlight Found
+            color = "green" if found else "red"
+
+            html += f"""
+            <tr>
+                <td>{d['file']}</td>
+                <td style="color:{color}; font-weight:bold;">{found}</td>
+                <td style="background-color: #e6f7ff;">{fitness:.2f}</td>
+                <td style="background-color: #fff0f6;">{gens}</td>
+                <td style="background-color: #fff0f6;">{fitness:.2f}</td>
+                <td style="background-color: #f9f0ff;">{profit:.2f}</td>
+            </tr>
+            """
+        html += "</tbody></table>"
+
+    html += "</div>"
+    return html
+
 def generate_html_report(results, output_dir):
     print("Generating Report...")
     html_parts = ["""
@@ -654,6 +704,7 @@ def generate_html_report(results, output_dir):
             th { background-color: #f8f8f8; }
             .img-container { text-align: center; margin: 20px 0; }
             img { max-width: 100%; height: auto; border: 1px solid #eee; }
+            .metric { font-size: 1.1em; font-weight: bold; margin: 10px 0; }
         </style>
     </head>
     <body>
@@ -668,6 +719,9 @@ def generate_html_report(results, output_dir):
         </div>
     """]
 
+    # Add Diagnostics
+    html_parts.append(generate_diagnostics_section(results))
+
     models = [('Control Group', 'control'), ('Darts', 'darts'), ('Genetic Algorithm', 'genetic')]
 
     for title, key in models:
@@ -678,27 +732,55 @@ def generate_html_report(results, output_dir):
         actual_results = [d['stats']['Result'] for d in data]
         profits = [d['stats']['Profit'] for d in data]
 
-        # Plot Result
-        fig, ax = plt.subplots(figsize=(10, 5))
-        ax.plot(range(len(labels)), actual_results, marker='o', label='Result')
-        ax.axhline(y=np.mean(actual_results), color='r', linestyle='--', label=f'Avg: {np.mean(actual_results):.2f}')
-        ax.set_title(f'{title} Result')
-        ax.set_xticks(range(len(labels)))
-        ax.set_xticklabels(labels, rotation=45, ha='right')
-        ax.legend()
-        ax.grid(True)
+        # Plot 1: Result
+        fig1, ax1 = plt.subplots(figsize=(10, 5))
+        ax1.plot(range(len(labels)), actual_results, marker='o', color='blue', label='Actual Result')
+        ax1.axhline(y=np.mean(actual_results), color='r', linestyle='--', label=f'Avg: {np.mean(actual_results):.2f}')
+        ax1.set_title(f'{title} Result')
+        ax1.set_xticks(range(len(labels)))
+        ax1.set_xticklabels(labels, rotation=45, ha='right')
+        ax1.set_ylabel('Result')
+        ax1.legend()
+        ax1.grid(True)
 
-        buf = io.BytesIO()
-        fig.savefig(buf, format='png', bbox_inches='tight')
-        buf.seek(0)
-        img_b64 = base64.b64encode(buf.read()).decode('utf-8')
-        plt.close(fig)
+        buf1 = io.BytesIO()
+        fig1.savefig(buf1, format='png', bbox_inches='tight')
+        buf1.seek(0)
+        img1_b64 = base64.b64encode(buf1.read()).decode('utf-8')
+        plt.close(fig1)
+
+        # Plot 2: Profit (New)
+        fig2, ax2 = plt.subplots(figsize=(10, 5))
+        ax2.plot(range(len(labels)), profits, marker='o', color='green', label='Actual Profit')
+        ax2.axhline(y=np.mean(profits), color='orange', linestyle='--', label=f'Avg: {np.mean(profits):.2f}')
+        ax2.set_title(f'{title} Profit')
+        ax2.set_xticks(range(len(labels)))
+        ax2.set_xticklabels(labels, rotation=45, ha='right')
+        ax2.set_ylabel('Profit')
+        ax2.legend()
+        ax2.grid(True)
+
+        buf2 = io.BytesIO()
+        fig2.savefig(buf2, format='png', bbox_inches='tight')
+        buf2.seek(0)
+        img2_b64 = base64.b64encode(buf2.read()).decode('utf-8')
+        plt.close(fig2)
 
         html_parts.append(f"""
         <div class="section">
             <h2>{title}</h2>
-            <p>Avg Result: {np.mean(actual_results):.2f}</p>
-            <div class="img-container"><img src="data:image/png;base64,{img_b64}" /></div>
+            <div class="metric">Avg Result: {np.mean(actual_results):.2f}</div>
+            <div class="metric">Avg Profit: {np.mean(profits):.2f}</div>
+
+            <div class="img-container">
+                <h3>Result Graph</h3>
+                <img src="data:image/png;base64,{img1_b64}" />
+            </div>
+            <div class="img-container">
+                <h3>Profit Graph</h3>
+                <img src="data:image/png;base64,{img2_b64}" />
+            </div>
+
             <table>
                 <thead>
                     <tr><th>File</th><th>Found?</th><th>Result</th><th>Profit</th><th>Params</th><th>Meta</th></tr>
