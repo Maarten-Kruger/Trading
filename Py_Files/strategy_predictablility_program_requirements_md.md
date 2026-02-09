@@ -1,31 +1,38 @@
 # Strategy Predictability Program Requirements
 
+This project contains two distinct approaches for strategy predictability analysis:
+1.  **`strategy_predictability_genetic.py`**: Uses a Genetic Algorithm (PyGAD) to evolve strategy parameters.
+2.  **`strategy_predictability_bins.py`**: Uses Deep Learning (NeuralForecast, Tsai) to predict parameter performance bins.
 
 ### Libaries to Install:
-1. **pandas**: Used for data manipulation (DataFrames, CSV reading).
-2. **numpy**: Used for numerical operations and array handling.
-3. **matplotlib**: Used for generating graphs and plotting results.
-4. **darts**: Used for the Random Forest time series forecasting model.
-5. **neuralforecast**: Used for the NHITS and LSTM neural network models.
-6. **tsai**: Used for state-of-the-art Time Series Classification/Regression (InceptionTime model).
+1.  **pandas**: Used for data manipulation (DataFrames, CSV reading).
+2.  **numpy**: Used for numerical operations and array handling.
+3.  **matplotlib**: Used for generating graphs and plotting results.
+4.  **darts**: Used for the Random Forest time series forecasting model.
+5.  **pygad**: Used for the Genetic Algorithm optimization (`_genetic.py`).
+6.  **neuralforecast**: Used for NHITS models (`_bins.py` only).
+7.  **tsai**: Used for InceptionTime models (`_bins.py` only).
 
 ### **Hardware Requirements**
-*   **GPU:** NVIDIA GPU with CUDA support is highly recommended for `neuralforecast` and `tsai`. Running on CPU may be extremely slow.
+*   **Genetic Algorithm (`_genetic.py`):** CPU-intensive. Fast multi-core CPU recommended.
+*   **Deep Learning (`_bins.py`):** NVIDIA GPU with CUDA support is highly recommended for `neuralforecast` and `tsai`.
 
 ### **Installation Command**
 
 You can install all the required dependencies with the following pip command:
 
 ```bash
-pip install pandas numpy matplotlib darts neuralforecast tsai scikit-learn
+pip install pandas numpy matplotlib darts pygad neuralforecast tsai scikit-learn
 ```
 
 ```bash
-python strategy_predictability_program.py
+# To run the Genetic Algorithm version:
+python strategy_predictability_genetic.py
+
+# To run the Deep Learning/Bins version:
+python strategy_predictability_bins.py
 ```
 ---
-
-
 
 ## 1. Core User Requirements
 
@@ -49,73 +56,39 @@ The following requirements outline the intended logic for the strategy predictab
 *   **Basic Model (Control):** Calculate the average parameters of the "Best Vectors" from the last `VECTOR_INPUT` files.
 *   **Darts Model:** Train a model (e.g., Random Forest) on the sequence of "Best Vectors" (length `VECTOR_INPUT`) to predict the next vector.
 
-### 1.3 Panel/Surface Forecasting Models
-*   **Training Data:** Feed a larger window of files (`TRAINING_WINDOW`, e.g., 30) to deep learning models.
-*   **Full Surface Data:** Input *all* vectors (lines) from each CSV (e.g., 300,000+ lines total) into the models, ensuring the correct format.
-*   **Models:**
-    *   **Tsai:** Time Series deep learning model (InceptionTime).
-    *   **NeuralForecast:** Neural forecasting model (NHITS).
-*   **Epochs:** Models should process the data multiple times (e.g., `EPOCHS_NUMBER = 3`). *(Note: Implementation pending/configurable)*
+### 1.3 Optimization & Surface Forecasting Models
+*   **Training Data:** Feed a larger window of files (`TRAINING_WINDOW`, e.g., 30) to the models.
+*   **Full Surface Data:** Input *all* vectors (lines) from each CSV into the models.
+*   **Approaches:**
+    *   **Genetic Algorithm (`_genetic.py`):** Uses PyGAD to evolve a set of parameters (chromosome) that maximizes the Sum of Results over the `TRAINING_WINDOW`. If a specific parameter set is missing in a historical file, the algorithm finds the **Nearest Neighbor** vector to estimate the result.
+    *   **Deep Learning (`_bins.py`):** Uses Tsai (InceptionTime) and NeuralForecast (NHITS) to predict the ranking or probability of high results based on the entire optimization surface history.
 
 ---
 
-## 2. Technical Specifications & Current Implementation
+## 2. Technical Specifications & Implementation
 
-Analysis of the current codebase (`strategy_predictability_program.py`) highlights the following technical implementations and optimizations:
+### 2.1 Genetic Algorithm (`strategy_predictability_genetic.py`)
+*   **Library:** `pygad`
+*   **Chromosome Representation:** Integer genes representing the discrete steps for each strategy parameter (0 to Max Steps).
+*   **Fitness Function:**
+    *   **Objective:** Maximize the Sum of `Result` over the `TRAINING_WINDOW` (historical files).
+    *   **Evaluation:** For each file in the history:
+        1.  Check if the exact parameter set exists.
+        2.  **Fallback (Nearest Neighbor):** If the exact set is missing (e.g., due to optimization gaps), find the vector in that file with the minimum Euclidean distance in parameter space. Use its `Result` for the fitness calculation.
+*   **Configuration:**
+    *   `GA_NUM_GENERATIONS`: Number of generations (Default: 30).
+    *   `GA_SOL_PER_POP`: Population size (Default: 50).
+    *   `GA_MUTATION_PERCENT_GENES`: Mutation rate (Default: 10%).
 
-### 2.1 High-Performance Architecture
-*   **Vectorized Data Ingestion:** Uses `np.lib.stride_tricks.sliding_window_view` to pre-calculate all sliding windows instantly in RAM, replacing slow Python loops.
-*   **GPU Saturation:** `TSDataLoaders` are configured with `bs=4096` (or higher), `pin_memory=True`, and multiple `num_workers` to ensure maximum GPU throughput.
-*   **Parallel Processing:**
-    *   `ProcessPoolExecutor` with `multiprocessing.get_context('spawn')` is used to train independent weekly models simultaneously on separate GPU streams.
-    *   `ProcessPoolExecutor` is used for parallel CSV file loading (CPU-bound I/O).
-    *   `ThreadPoolExecutor` is used for data preprocessing (extracting grids and best vectors).
-*   **Master Matrix (Tsai):** A global, dense NumPy array (`Float32`) is constructed at initialization. It maps every unique parameter combination (Coordinate) across all time steps (files). This allows for O(1) slicing during the training loop.
-*   **Global Long-Format DataFrame (NeuralForecast):** A single Pandas DataFrame is created by melting the Master Matrix. It uses dummy dates (starting 2020-01-01) to represent file indices, enabling efficient filtering by date for the `NHITS` model.
-*   **GPU Acceleration:**
-    *   `NeuralForecast` is configured to use GPU (`accelerator='gpu'`) if available.
-    *   `Tsai` models leverage PyTorch/FastAI GPU capabilities.
-    *   `torch.set_float32_matmul_precision('medium')` is set for Tensor Core optimization.
-    *   **Note:** GPU acceleration (NVIDIA CUDA) is strongly recommended/required for NeuralForecast and Tsai models to achieve reasonable processing times.
+### 2.2 Deep Learning (`strategy_predictability_bins.py`)
+*   **Legacy Architecture:** Retains the original implementation using `tsai` and `neuralforecast`.
+*   **Master Matrix:** Uses a global dense NumPy array for efficient training data slicing.
+*   **Models:**
+    *   **Tsai:** InceptionTime classifier/regressor.
+    *   **NeuralForecast:** NHITS model on the surface data.
 
-### 2.2 Model Implementations
-
-#### **Control Group**
-*   Calculates the average of normalized parameter "steps" (integer grid coordinates) over the `VECTOR_INPUT` window.
-
-#### **Darts (Random Forest)**
-*   Uses `RandomForest` regressor with `n_estimators=50`.
-*   Trains on the trajectory of the "Best Vector" (currently selected by Max Result).
-*   Runs on all CPU cores (`n_jobs=-1`).
-
-#### **NeuralForecast (NHITS)**
-*   **Loss Function:** `TweedieLoss(rho=1.5)` (Optimized for zero-inflated data).
-*   **Data Preprocessing:**
-    *   `y_new = max(0, y_old + 4.33)`
-    *   Static Covariances: Strategy parameter values are passed as static variables (`static_df`) mapped to `unique_id`.
-*   **Training:** Trains on the full "Result Surface" of the `TRAINING_WINDOW`.
-*   **Prediction:** Selects the parameter set with the **Highest Predicted Result**.
-
-#### **Tsai (InceptionTime)**
-*   **Type:** Time Series Classification (TSClassifier).
-*   **Loss Function:** `CrossEntropyLoss`.
-*   **Inputs:**
-    *   Dynamic: History of Results (Length `VECTOR_INPUT`).
-    *   Static: Strategy parameter values are included as **Constant Channels** (broadcasted across the time window) to match the "Static Covariances" logic of NeuralForecast.
-*   **Targets (Bins):**
-    *   **DNC (Class 0):** `Result <= 0` (Do Not Care / Loss).
-    *   **LR (Class 1):** `0 < Result <= RESULT_CUTOFF` (Low Result).
-    *   **HR (Class 2):** `Result > RESULT_CUTOFF` (High Result).
-*   **Prediction:** Selects the parameter set with the **Highest Confidence (Probability)** in the **HR (High Result)** class.
-
-### 2.3 Data Handling & Robustness
-*   **Robust CSV Reader:** Custom `read_csv_robust` function detects separators (`;` vs `,`) and decimal formats (European vs US) automatically using the C engine for speed.
-*   **Coordinate System:** Parameters are normalized into integer "steps" based on the global minimum and step size of each variable. This ensures predictions snap to the valid grid.
-*   **Verification Logic (`lookup_stats`):**
-    *   **Primary:** Searches for an exact parameter match in the target file.
-    *   **Fallback:** If no exact match exists, calculates the Nearest Neighbor in normalized step space (Euclidean distance) to find the closest existing vector.
-
-### 2.4 Reporting
-*   **HTML Output:** Generates `Predictability_Report_MultiModel.html`.
-*   **Visualizations:** Includes Base64-encoded plots for "Result Performance" and "Profit Performance" for each model.
-*   **Metrics:** Calculates Average Result and Hit Rate (percentage of times the predicted parameters were found in the target file).
+### 2.3 General Architecture
+*   **Vectorized Data Ingestion:** Uses `np.lib.stride_tricks.sliding_window_view` (in Bins) or efficient NumPy array operations (in Genetic) for fast data access.
+*   **Parallel Processing:** Uses `ProcessPoolExecutor` (spawn context) to process each week/file in a separate process, isolating memory and computation.
+*   **Robust CSV Reader:** Custom `read_csv_robust` handles various CSV formats (European/US decimals).
+*   **Reporting:** Generates an HTML report (`Predictability_Report_Genetic.html` or `Predictability_Report_MultiModel.html`) comparing the models against the actual file results.
