@@ -1,8 +1,9 @@
 # Strategy Predictability Program Requirements
 
-This project contains two distinct approaches for strategy predictability analysis:
+This project contains three distinct approaches for strategy predictability analysis:
 1.  **`strategy_predictability_genetic.py`**: Uses a Genetic Algorithm (PyGAD) to evolve strategy parameters.
-2.  **`strategy_predictability_generative.py`**: Uses Generative Optimization (VAE, Neural Surrogates, NSGA-II) to synthesize optimal vectors.
+2.  **`strategy_predictability_bins.py`**: Uses Deep Learning (NeuralForecast, Tsai) to predict parameter performance bins.
+3.  **`strategy_predictability_generative.py`**: Uses Generative Optimization (VAE, Neural Surrogates, NSGA-II) to synthesize optimal vectors.
 
 ### Libaries to Install:
 1.  **pandas**: Used for data manipulation (DataFrames, CSV reading).
@@ -10,11 +11,14 @@ This project contains two distinct approaches for strategy predictability analys
 3.  **matplotlib**: Used for generating graphs and plotting results.
 4.  **darts**: Used for the Random Forest time series forecasting model.
 5.  **pygad**: Used for the Genetic Algorithm optimization (`_genetic.py`).
-6.  **torch**: Used for VAE and Surrogate Neural Networks (`_generative.py`).
-7.  **scikit-learn**: Used for Nearest Neighbor mapping (`_generative.py`).
+6.  **neuralforecast**: Used for NHITS models (`_bins.py`).
+7.  **tsai**: Used for InceptionTime models (`_bins.py`).
+8.  **torch**: Used for VAE and Surrogate Neural Networks (`_generative.py`).
+9.  **scikit-learn**: Used for Nearest Neighbor mapping (`_generative.py`).
 
 ### **Hardware Requirements**
 *   **Genetic Algorithm (`_genetic.py`):** CPU-intensive. Fast multi-core CPU recommended.
+*   **Deep Learning (`_bins.py`):** NVIDIA GPU with CUDA support is highly recommended for `neuralforecast` and `tsai`.
 *   **Generative Optimization (`_generative.py`):** NVIDIA GPU with CUDA support is highly recommended for faster VAE training, but runs on CPU.
 
 ### **Installation Command**
@@ -22,12 +26,15 @@ This project contains two distinct approaches for strategy predictability analys
 You can install all the required dependencies with the following pip command:
 
 ```bash
-pip install pandas numpy matplotlib darts pygad torch scikit-learn
+pip install pandas numpy matplotlib darts pygad neuralforecast tsai torch scikit-learn
 ```
 
 ```bash
 # To run the Genetic Algorithm version:
 python strategy_predictability_genetic.py
+
+# To run the Deep Learning/Bins version:
+python strategy_predictability_bins.py
 
 # To run the Generative Optimization version:
 python strategy_predictability_generative.py
@@ -61,6 +68,7 @@ The following requirements outline the intended logic for the strategy predictab
 *   **Full Surface Data:** Input *all* vectors (lines) from each CSV into the models.
 *   **Approaches:**
     *   **Genetic Algorithm (`_genetic.py`):** Uses PyGAD to evolve a set of parameters.
+    *   **Deep Learning (`_bins.py`):** Uses Tsai (InceptionTime) and NeuralForecast (NHITS) to predict the ranking or probability of high results based on the entire optimization surface history.
     *   **Generative Optimization (`_generative.py`):** Uses a Variational Autoencoder (VAE) to learn the structural manifold of valid vectors and optimizes for Stability and Reward using Neural Surrogates.
 
 ---
@@ -80,7 +88,14 @@ The following requirements outline the intended logic for the strategy predictab
     *   `GA_SOL_PER_POP`: Population size (Default: 50).
     *   `GA_MUTATION_PERCENT_GENES`: Mutation rate (Default: 10%).
 
-### 2.2 Generative Optimization (`strategy_predictability_generative.py`)
+### 2.2 Deep Learning (`strategy_predictability_bins.py`)
+*   **Legacy Architecture:** Retains the original implementation using `tsai` and `neuralforecast`.
+*   **Master Matrix:** Uses a global dense NumPy array for efficient training data slicing.
+*   **Models:**
+    *   **Tsai:** InceptionTime classifier/regressor.
+    *   **NeuralForecast:** NHITS model on the surface data.
+
+### 2.3 Generative Optimization (`strategy_predictability_generative.py`)
 *   **Architecture:** Implements a Generative Design loop using VAE, Neural Surrogates, and Evolutionary Search.
 *   **Data View & Training:**
     *   **Input:** The algorithm sees the `TRAINING_WINDOW` (e.g., 30 weeks) of optimization surfaces.
@@ -95,7 +110,7 @@ The following requirements outline the intended logic for the strategy predictab
     *   **Generative Step:** It evolves a population of latent vectors, decodes them to parameter space, and evaluates them using the Surrogates.
 *   **Mapping:** The final synthesized optimal vector is mapped to the **Nearest Real Vector** available in the current week's dataset using Euclidean distance, ensuring the output is a valid, testable strategy configuration.
 
-### 2.3 General Architecture
+### 2.4 General Architecture
 *   **Vectorized Data Ingestion:** Uses `np.lib.stride_tricks.sliding_window_view` (in Bins) or efficient NumPy array operations (in Genetic) for fast data access.
 *   **Parallel Processing:** Uses `ProcessPoolExecutor` (spawn context) to process each week/file in a separate process, isolating memory and computation.
 *   **Robust CSV Reader:** Custom `read_csv_robust` handles various CSV formats (European/US decimals).
