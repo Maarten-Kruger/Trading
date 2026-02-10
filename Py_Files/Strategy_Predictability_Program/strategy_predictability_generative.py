@@ -397,9 +397,10 @@ def get_generative_optimizer(flags):
                     # Define X_data for sklearn later
                     X_data = np.array(valid_coords, dtype=np.float32)
 
-                    X_tensor = torch.tensor(X_data).to(self.device)
-                    y_mean_tensor = torch.tensor(y_mean_norm, dtype=np.float32).reshape(-1, 1).to(self.device)
-                    y_std_tensor = torch.tensor(y_std_norm, dtype=np.float32).reshape(-1, 1).to(self.device)
+                    # Use torch.float32 instead of np.float32 for dtype argument
+                    X_tensor = torch.tensor(X_data, dtype=torch.float32).to(self.device)
+                    y_mean_tensor = torch.tensor(y_mean_norm, dtype=torch.float32).reshape(-1, 1).to(self.device)
+                    y_std_tensor = torch.tensor(y_std_norm, dtype=torch.float32).reshape(-1, 1).to(self.device)
 
                     dataset = TensorDataset(X_tensor, y_mean_tensor, y_std_tensor)
                     loader = DataLoader(dataset, batch_size=64, shuffle=True)
