@@ -103,7 +103,7 @@ def generate_files():
 
         # Apply Logic: Result = Skill + Noise
         # Noise: Random fluctuation per week, e.g., Normal(0, 5)
-        noise = np.random.normal(0, 5, size=ROWS_PER_FILE)
+        noise = np.random.normal(0, 20, size=ROWS_PER_FILE)
 
         # Calculate Result
         week_df['Result'] = true_skills + noise
@@ -114,7 +114,7 @@ def generate_files():
         # Center around 0 profit for Result=50? Or just linear scaling.
         # Let's say Profit = (Result - 50) * 100 + RandomNoise
         profit_noise = np.random.normal(0, 50, size=ROWS_PER_FILE)
-        week_df['Profit'] = (week_df['Result'] - 50) * 10 + profit_noise
+        week_df['Profit'] = (week_df['Result'] - 70) * 10 + profit_noise
 
         # Fill other random columns for realism
         week_df['Trades'] = np.random.randint(10, 500, size=ROWS_PER_FILE)
