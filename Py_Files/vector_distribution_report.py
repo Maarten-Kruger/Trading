@@ -12,6 +12,10 @@ import warnings
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
+# --- Configuration ---
+SMOOTHING_WINDOW = 573  # Controls the smoothness of the moving average line
+# ---------------------
+
 def read_csv_robust(filepath):
     """
     Reads a CSV file robustly, handling different separators and decimal formats.
@@ -62,7 +66,7 @@ def get_date_from_filename(filename):
             return int(p)
     return float('inf')
 
-def generate_plot(results, filename, window_size):
+def generate_plot(results, filename, window_size, y_min=None, y_max=None):
     """
     Generates a matplotlib plot for the results distribution.
     """
@@ -82,6 +86,11 @@ def generate_plot(results, filename, window_size):
     plt.title(f"Result Distribution: {filename}")
     plt.xlabel("Vector Rank (Based on First File)")
     plt.ylabel("Result")
+
+    # Set fixed Y-axis scale if provided
+    if y_min is not None and y_max is not None:
+        plt.ylim(y_min, y_max)
+
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -129,6 +138,17 @@ def main():
         print("Error: First file is invalid (missing 'Trades' or 'Result' columns).")
         return
 
+    # Determine Y-axis scaling based on the master file
+    y_max = master_df['Result'].max()
+    y_min = master_df['Result'].min()
+
+    # Add a little padding (e.g., 5%)
+    y_range = y_max - y_min
+    y_max += y_range * 0.05
+    y_min -= y_range * 0.05
+
+    print(f"Fixed Y-Axis Scale established: [{y_min:.2f}, {y_max:.2f}]")
+
     # Identify Vector Columns (everything after 'Trades')
     cols = list(master_df.columns)
     try:
@@ -156,9 +176,6 @@ def main():
 
     # 2. Process All Files
     plots_data = []
-
-    # Determine smooth window size (approx 2% of data or min 10)
-    window_size = max(10, int(len(master_vectors) * 0.02))
 
     for filepath in csv_files:
         filename = os.path.basename(filepath)
@@ -190,8 +207,8 @@ def main():
         # Get Y-values
         results = merged_df['Result'].values
 
-        # Generate Plot
-        img_b64 = generate_plot(results, filename, window_size)
+        # Generate Plot with fixed scaling and global smoothing window
+        img_b64 = generate_plot(results, filename, SMOOTHING_WINDOW, y_min=y_min, y_max=y_max)
 
         plots_data.append({
             'filename': filename,
@@ -217,6 +234,7 @@ def main():
         <div class="container">
             <h1>Vector Distribution Report</h1>
             <p>Results ordered by vector rank in the first file ({plots_data[0]['filename'] if plots_data else 'N/A'}).</p>
+            <p>Fixed Scale (First File): [{y_min:.2f}, {y_max:.2f}] | Smoothing Window: {SMOOTHING_WINDOW}</p>
             <p>Total Files: {len(plots_data)}</p>
     """
 
