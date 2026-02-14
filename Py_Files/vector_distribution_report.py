@@ -14,6 +14,7 @@ warnings.filterwarnings("ignore")
 
 # --- Configuration ---
 SMOOTHING_WINDOW = 573  # Controls the smoothness of the moving average line
+BACK_GRAPH = 10         # Number of previous graphs to overlay
 # ---------------------
 
 def read_csv_robust(filepath):
@@ -102,6 +103,56 @@ def generate_plot(results, filename, window_size, y_min=None, y_max=None):
     img_base64 = base64.b64encode(buf.read()).decode('utf-8')
     plt.close()
 
+    smooth_values = smooth.values if 'smooth' in locals() else None
+    return img_base64, smooth_values
+
+def generate_overlay_plot(trends_list, y_min=None, y_max=None):
+    """
+    Generates a matplotlib plot with multiple overlayed trend lines.
+    Older lines have lower opacity.
+    """
+    plt.figure(figsize=(12, 6))
+
+    num_trends = len(trends_list)
+
+    # Check if there is anything to plot
+    if num_trends > 0:
+        # Assuming all trends have the same length (x-axis)
+        # Verify valid trend exists
+        valid_trends = [t for t in trends_list if t is not None]
+        if valid_trends:
+            x = np.arange(len(valid_trends[0]))
+
+            for i, trend in enumerate(trends_list):
+                if trend is None: continue
+
+                # Use random color
+                color = np.random.rand(3,)
+
+                # Calculate alpha: increasing for newer lines
+                # Range alpha from 0.2 to 1.0
+                alpha = 0.2 + (0.8 * (i / (num_trends - 1))) if num_trends > 1 else 1.0
+
+                plt.plot(x, trend, color=color, linewidth=2, alpha=alpha)
+
+    plt.title(f"Previous {num_trends} Trends Overlay")
+    plt.xlabel("Vector Rank (Based on First File)")
+    plt.ylabel("Result")
+
+    # Set fixed Y-axis scale if provided
+    if y_min is not None and y_max is not None:
+        plt.ylim(y_min, y_max)
+
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    # Save to base64
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+    plt.close()
+
     return img_base64
 
 def main():
@@ -175,7 +226,14 @@ def main():
     master_vectors['Master_Index'] = master_vectors.index # 0 to N
 
     # 2. Process All Files
-    plots_data = []
+    all_trends = [] # Stores smooth trend lines (numpy arrays)
+
+    # We will build HTML parts dynamically
+    html_standard_rows = ""
+    html_sliding_rows = ""
+
+    first_filename = os.path.basename(csv_files[0]) if csv_files else 'N/A'
+    processed_count = 0
 
     for filepath in csv_files:
         filename = os.path.basename(filepath)
@@ -208,12 +266,44 @@ def main():
         results = merged_df['Result'].values
 
         # Generate Plot with fixed scaling and global smoothing window
-        img_b64 = generate_plot(results, filename, SMOOTHING_WINDOW, y_min=y_min, y_max=y_max)
+        img_std, smooth_data = generate_plot(results, filename, SMOOTHING_WINDOW, y_min=y_min, y_max=y_max)
 
-        plots_data.append({
-            'filename': filename,
-            'image': img_b64
-        })
+        processed_count += 1
+
+        # Add to Standard View HTML
+        html_standard_rows += f"""
+            <div class="plot-container">
+                <h3>{filename}</h3>
+                <img src="data:image/png;base64,{img_std}" alt="Plot for {filename}">
+            </div>
+        """
+
+        # Handle Sliding Window Logic
+        all_trends.append(smooth_data)
+
+        if len(all_trends) > BACK_GRAPH:
+            # Get previous BACK_GRAPH trends (excluding current)
+            prev_trends = all_trends[-(BACK_GRAPH + 1) : -1]
+
+            # Generate Overlay Plot
+            img_overlay = generate_overlay_plot(prev_trends, y_min=y_min, y_max=y_max)
+
+            # Add to Sliding View HTML
+            html_sliding_rows += f"""
+            <div class="plot-container">
+                <h3>{filename} (Sliding Window Analysis)</h3>
+                <div style="display: flex; gap: 20px; align-items: center;">
+                    <div style="flex: 1;">
+                        <h4 style="margin-bottom: 5px;">Previous {BACK_GRAPH} Trends Overlay</h4>
+                        <img src="data:image/png;base64,{img_overlay}" style="width: 100%; border: 1px solid #eee;">
+                    </div>
+                    <div style="flex: 1;">
+                        <h4 style="margin-bottom: 5px;">Current Week</h4>
+                        <img src="data:image/png;base64,{img_std}" style="width: 100%; border: 1px solid #eee;">
+                    </div>
+                </div>
+            </div>
+            """
 
     # 3. Generate HTML Report
     html_content = f"""
@@ -223,30 +313,37 @@ def main():
         <title>Vector Distribution Report</title>
         <style>
             body {{ font-family: Arial, sans-serif; margin: 20px; text-align: center; }}
-            .container {{ max-width: 1200px; margin: 0 auto; }}
-            .plot-container {{ margin-bottom: 40px; border: 1px solid #ddd; padding: 10px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+            .container {{ max-width: 1400px; margin: 0 auto; }}
+            .plot-container {{ margin-bottom: 40px; border: 1px solid #ddd; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); background: #fff; }}
             img {{ max-width: 100%; height: auto; }}
             h1 {{ color: #333; }}
             h3 {{ color: #555; margin-top: 0; }}
+            details {{ margin-bottom: 20px; text-align: left; border: 1px solid #ccc; border-radius: 5px; padding: 10px; }}
+            summary {{ cursor: pointer; font-weight: bold; font-size: 1.2em; padding: 10px; background-color: #f9f9f9; }}
+            summary:hover {{ background-color: #f0f0f0; }}
+            .section-content {{ padding: 20px; }}
         </style>
     </head>
     <body>
         <div class="container">
             <h1>Vector Distribution Report</h1>
-            <p>Results ordered by vector rank in the first file ({plots_data[0]['filename'] if plots_data else 'N/A'}).</p>
+            <p>Results ordered by vector rank in the first file ({first_filename}).</p>
             <p>Fixed Scale (First File): [{y_min:.2f}, {y_max:.2f}] | Smoothing Window: {SMOOTHING_WINDOW}</p>
-            <p>Total Files: {len(plots_data)}</p>
-    """
+            <p>Total Files: {processed_count} | Back Graph Window: {BACK_GRAPH}</p>
 
-    for item in plots_data:
-        html_content += f"""
-            <div class="plot-container">
-                <h3>{item['filename']}</h3>
-                <img src="data:image/png;base64,{item['image']}" alt="Plot for {item['filename']}">
-            </div>
-        """
+            <details open>
+                <summary>Standard View</summary>
+                <div class="section-content">
+                    {html_standard_rows}
+                </div>
+            </details>
 
-    html_content += """
+            <details>
+                <summary>Sliding Window View (Last {BACK_GRAPH} Overlay)</summary>
+                <div class="section-content">
+                    {html_sliding_rows}
+                </div>
+            </details>
         </div>
     </body>
     </html>
