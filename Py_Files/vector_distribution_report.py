@@ -14,6 +14,7 @@ warnings.filterwarnings("ignore")
 
 # --- Configuration ---
 SMOOTHING_WINDOW = 573  # Controls the smoothness of the moving average line
+BACK_GRAPH = 10         # Number of previous graphs to overlay
 # ---------------------
 
 def read_csv_robust(filepath):
@@ -125,11 +126,14 @@ def generate_overlay_plot(trends_list, y_min=None, y_max=None):
             for i, trend in enumerate(trends_list):
                 if trend is None: continue
 
+                # Use random color
+                color = np.random.rand(3,)
+
                 # Calculate alpha: increasing for newer lines
                 # Range alpha from 0.2 to 1.0
                 alpha = 0.2 + (0.8 * (i / (num_trends - 1))) if num_trends > 1 else 1.0
 
-                plt.plot(x, trend, color='orange', linewidth=2, alpha=alpha)
+                plt.plot(x, trend, color=color, linewidth=2, alpha=alpha)
 
     plt.title(f"Previous {num_trends} Trends Overlay")
     plt.xlabel("Vector Rank (Based on First File)")
@@ -222,7 +226,6 @@ def main():
     master_vectors['Master_Index'] = master_vectors.index # 0 to N
 
     # 2. Process All Files
-    BACK_GRAPH = 10
     all_trends = [] # Stores smooth trend lines (numpy arrays)
 
     # We will build HTML parts dynamically
