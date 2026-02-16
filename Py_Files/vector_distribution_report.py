@@ -11,14 +11,16 @@ import io
 import warnings
 import json
 from sklearn.manifold import TSNE
+from sklearn.neighbors import KDTree
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
 # --- Configuration ---
-SMOOTHING_WINDOW = 573  # Controls the smoothness of the moving average line
+SMOOTHING_WINDOW = 573  # (Deprecated/Secondary) Controls the smoothness of the moving average line if needed
 BACK_GRAPH = 10         # Number of previous graphs to overlay
 TSNE_PERPLEXITY = 30    # Perplexity for t-SNE dimensionality reduction
+HYPERCUBE = 1           # Hypercube size (steps) for averaging neighbors
 # ---------------------
 
 def read_csv_robust(filepath):
@@ -71,9 +73,10 @@ def get_date_from_filename(filename):
             return int(p)
     return float('inf')
 
-def generate_plot(results, filename, window_size, y_min=None, y_max=None):
+def generate_plot(results, hypercube_avg, filename, y_min=None, y_max=None):
     """
     Generates a matplotlib plot for the results distribution.
+    Replaces rolling mean with Hypercube Average.
     """
     plt.figure(figsize=(12, 6))
 
@@ -81,12 +84,11 @@ def generate_plot(results, filename, window_size, y_min=None, y_max=None):
     x = np.arange(len(results))
 
     # Plot the raw data as a filled area/bar
-    plt.fill_between(x, results, color='royalblue', alpha=0.8, label='Result')
+    plt.fill_between(x, results, color='royalblue', alpha=0.8, label='Raw Result')
 
-    # Calculate and plot smooth line (Moving Average)
-    if len(results) > window_size:
-        smooth = pd.Series(results).rolling(window=window_size, center=True, min_periods=1).mean()
-        plt.plot(x, smooth, color='orange', linewidth=2, label=f'Trend ({window_size} avg)')
+    # Plot Hypercube Average line
+    if hypercube_avg is not None:
+        plt.plot(x, hypercube_avg, color='orange', linewidth=2, label=f'Hypercube Avg (Size={HYPERCUBE})')
 
     plt.title(f"Result Distribution: {filename}")
     plt.xlabel("Vector Rank (Based on First File)")
@@ -107,8 +109,7 @@ def generate_plot(results, filename, window_size, y_min=None, y_max=None):
     img_base64 = base64.b64encode(buf.read()).decode('utf-8')
     plt.close()
 
-    smooth_values = smooth.values if 'smooth' in locals() else None
-    return img_base64, smooth_values
+    return img_base64
 
 def generate_overlay_plot(trends_list, y_min=None, y_max=None):
     """
@@ -139,7 +140,7 @@ def generate_overlay_plot(trends_list, y_min=None, y_max=None):
 
                 plt.plot(x, trend, color=color, linewidth=2, alpha=alpha)
 
-    plt.title(f"Previous {num_trends} Trends Overlay")
+    plt.title(f"Previous {num_trends} Trends Overlay (Hypercube Avg)")
     plt.xlabel("Vector Rank (Based on First File)")
     plt.ylabel("Result")
 
@@ -160,6 +161,25 @@ def generate_overlay_plot(trends_list, y_min=None, y_max=None):
     img_base64 = base64.b64encode(buf.read()).decode('utf-8')
     plt.close()
 
+    return img_base64
+
+def generate_histogram(data, title):
+    """
+    Generates a simple histogram for the distribution of results inside a hypercube.
+    """
+    plt.figure(figsize=(4, 3)) # Small figure for side-by-side
+    plt.hist(data, bins=20, color='skyblue', edgecolor='black', alpha=0.7)
+    plt.title(title, fontsize=10)
+    plt.xlabel("Result", fontsize=8)
+    plt.ylabel("Count", fontsize=8)
+    plt.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+    plt.close()
     return img_base64
 
 def main():
@@ -228,10 +248,6 @@ def main():
     # Extract Vector Parameters for t-SNE
     X = master_df[vector_cols].values
 
-    # Normalize/Scale if needed?
-    # Usually good for t-SNE if ranges differ significantly, but we'll stick to raw for now unless requested.
-    # The user asked to use variable parameter dimensionality.
-
     tsne = TSNE(n_components=1, perplexity=TSNE_PERPLEXITY, random_state=42, init='pca', learning_rate='auto')
     X_embedded = tsne.fit_transform(X)
 
@@ -242,19 +258,45 @@ def main():
     print("Sorting complete based on t-SNE landscape.")
 
     # Keep only vector columns in the master DataFrame for merging
-    # We add a 'MasterRank' to preserve order after merge if needed,
-    # but since we iterate through the master list, we can just left join.
     master_vectors = master_df[vector_cols].copy()
     master_vectors.reset_index(drop=True, inplace=True)
     master_vectors['Master_Index'] = master_vectors.index # 0 to N
 
+    # --- Hypercube Neighbor Pre-computation ---
+    print(f"Pre-computing Hypercube Neighbors (Size={HYPERCUBE})...")
+
+    # 1. Map parameters to Grid Indices
+    grid_indices_list = []
+    for col in vector_cols:
+        # Get unique sorted values for this parameter
+        unique_vals = np.sort(master_vectors[col].unique())
+        # Map values to their index in unique_vals
+        indices = np.searchsorted(unique_vals, master_vectors[col].values)
+        grid_indices_list.append(indices)
+
+    # Transpose to get (N_samples, N_features)
+    grid_coords = np.vstack(grid_indices_list).T
+
+    # 2. Build KDTree
+    print("Building KDTree...")
+    tree = KDTree(grid_coords, metric='chebyshev')
+
+    # 3. Query Neighbors for all vectors
+    # We query for HYPERCUBE radius (Chebyshev distance)
+    print("Querying neighbors...")
+    # returns array of objects (arrays of indices)
+    master_neighbor_indices = tree.query_radius(grid_coords, r=HYPERCUBE)
+    print("Neighbor pre-computation complete.")
+    # -------------------------------------------
+
     # 2. Process All Files
-    all_trends = [] # Stores smooth trend lines (numpy arrays)
+    all_trends = [] # Stores hypercube avg trend lines (numpy arrays)
     vector_data_store = {} # Stores data for JS {filename: {date, vectors: [r, p, params]}}
 
     # We will build HTML parts dynamically
     html_standard_rows = ""
     html_sliding_rows = ""
+    html_top3_rows = ""
 
     first_filename = os.path.basename(csv_files[0]) if csv_files else 'N/A'
     processed_count = 0
@@ -291,16 +333,19 @@ def main():
         results = merged_df['Result'].values
         profits = merged_df['Profit'].values
 
-        # Prepare vector data for this file to be embedded
-        # We store a list of dicts: {r: result, p: profit, v: params_str}
-        # To save space, we can just store a list of lists if needed, but dict is clearer for JS.
-        # Let's optimize slightly: simple arrays
+        # --- Calculate Hypercube Average ---
+        hypercube_avgs = np.zeros_like(results)
 
-        # Create a params string for each row
-        # We need to make sure we select the vector columns row by row
+        # Optimize: results is a numpy array. We can access indices directly.
+        # Loop through each vector and average its neighbors
+        # We can iterate because we pre-calculated indices
+        for i, neighbor_idxs in enumerate(master_neighbor_indices):
+            hypercube_avgs[i] = np.mean(results[neighbor_idxs])
+
+        # -----------------------------------
+
+        # Prepare vector data for this file to be embedded
         params_df = merged_df[vector_cols]
-        # Convert to string representation like "p1=v1, p2=v2" or just "v1, v2"
-        # Let's just do comma separated values
         params_list = params_df.astype(str).agg(', '.join, axis=1).tolist()
 
         file_vectors = []
@@ -312,8 +357,8 @@ def main():
             'vectors': file_vectors
         }
 
-        # Generate Plot with fixed scaling and global smoothing window
-        img_std, smooth_data = generate_plot(results, filename, SMOOTHING_WINDOW, y_min=y_min, y_max=y_max)
+        # Generate Plot with fixed scaling and hypercube average
+        img_std = generate_plot(results, hypercube_avgs, filename, y_min=y_min, y_max=y_max)
 
         processed_count += 1
 
@@ -325,8 +370,8 @@ def main():
             </div>
         """
 
-        # Handle Sliding Window Logic
-        all_trends.append(smooth_data)
+        # Handle Sliding Window Logic (Store Hypercube Avg)
+        all_trends.append(hypercube_avgs)
 
         if len(all_trends) > BACK_GRAPH:
             # Get previous BACK_GRAPH trends (excluding current)
@@ -343,7 +388,7 @@ def main():
                 <!-- Top Row: Overlay Graph + Controls -->
                 <div style="display: flex; gap: 20px; align-items: flex-start; margin-bottom: 20px;">
                     <div style="flex: 2;">
-                        <h4 style="margin-bottom: 5px;">Previous {BACK_GRAPH} Trends Overlay</h4>
+                        <h4 style="margin-bottom: 5px;">Previous {BACK_GRAPH} Trends Overlay (Hypercube Avg)</h4>
                         <img src="data:image/png;base64,{img_overlay}" style="width: 100%; border: 1px solid #eee;">
                     </div>
                     <div style="flex: 1; padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #ddd;">
@@ -366,6 +411,48 @@ def main():
             </div>
             """
 
+        # --- Top 3 Hypercube Vectors ---
+        # Identify top 3 vectors by Hypercube Average
+        top_indices = np.argsort(hypercube_avgs)[-3:][::-1] # indices of top 3, descending
+
+        top3_html_content = ""
+        for rank_idx, vec_idx in enumerate(top_indices):
+            rank = rank_idx + 1
+            vec_avg = hypercube_avgs[vec_idx]
+            vec_raw_result = results[vec_idx]
+            vec_profit = profits[vec_idx]
+            vec_params = params_list[vec_idx]
+
+            # Get neighbor results for distribution
+            n_idxs = master_neighbor_indices[vec_idx]
+            neighbor_results = results[n_idxs]
+
+            # Generate Histogram
+            img_hist = generate_histogram(neighbor_results, f"Rank {rank} (ID: {vec_idx}) Distribution")
+
+            top3_html_content += f"""
+            <div style="flex: 1; padding: 10px; border: 1px solid #eee; background: #fff;">
+                <h5 style="margin: 0 0 10px 0; color: #333;">#{rank} (Vector ID: {vec_idx})</h5>
+                <div style="font-size: 0.85em; margin-bottom: 10px; text-align: left;">
+                    <div><strong>Hypercube Avg:</strong> {vec_avg:.4f}</div>
+                    <div><strong>Raw Result:</strong> {vec_raw_result:.4f}</div>
+                    <div><strong>Profit:</strong> {vec_profit:.2f}</div>
+                    <div style="font-size: 0.8em; color: #666; word-break: break-all;">{vec_params}</div>
+                </div>
+                <img src="data:image/png;base64,{img_hist}" style="width: 100%;">
+            </div>
+            """
+
+        html_top3_rows += f"""
+        <div class="plot-container">
+            <h3>{filename} - Top 3 Hypercube Vectors</h3>
+            <div style="display: flex; gap: 20px;">
+                {top3_html_content}
+            </div>
+        </div>
+        """
+        # -------------------------------
+
     # Serialize data for embedding
     json_data = json.dumps(vector_data_store)
 
@@ -385,6 +472,7 @@ def main():
             h1 {{ color: #333; }}
             h3 {{ color: #555; margin-top: 0; }}
             h4 {{ color: #777; }}
+            h5 {{ color: #555; font-weight: bold; }}
             details {{ margin-bottom: 20px; text-align: left; border: 1px solid #ccc; border-radius: 5px; padding: 10px; background: #fff; }}
             summary {{ cursor: pointer; font-weight: bold; font-size: 1.2em; padding: 10px; background-color: #f9f9f9; }}
             summary:hover {{ background-color: #f0f0f0; }}
@@ -411,10 +499,17 @@ def main():
                 <div style="text-align:left;">
                     <h1>Vector Distribution Report</h1>
                     <p>Results ordered by vector rank in the first file ({first_filename}).</p>
-                    <p>Fixed Scale: [{y_min:.2f}, {y_max:.2f}] | Smoothing: {SMOOTHING_WINDOW} | Back Graph: {BACK_GRAPH}</p>
+                    <p>Fixed Scale: [{y_min:.2f}, {y_max:.2f}] | Hypercube Size: {HYPERCUBE} | Back Graph: {BACK_GRAPH}</p>
                 </div>
                 <button class="save-btn" onclick="saveReport()">Save Report Analysis</button>
             </div>
+
+            <details open>
+                <summary>Top 3 Vectors (Hypercube Analysis)</summary>
+                <div class="section-content">
+                    {html_top3_rows}
+                </div>
+            </details>
 
             <details>
                 <summary>Standard View</summary>
@@ -423,7 +518,7 @@ def main():
                 </div>
             </details>
 
-            <details open>
+            <details>
                 <summary>Sliding Window View (Last {BACK_GRAPH} Overlay)</summary>
                 <div class="section-content">
                     {html_sliding_rows}
