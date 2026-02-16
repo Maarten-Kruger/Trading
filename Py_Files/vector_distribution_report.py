@@ -5,9 +5,11 @@ import glob
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 import base64
 import io
 import warnings
+import json
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -143,7 +145,10 @@ def generate_overlay_plot(trends_list, y_min=None, y_max=None):
     if y_min is not None and y_max is not None:
         plt.ylim(y_min, y_max)
 
-    plt.grid(True, alpha=0.3)
+    # Detailed X-Axis and Grid
+    plt.grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.7)
+    plt.minorticks_on()
+    plt.gca().xaxis.set_minor_locator(ticker.AutoMinorLocator(5)) # 5 minor ticks per major
     plt.tight_layout()
 
     # Save to base64
@@ -227,6 +232,7 @@ def main():
 
     # 2. Process All Files
     all_trends = [] # Stores smooth trend lines (numpy arrays)
+    vector_data_store = {} # Stores data for JS {filename: {date, vectors: [r, p, params]}}
 
     # We will build HTML parts dynamically
     html_standard_rows = ""
@@ -239,6 +245,8 @@ def main():
         filename = os.path.basename(filepath)
         print(f"Processing: {filename}")
 
+        file_date = get_date_from_filename(filename)
+
         # Read current file
         current_df = read_csv_robust(filepath)
 
@@ -246,24 +254,45 @@ def main():
             print(f"Warning: {filename} is empty or unreadable. Skipping.")
             continue
 
-        # Ensure 'Result' and vector cols exist
-        if 'Result' not in current_df.columns:
-            print(f"Warning: 'Result' column missing in {filename}. Skipping.")
+        # Ensure 'Result', 'Profit' and vector cols exist
+        if 'Result' not in current_df.columns or 'Profit' not in current_df.columns:
+            print(f"Warning: 'Result' or 'Profit' column missing in {filename}. Skipping.")
             continue
 
         # Merge current data onto master vectors
-        # Left join on vector columns
-        # This aligns current results to the Master Rank
         merged_df = pd.merge(master_vectors, current_df, on=vector_cols, how='left')
 
-        # Fill missing results with 0
+        # Fill missing numeric values with 0
         merged_df['Result'] = merged_df['Result'].fillna(0.0)
+        merged_df['Profit'] = merged_df['Profit'].fillna(0.0)
 
         # Sort by Master Index to ensure X-axis is consistent
         merged_df.sort_values(by='Master_Index', ascending=True, inplace=True)
 
         # Get Y-values
         results = merged_df['Result'].values
+        profits = merged_df['Profit'].values
+
+        # Prepare vector data for this file to be embedded
+        # We store a list of dicts: {r: result, p: profit, v: params_str}
+        # To save space, we can just store a list of lists if needed, but dict is clearer for JS.
+        # Let's optimize slightly: simple arrays
+
+        # Create a params string for each row
+        # We need to make sure we select the vector columns row by row
+        params_df = merged_df[vector_cols]
+        # Convert to string representation like "p1=v1, p2=v2" or just "v1, v2"
+        # Let's just do comma separated values
+        params_list = params_df.astype(str).agg(', '.join, axis=1).tolist()
+
+        file_vectors = []
+        for r, p, v in zip(results, profits, params_list):
+            file_vectors.append({'r': round(r, 4), 'p': round(p, 2), 'v': v})
+
+        vector_data_store[filename] = {
+            'date': file_date,
+            'vectors': file_vectors
+        }
 
         # Generate Plot with fixed scaling and global smoothing window
         img_std, smooth_data = generate_plot(results, filename, SMOOTHING_WINDOW, y_min=y_min, y_max=y_max)
@@ -288,63 +317,361 @@ def main():
             # Generate Overlay Plot
             img_overlay = generate_overlay_plot(prev_trends, y_min=y_min, y_max=y_max)
 
-            # Add to Sliding View HTML
+            # Add to Sliding View HTML (New Layout)
             html_sliding_rows += f"""
-            <div class="plot-container">
+            <div class="plot-container" id="container-{filename.replace('.', '_')}">
                 <h3>{filename} (Sliding Window Analysis)</h3>
-                <div style="display: flex; gap: 20px; align-items: center;">
-                    <div style="flex: 1;">
+
+                <!-- Top Row: Overlay Graph + Controls -->
+                <div style="display: flex; gap: 20px; align-items: flex-start; margin-bottom: 20px;">
+                    <div style="flex: 2;">
                         <h4 style="margin-bottom: 5px;">Previous {BACK_GRAPH} Trends Overlay</h4>
                         <img src="data:image/png;base64,{img_overlay}" style="width: 100%; border: 1px solid #eee;">
                     </div>
-                    <div style="flex: 1;">
-                        <h4 style="margin-bottom: 5px;">Current Week</h4>
-                        <img src="data:image/png;base64,{img_std}" style="width: 100%; border: 1px solid #eee;">
+                    <div style="flex: 1; padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #ddd;">
+                        <h4>Evaluate Vector Strategy</h4>
+                        <p>Select a Vector Rank to evaluate for this week.</p>
+                        <div style="margin-bottom: 15px;">
+                            <label style="display:block; margin-bottom:5px; font-weight:bold;">Vector Rank (0-{len(master_vectors)-1}):</label>
+                            <input type="number" id="input-{filename}" class="rank-input" min="0" max="{len(master_vectors)-1}" placeholder="Enter Rank" style="width: 100%; padding: 8px; margin-bottom: 10px;">
+                            <button onclick="submitVector('{filename}')" style="width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Submit</button>
+                        </div>
+                        <div id="result-{filename}" style="margin-top: 10px; font-size: 0.9em; color: #555;"></div>
                     </div>
+                </div>
+
+                <!-- Bottom Row: Current File Graph -->
+                <div style="width: 100%;">
+                    <h4 style="margin-bottom: 5px;">Current File: {filename}</h4>
+                    <img src="data:image/png;base64,{img_std}" style="width: 100%; border: 1px solid #eee;">
                 </div>
             </div>
             """
+
+    # Serialize data for embedding
+    json_data = json.dumps(vector_data_store)
 
     # 3. Generate HTML Report
     html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
+        <meta charset="UTF-8">
         <title>Vector Distribution Report</title>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
-            body {{ font-family: Arial, sans-serif; margin: 20px; text-align: center; }}
-            .container {{ max-width: 1400px; margin: 0 auto; }}
-            .plot-container {{ margin-bottom: 40px; border: 1px solid #ddd; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); background: #fff; }}
+            body {{ font-family: Arial, sans-serif; margin: 20px; text-align: center; background-color: #f4f4f9; }}
+            .container {{ max-width: 1600px; margin: 0 auto; padding-bottom: 100px; }}
+            .plot-container {{ margin-bottom: 40px; border: 1px solid #ddd; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); background: #fff; }}
             img {{ max-width: 100%; height: auto; }}
             h1 {{ color: #333; }}
             h3 {{ color: #555; margin-top: 0; }}
-            details {{ margin-bottom: 20px; text-align: left; border: 1px solid #ccc; border-radius: 5px; padding: 10px; }}
+            h4 {{ color: #777; }}
+            details {{ margin-bottom: 20px; text-align: left; border: 1px solid #ccc; border-radius: 5px; padding: 10px; background: #fff; }}
             summary {{ cursor: pointer; font-weight: bold; font-size: 1.2em; padding: 10px; background-color: #f9f9f9; }}
             summary:hover {{ background-color: #f0f0f0; }}
             .section-content {{ padding: 20px; }}
+
+            /* Dashboard Styles */
+            #dashboard {{ position: fixed; bottom: 0; left: 0; width: 100%; height: 350px; background: #fff; border-top: 2px solid #ccc; box-shadow: 0 -2px 10px rgba(0,0,0,0.2); z-index: 1000; display: flex; flex-direction: column; transition: height 0.3s; }}
+            #dashboard.minimized {{ height: 40px; }}
+            #dashboard-header {{ padding: 10px 20px; background: #333; color: #fff; display: flex; justify-content: space-between; align-items: center; cursor: pointer; }}
+            #dashboard-content {{ flex: 1; display: flex; overflow: hidden; padding: 10px; gap: 20px; }}
+            .dash-panel {{ flex: 1; border: 1px solid #eee; padding: 10px; overflow-y: auto; display: flex; flex-direction: column; }}
+            table {{ width: 100%; border-collapse: collapse; font-size: 0.9em; }}
+            th, td {{ border: 1px solid #ddd; padding: 6px; text-align: left; }}
+            th {{ background-color: #f2f2f2; position: sticky; top: 0; }}
+            tr:nth-child(even) {{ background-color: #f9f9f9; }}
+
+            .save-btn {{ background-color: #28a745; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 5px; cursor: pointer; margin-bottom: 20px; }}
+            .save-btn:hover {{ background-color: #218838; }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>Vector Distribution Report</h1>
-            <p>Results ordered by vector rank in the first file ({first_filename}).</p>
-            <p>Fixed Scale (First File): [{y_min:.2f}, {y_max:.2f}] | Smoothing Window: {SMOOTHING_WINDOW}</p>
-            <p>Total Files: {processed_count} | Back Graph Window: {BACK_GRAPH}</p>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                <div style="text-align:left;">
+                    <h1>Vector Distribution Report</h1>
+                    <p>Results ordered by vector rank in the first file ({first_filename}).</p>
+                    <p>Fixed Scale: [{y_min:.2f}, {y_max:.2f}] | Smoothing: {SMOOTHING_WINDOW} | Back Graph: {BACK_GRAPH}</p>
+                </div>
+                <button class="save-btn" onclick="saveReport()">Save Report Analysis</button>
+            </div>
 
-            <details open>
+            <details>
                 <summary>Standard View</summary>
                 <div class="section-content">
                     {html_standard_rows}
                 </div>
             </details>
 
-            <details>
+            <details open>
                 <summary>Sliding Window View (Last {BACK_GRAPH} Overlay)</summary>
                 <div class="section-content">
                     {html_sliding_rows}
                 </div>
             </details>
         </div>
+
+        <!-- Dashboard -->
+        <div id="dashboard">
+            <div id="dashboard-header" onclick="toggleDashboard()">
+                <span>Strategy Performance Dashboard</span>
+                <span id="dash-toggle-icon">▼</span>
+            </div>
+            <div id="dashboard-content">
+                <div class="dash-panel" style="flex: 1.2;">
+                    <h4>Selected Vectors</h4>
+                    <div style="flex:1; overflow-y:auto;">
+                        <table id="trades-table">
+                            <thead>
+                                <tr>
+                                    <th>File Date</th>
+                                    <th>Filename</th>
+                                    <th>Rank</th>
+                                    <th>Profit</th>
+                                    <th>Result</th>
+                                    <th>Params</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="dash-panel" style="flex: 1.5;">
+                    <h4>Cumulative Profit (Start $10,000)</h4>
+                    <div style="position: relative; height: 100%; width: 100%;">
+                        <canvas id="profitChart"></canvas>
+                    </div>
+                </div>
+                <div class="dash-panel" style="flex: 0.8;">
+                    <h4>Performance Metrics</h4>
+                    <table id="metrics-table">
+                        <tr><td>Total Profit</td><td id="m-total">0.00</td></tr>
+                        <tr><td>Max Drawdown</td><td id="m-maxdd">0.00%</td></tr>
+                        <tr><td>Avg Drawdown</td><td id="m-avgdd">0.00%</td></tr>
+                        <tr><td>Sharpe Ratio (Est)</td><td id="m-sharpe">0.00</td></tr>
+                        <tr><td>Files Traded</td><td id="m-count">0</td></tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            // Embedded Data
+            const vectorData = {json_data};
+
+            // State Management
+            let selectedTrades = {{}}; // {{ filename: rank }}
+
+            // Chart Instance
+            let profitChart = null;
+
+            // Initialize
+            document.addEventListener('DOMContentLoaded', () => {{
+                restoreState();
+                updateDashboard();
+            }});
+
+            function toggleDashboard() {{
+                const d = document.getElementById('dashboard');
+                d.classList.toggle('minimized');
+                const icon = document.getElementById('dash-toggle-icon');
+                icon.textContent = d.classList.contains('minimized') ? '▲' : '▼';
+            }}
+
+            function submitVector(filename) {{
+                const input = document.getElementById('input-' + filename);
+                const rank = parseInt(input.value);
+                const maxRank = vectorData[filename].vectors.length - 1;
+
+                if (isNaN(rank) || rank < 0 || rank > maxRank) {{
+                    alert('Invalid Rank. Please enter a value between 0 and ' + maxRank);
+                    return;
+                }}
+
+                // Save to state
+                selectedTrades[filename] = rank;
+
+                // Provide feedback
+                const data = vectorData[filename].vectors[rank];
+                const resDiv = document.getElementById('result-' + filename);
+                resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{data.p}}<br>Result: ${{data.r}}`;
+                resDiv.style.color = data.p >= 0 ? 'green' : 'red';
+
+                updateDashboard();
+            }}
+
+            function updateDashboard() {{
+                const tbody = document.querySelector('#trades-table tbody');
+                tbody.innerHTML = '';
+
+                // Convert state to array and sort by date
+                let trades = [];
+                for (const [fname, rank] of Object.entries(selectedTrades)) {{
+                    if (vectorData[fname]) {{
+                        const info = vectorData[fname];
+                        trades.push({{
+                            filename: fname,
+                            date: info.date,
+                            rank: rank,
+                            data: info.vectors[rank]
+                        }});
+                    }}
+                }}
+
+                // Sort Chronologically
+                trades.sort((a, b) => a.date - b.date);
+
+                // Calculate Equity Curve
+                let equity = 10000;
+                let equityCurve = [10000];
+                let labels = ['Start'];
+                let returns = [];
+                let peak = 10000;
+                let drawdowns = [];
+
+                trades.forEach(t => {{
+                    // Update Table
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${{t.date}}</td>
+                        <td title="${{t.filename}}">${{t.filename.substring(0, 20)}}...</td>
+                        <td>${{t.rank}}</td>
+                        <td style="color: ${{t.data.p >= 0 ? 'green' : 'red'}}">${{t.data.p.toFixed(2)}}</td>
+                        <td>${{t.data.r.toFixed(4)}}</td>
+                        <td style="font-size:0.8em">${{t.data.v}}</td>
+                    `;
+                    tbody.appendChild(row);
+
+                    // Update Equity
+                    equity += t.data.p;
+                    equityCurve.push(equity);
+                    labels.push(t.date.toString());
+
+                    // Metrics Prep
+                    if (equity > peak) peak = equity;
+                    let dd = (peak - equity) / peak;
+                    drawdowns.push(dd);
+
+                    // Simple return approx (profit / previous equity) - assuming fixed lot size or compounding?
+                    // User asked for plot from 10k account. We'll stick to absolute profit addition.
+                    // For Sharpe, we can use the raw PnL series mean/std.
+                    returns.push(t.data.p);
+                }});
+
+                // Update Metrics
+                const totalProfit = equity - 10000;
+                const maxDD = drawdowns.length > 0 ? Math.max(...drawdowns) * 100 : 0;
+                const avgDD = drawdowns.length > 0 ? (drawdowns.reduce((a,b)=>a+b,0)/drawdowns.length) * 100 : 0;
+
+                // Sharpe Calculation (Weekly)
+                let sharpe = 0;
+                if (returns.length > 1) {{
+                    const mean = returns.reduce((a,b)=>a+b,0) / returns.length;
+                    const variance = returns.reduce((a,b)=>a + Math.pow(b-mean, 2), 0) / (returns.length - 1);
+                    const std = Math.sqrt(variance);
+                    if (std > 0) {{
+                        sharpe = (mean / std) * Math.sqrt(52);
+                    }}
+                }}
+
+                document.getElementById('m-total').textContent = totalProfit.toFixed(2);
+                document.getElementById('m-total').style.color = totalProfit >= 0 ? 'green' : 'red';
+                document.getElementById('m-maxdd').textContent = maxDD.toFixed(2) + '%';
+                document.getElementById('m-avgdd').textContent = avgDD.toFixed(2) + '%';
+                document.getElementById('m-sharpe').textContent = sharpe.toFixed(3);
+                document.getElementById('m-count').textContent = trades.length;
+
+                // Update Chart
+                updateChart(labels, equityCurve);
+            }}
+
+            function updateChart(labels, data) {{
+                const ctx = document.getElementById('profitChart').getContext('2d');
+
+                if (profitChart) {{
+                    profitChart.destroy();
+                }}
+
+                profitChart = new Chart(ctx, {{
+                    type: 'line',
+                    data: {{
+                        labels: labels,
+                        datasets: [{{
+                            label: 'Account Equity ($)',
+                            data: data,
+                            borderColor: '#28a745',
+                            backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.1
+                        }}]
+                    }},
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {{
+                            legend: {{ display: false }}
+                        }},
+                        scales: {{
+                            x: {{ ticks: {{ maxTicksLimit: 10 }} }},
+                            y: {{ beginAtZero: false }}
+                        }}
+                    }}
+                }});
+            }}
+
+            function saveReport() {{
+                // Serialize current DOM to a string
+                // We need to make sure the input values are preserved in the DOM before serializing
+
+                // 1. Update input attributes
+                for (const [fname, rank] of Object.entries(selectedTrades)) {{
+                    const input = document.getElementById('input-' + fname);
+                    if (input) input.setAttribute('value', rank);
+                }}
+
+                // 2. Clone and Clean
+                // We want to save the file such that when opened, it loads the state.
+                // The easiest way is to rely on 'selectedTrades' being hardcoded into the script?
+                // No, simpler: We save the DOM. The 'restoreState' function will read from the inputs!
+
+                const htmlContent = document.documentElement.outerHTML;
+                const blob = new Blob([htmlContent], {{type: 'text/html'}});
+                const url = URL.createObjectURL(blob);
+
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'Vector_Distribution_Report_Saved.html';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }}
+
+            function restoreState() {{
+                // Read from inputs to restore 'selectedTrades' if this is a saved file
+                const inputs = document.querySelectorAll('.rank-input');
+                inputs.forEach(input => {{
+                    if (input.value && input.value !== '') {{
+                        const filename = input.id.replace('input-', '');
+                        selectedTrades[filename] = parseInt(input.value);
+
+                        // Also restore visual feedback
+                        if (vectorData[filename]) {{
+                            const rank = parseInt(input.value);
+                             const data = vectorData[filename].vectors[rank];
+                             const resDiv = document.getElementById('result-' + filename);
+                             if(resDiv && data) {{
+                                resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{data.p}}<br>Result: ${{data.r}}`;
+                                resDiv.style.color = data.p >= 0 ? 'green' : 'red';
+                             }}
+                        }}
+                    }}
+                }});
+            }}
+        </script>
     </body>
     </html>
     """
