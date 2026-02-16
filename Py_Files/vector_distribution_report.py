@@ -412,11 +412,29 @@ def main():
             """
 
         # --- Top 3 Hypercube Vectors ---
-        # Identify top 3 vectors by Hypercube Average
-        top_indices = np.argsort(hypercube_avgs)[-3:][::-1] # indices of top 3, descending
+        # Identify top 3 vectors by Hypercube Average with EXCLUSION logic
+        # Sort ALL candidates first
+        sorted_indices = np.argsort(hypercube_avgs)[::-1]
+
+        top_selected_indices = []
+        excluded_indices = set()
+
+        for cand_idx in sorted_indices:
+            if len(top_selected_indices) >= 3:
+                break
+
+            if cand_idx in excluded_indices:
+                continue
+
+            # Select this vector
+            top_selected_indices.append(cand_idx)
+
+            # Add its neighbors to exclusion list (vectors inside its hypercube)
+            neighbors = master_neighbor_indices[cand_idx]
+            excluded_indices.update(neighbors)
 
         top3_html_content = ""
-        for rank_idx, vec_idx in enumerate(top_indices):
+        for rank_idx, vec_idx in enumerate(top_selected_indices):
             rank = rank_idx + 1
             vec_avg = hypercube_avgs[vec_idx]
             vec_raw_result = results[vec_idx]
