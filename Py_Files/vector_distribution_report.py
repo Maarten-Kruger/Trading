@@ -10,6 +10,7 @@ import base64
 import io
 import warnings
 import json
+from sklearn.manifold import TSNE
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -17,6 +18,7 @@ warnings.filterwarnings("ignore")
 # --- Configuration ---
 SMOOTHING_WINDOW = 573  # Controls the smoothness of the moving average line
 BACK_GRAPH = 10         # Number of previous graphs to overlay
+TSNE_PERPLEXITY = 30    # Perplexity for t-SNE dimensionality reduction
 # ---------------------
 
 def read_csv_robust(filepath):
@@ -220,8 +222,24 @@ def main():
 
     print(f" identified {len(vector_cols)} vector parameters.")
 
-    # Sort Master DF by Result Descending to establish rank
-    master_df.sort_values(by='Result', ascending=False, inplace=True)
+    # Sort Master DF by t-SNE 1D Embedding of Parameters
+    print(f"Applying t-SNE dimensionality reduction (perplexity={TSNE_PERPLEXITY})...")
+
+    # Extract Vector Parameters for t-SNE
+    X = master_df[vector_cols].values
+
+    # Normalize/Scale if needed?
+    # Usually good for t-SNE if ranges differ significantly, but we'll stick to raw for now unless requested.
+    # The user asked to use variable parameter dimensionality.
+
+    tsne = TSNE(n_components=1, perplexity=TSNE_PERPLEXITY, random_state=42, init='pca', learning_rate='auto')
+    X_embedded = tsne.fit_transform(X)
+
+    master_df['tsne_1d'] = X_embedded[:, 0]
+
+    # Sort by the 1D embedding
+    master_df.sort_values(by='tsne_1d', ascending=True, inplace=True)
+    print("Sorting complete based on t-SNE landscape.")
 
     # Keep only vector columns in the master DataFrame for merging
     # We add a 'MasterRank' to preserve order after merge if needed,
