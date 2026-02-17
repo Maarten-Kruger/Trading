@@ -534,7 +534,7 @@ def main():
 
             function initCharts() {{
                 for (const [filename, data] of Object.entries(vectorData)) {{
-                    const safeFname = filename.replace(/\./g, '_').replace(/ /g, '_');
+                    const safeFname = filename.replace(/\\./g, '_').replace(/ /g, '_');
 
                     // X-Axis Labels (Rank 0 to N)
                     // We assume all files have same length vectors (Master list)
@@ -828,7 +828,7 @@ def main():
                      // We need to find the safe ID for the input.
                      // The input ID is 'input-' + safeFname
                      // But we only have 'fname'. We need to convert it.
-                     const safeFname = fname.replace(/\./g, '_').replace(/ /g, '_');
+                     const safeFname = fname.replace(/\\./g, '_').replace(/ /g, '_');
                     const input = document.getElementById('input-' + safeFname);
                     if (input) input.setAttribute('value', rank);
                 }}
@@ -865,7 +865,7 @@ def main():
 
                         // Let's iterate vectorData to find match
                         for(const fname of Object.keys(vectorData)) {{
-                            const s = fname.replace(/\./g, '_').replace(/ /g, '_');
+                            const s = fname.replace(/\\./g, '_').replace(/ /g, '_');
                             if (s === safeId) {{
                                 selectedTrades[fname] = parseInt(input.value);
 
