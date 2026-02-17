@@ -172,6 +172,10 @@ def main():
     master_vectors.reset_index(drop=True, inplace=True)
     master_vectors['Master_Index'] = master_vectors.index # 0 to N
 
+    # Store global params list
+    # Convert to string representation
+    global_params = master_vectors[vector_cols].astype(str).agg(', '.join, axis=1).tolist()
+
     # --- Hypercube Neighbor Pre-computation ---
     print(f"Pre-computing Hypercube Neighbors (Size={HYPERCUBE})...")
 
@@ -207,12 +211,10 @@ def main():
     # {
     #   filename: {
     #     date: int,
-    #     vectors: [{r, p, v}],
-    #     chartData: {
-    #        results: [float], // Raw results
-    #        trend: [float]    // Hypercube Avg Trend
-    #     },
-    #     overlayData: [ // Array of previous trends
+    #     r: [float], # Raw results (flat array)
+    #     p: [float], # Profits (flat array)
+    #     t: [float]  # Hypercube Avg Trend (flat array)
+    #     o: [ // Array of previous trends
     #        [float], [float], ...
     #     ]
     #   }
@@ -265,14 +267,6 @@ def main():
 
         # -----------------------------------
 
-        # Prepare vector data for this file to be embedded
-        params_df = merged_df[vector_cols]
-        params_list = params_df.astype(str).agg(', '.join, axis=1).tolist()
-
-        file_vectors = []
-        for r, p, v in zip(results, profits, params_list):
-            file_vectors.append({'r': round(r, 4), 'p': round(p, 2), 'v': v})
-
         # Collect Overlay Data (Previous Trends)
         prev_trends_data = []
         if len(all_trends) > 0:
@@ -282,14 +276,17 @@ def main():
             prev_trends_subset = all_trends[start_idx:]
             prev_trends_data = [t.tolist() for t in prev_trends_subset]
 
+        # Use rounding to reduce JSON size further
+        results_list = [round(x, 4) for x in results]
+        profits_list = [round(x, 2) for x in profits]
+        trend_list = [round(x, 4) for x in hypercube_avgs]
+
         vector_data_store[filename] = {
             'date': file_date,
-            'vectors': file_vectors,
-            'chartData': {
-                'results': results.tolist(),
-                'trend': hypercube_avgs.tolist()
-            },
-            'overlayData': prev_trends_data
+            'r': results_list,
+            'p': profits_list,
+            't': trend_list,
+            'o': prev_trends_data
         }
 
         # Store current trend for future overlays
@@ -301,9 +298,6 @@ def main():
         # We need unique IDs for the canvases.
 
         safe_fname = filename.replace('.', '_').replace(' ', '_')
-
-        # Only show Sliding Window if we have history (or just always show it, but empty overlay if first file)
-        # Requirement: "Sliding Window View (Last x Overlay)"
 
         html_sliding_rows += f"""
         <div class="plot-container" id="container-{safe_fname}">
@@ -361,7 +355,7 @@ def main():
             vec_avg = hypercube_avgs[vec_idx]
             vec_raw_result = results[vec_idx]
             vec_profit = profits[vec_idx]
-            vec_params = params_list[vec_idx]
+            vec_params = global_params[vec_idx]
 
             n_idxs = master_neighbor_indices[vec_idx]
             neighbor_results = results[n_idxs]
@@ -392,8 +386,8 @@ def main():
         # -------------------------------
 
     # Serialize data for embedding
-    # Use a customized JSON encoder or just standard json.dumps since we converted numpy to lists
     json_data = json.dumps(vector_data_store)
+    json_params = json.dumps(global_params)
 
     # 3. Generate HTML Report
     html_content = f"""
@@ -513,6 +507,7 @@ def main():
         <script>
             // Embedded Data
             const vectorData = {json_data};
+            const globalParams = {json_params};
 
             // Global Chart Registry
             const charts = {{}}; // id -> Chart instance
@@ -539,7 +534,7 @@ def main():
                     // X-Axis Labels (Rank 0 to N)
                     // We assume all files have same length vectors (Master list)
                     // Just create an array [0, 1, ..., N-1]
-                    const len = data.chartData.results.length;
+                    const len = data.r.length;
                     const labels = Array.from({{length: len}}, (v, k) => k);
 
                     // --- Overlay Chart ---
@@ -548,10 +543,10 @@ def main():
                         const datasets = [];
 
                         // Add previous trends (faded)
-                        if (data.overlayData && data.overlayData.length > 0) {{
-                            data.overlayData.forEach((trend, i) => {{
+                        if (data.o && data.o.length > 0) {{
+                            data.o.forEach((trend, i) => {{
                                 // Calculate alpha
-                                const alpha = 0.2 + (0.6 * (i / data.overlayData.length));
+                                const alpha = 0.2 + (0.6 * (i / data.o.length));
                                 // Randomish color but consistent?
                                 // Let's just use grey/blue variants
                                 datasets.push({{
@@ -570,7 +565,7 @@ def main():
                         // Let's add current trend as bold orange
                         datasets.push({{
                              label: 'Current Trend',
-                             data: data.chartData.trend,
+                             data: data.t,
                              borderColor: 'orange',
                              borderWidth: 2,
                              pointRadius: 0,
@@ -620,7 +615,7 @@ def main():
                                     {{
                                         type: 'line',
                                         label: 'Hypercube Avg',
-                                        data: data.chartData.trend,
+                                        data: data.t,
                                         borderColor: 'orange',
                                         borderWidth: 2,
                                         pointRadius: 0,
@@ -634,7 +629,7 @@ def main():
                                         // Let's use a filled line chart for raw data to match original look
                                         type: 'line',
                                         label: 'Raw Result',
-                                        data: data.chartData.results,
+                                        data: data.r,
                                         backgroundColor: 'rgba(65, 105, 225, 0.5)', // royalblue alpha 0.5
                                         borderColor: 'rgba(65, 105, 225, 0.8)',
                                         borderWidth: 0, // No line stroke, just fill?
@@ -680,7 +675,7 @@ def main():
             function submitVector(filename, safeFname) {{
                 const input = document.getElementById('input-' + safeFname);
                 const rank = parseInt(input.value);
-                const maxRank = vectorData[filename].vectors.length - 1;
+                const maxRank = vectorData[filename].r.length - 1;
 
                 if (isNaN(rank) || rank < 0 || rank > maxRank) {{
                     alert('Invalid Rank. Please enter a value between 0 and ' + maxRank);
@@ -691,10 +686,12 @@ def main():
                 selectedTrades[filename] = rank;
 
                 // Provide feedback
-                const data = vectorData[filename].vectors[rank];
+                const profit = vectorData[filename].p[rank];
+                const result = vectorData[filename].r[rank];
+
                 const resDiv = document.getElementById('result-' + safeFname);
-                resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{data.p}}<br>Result: ${{data.r}}`;
-                resDiv.style.color = data.p >= 0 ? 'green' : 'red';
+                resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{profit}}<br>Result: ${{result}}`;
+                resDiv.style.color = profit >= 0 ? 'green' : 'red';
 
                 updateDashboard();
             }}
@@ -712,7 +709,9 @@ def main():
                             filename: fname,
                             date: info.date,
                             rank: rank,
-                            data: info.vectors[rank]
+                            p: info.p[rank],
+                            r: info.r[rank],
+                            v: globalParams[rank]
                         }});
                     }}
                 }}
@@ -735,14 +734,14 @@ def main():
                         <td>${{t.date}}</td>
                         <td title="${{t.filename}}">${{t.filename.substring(0, 20)}}...</td>
                         <td>${{t.rank}}</td>
-                        <td style="color: ${{t.data.p >= 0 ? 'green' : 'red'}}">${{t.data.p.toFixed(2)}}</td>
-                        <td>${{t.data.r.toFixed(4)}}</td>
-                        <td style="font-size:0.8em">${{t.data.v}}</td>
+                        <td style="color: ${{t.p >= 0 ? 'green' : 'red'}}">${{t.p.toFixed(2)}}</td>
+                        <td>${{t.r.toFixed(4)}}</td>
+                        <td style="font-size:0.8em">${{t.v}}</td>
                     `;
                     tbody.appendChild(row);
 
                     // Update Equity
-                    equity += t.data.p;
+                    equity += t.p;
                     equityCurve.push(equity);
                     labels.push(t.date.toString());
 
@@ -754,7 +753,7 @@ def main():
                     // Simple return approx (profit / previous equity) - assuming fixed lot size or compounding?
                     // User asked for plot from 10k account. We'll stick to absolute profit addition.
                     // For Sharpe, we can use the raw PnL series mean/std.
-                    returns.push(t.data.p);
+                    returns.push(t.p);
                 }});
 
                 // Update Metrics
@@ -872,11 +871,12 @@ def main():
                                 // Visual feedback
                                 if (vectorData[fname]) {{
                                     const rank = parseInt(input.value);
-                                    const data = vectorData[fname].vectors[rank];
+                                    const profit = vectorData[fname].p[rank];
+                                    const result = vectorData[fname].r[rank];
                                     const resDiv = document.getElementById('result-' + safeId);
-                                     if(resDiv && data) {{
-                                        resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{data.p}}<br>Result: ${{data.r}}`;
-                                        resDiv.style.color = data.p >= 0 ? 'green' : 'red';
+                                     if(resDiv) {{
+                                        resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{profit}}<br>Result: ${{result}}`;
+                                        resDiv.style.color = profit >= 0 ? 'green' : 'red';
                                      }}
                                 }}
                                 break;
