@@ -10,6 +10,7 @@ import base64
 import io
 import warnings
 import json
+import shutil
 from sklearn.manifold import TSNE
 from sklearn.neighbors import KDTree
 
@@ -172,6 +173,10 @@ def main():
     master_vectors.reset_index(drop=True, inplace=True)
     master_vectors['Master_Index'] = master_vectors.index # 0 to N
 
+    # Store global params list
+    # Convert to string representation
+    global_params = master_vectors[vector_cols].astype(str).agg(', '.join, axis=1).tolist()
+
     # --- Hypercube Neighbor Pre-computation ---
     print(f"Pre-computing Hypercube Neighbors (Size={HYPERCUBE})...")
 
@@ -200,23 +205,12 @@ def main():
     # -------------------------------------------
 
     # 2. Process All Files
-    all_trends = [] # Stores hypercube avg trend lines (numpy arrays) for overlay logic
+
+    # Store Global Trends (Hypercube Averages) for ALL files
+    # This prevents storing redundant sliding window history for each file.
+    global_trends = []
 
     # Store data for JS charts and tables
-    # Structure:
-    # {
-    #   filename: {
-    #     date: int,
-    #     vectors: [{r, p, v}],
-    #     chartData: {
-    #        results: [float], // Raw results
-    #        trend: [float]    // Hypercube Avg Trend
-    #     },
-    #     overlayData: [ // Array of previous trends
-    #        [float], [float], ...
-    #     ]
-    #   }
-    # }
     vector_data_store = {}
 
     html_sliding_rows = ""
@@ -265,35 +259,20 @@ def main():
 
         # -----------------------------------
 
-        # Prepare vector data for this file to be embedded
-        params_df = merged_df[vector_cols]
-        params_list = params_df.astype(str).agg(', '.join, axis=1).tolist()
+        # Store current trend globally
+        global_trends.append([round(x, 4) for x in hypercube_avgs])
 
-        file_vectors = []
-        for r, p, v in zip(results, profits, params_list):
-            file_vectors.append({'r': round(r, 4), 'p': round(p, 2), 'v': v})
+        # Use rounding to reduce JSON size further
+        results_list = [round(x, 4) for x in results]
+        profits_list = [round(x, 2) for x in profits]
 
-        # Collect Overlay Data (Previous Trends)
-        prev_trends_data = []
-        if len(all_trends) > 0:
-            # We want the last BACK_GRAPH trends
-            start_idx = max(0, len(all_trends) - BACK_GRAPH)
-            # Convert numpy arrays to lists for JSON serialization
-            prev_trends_subset = all_trends[start_idx:]
-            prev_trends_data = [t.tolist() for t in prev_trends_subset]
-
+        # We store the index of this file in the global list for the UI to know which trends to fetch
         vector_data_store[filename] = {
             'date': file_date,
-            'vectors': file_vectors,
-            'chartData': {
-                'results': results.tolist(),
-                'trend': hypercube_avgs.tolist()
-            },
-            'overlayData': prev_trends_data
+            'idx': processed_count,
+            'r': results_list,
+            'p': profits_list
         }
-
-        # Store current trend for future overlays
-        all_trends.append(hypercube_avgs)
 
         processed_count += 1
 
@@ -302,38 +281,44 @@ def main():
 
         safe_fname = filename.replace('.', '_').replace(' ', '_')
 
-        # Only show Sliding Window if we have history (or just always show it, but empty overlay if first file)
-        # Requirement: "Sliding Window View (Last x Overlay)"
+        # We use a details/summary approach for LAZY LOADING
+        # The onclick event triggers the rendering for this specific file
 
         html_sliding_rows += f"""
         <div class="plot-container" id="container-{safe_fname}">
-            <h3>{filename} (Sliding Window Analysis)</h3>
+            <details>
+                <summary onclick="lazyLoadCharts('{filename}', '{safe_fname}')" style="font-size: 1.1em; font-weight: bold; cursor: pointer; padding: 10px; background-color: #eee;">
+                    {filename} (Click to Load Analysis)
+                </summary>
 
-            <!-- Top Row: Overlay Graph + Controls -->
-            <div style="display: flex; gap: 20px; align-items: flex-start; margin-bottom: 20px;">
-                <div style="flex: 2; height: 400px; position: relative;">
-                    <h4 style="margin-bottom: 5px;">Previous {BACK_GRAPH} Trends Overlay (Hypercube Avg)</h4>
-                    <canvas id="overlay-chart-{safe_fname}"></canvas>
-                    <button onclick="resetZoom('overlay-chart-{safe_fname}')" style="position:absolute; top:10px; right:10px; z-index:10; font-size:0.8em;">Reset Zoom</button>
-                </div>
-                <div style="flex: 1; padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #ddd;">
-                    <h4>Evaluate Vector Strategy</h4>
-                    <p>Select a Vector Rank to evaluate for this week.</p>
-                    <div style="margin-bottom: 15px;">
-                        <label style="display:block; margin-bottom:5px; font-weight:bold;">Vector Rank (0-{len(master_vectors)-1}):</label>
-                        <input type="number" id="input-{safe_fname}" class="rank-input" min="0" max="{len(master_vectors)-1}" placeholder="Enter Rank" style="width: 100%; padding: 8px; margin-bottom: 10px;">
-                        <button onclick="submitVector('{filename}', '{safe_fname}')" style="width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Submit</button>
+                <div class="section-content">
+                    <!-- Top Row: Overlay Graph + Controls -->
+                    <div style="display: flex; gap: 20px; align-items: flex-start; margin-bottom: 20px;">
+                        <div style="flex: 2; height: 400px; position: relative;">
+                            <h4 style="margin-bottom: 5px;">Previous {BACK_GRAPH} Trends Overlay (Hypercube Avg)</h4>
+                            <canvas id="overlay-chart-{safe_fname}"></canvas>
+                            <button onclick="resetZoom('overlay-chart-{safe_fname}')" style="position:absolute; top:10px; right:10px; z-index:10; font-size:0.8em;">Reset Zoom</button>
+                        </div>
+                        <div style="flex: 1; padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #ddd;">
+                            <h4>Evaluate Vector Strategy</h4>
+                            <p>Select a Vector Rank to evaluate for this week.</p>
+                            <div style="margin-bottom: 15px;">
+                                <label style="display:block; margin-bottom:5px; font-weight:bold;">Vector Rank (0-{len(master_vectors)-1}):</label>
+                                <input type="number" id="input-{safe_fname}" class="rank-input" min="0" max="{len(master_vectors)-1}" placeholder="Enter Rank" style="width: 100%; padding: 8px; margin-bottom: 10px;">
+                                <button onclick="submitVector('{filename}', '{safe_fname}')" style="width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Submit</button>
+                            </div>
+                            <div id="result-{safe_fname}" style="margin-top: 10px; font-size: 0.9em; color: #555;"></div>
+                        </div>
                     </div>
-                    <div id="result-{safe_fname}" style="margin-top: 10px; font-size: 0.9em; color: #555;"></div>
-                </div>
-            </div>
 
-            <!-- Bottom Row: Current File Graph -->
-            <div style="width: 100%; height: 400px; position: relative;">
-                <h4 style="margin-bottom: 5px;">Current File: {filename}</h4>
-                <canvas id="current-chart-{safe_fname}"></canvas>
-                 <button onclick="resetZoom('current-chart-{safe_fname}')" style="position:absolute; top:10px; right:10px; z-index:10; font-size:0.8em;">Reset Zoom</button>
-            </div>
+                    <!-- Bottom Row: Current File Graph -->
+                    <div style="width: 100%; height: 400px; position: relative;">
+                        <h4 style="margin-bottom: 5px;">Current File: {filename}</h4>
+                        <canvas id="current-chart-{safe_fname}"></canvas>
+                         <button onclick="resetZoom('current-chart-{safe_fname}')" style="position:absolute; top:10px; right:10px; z-index:10; font-size:0.8em;">Reset Zoom</button>
+                    </div>
+                </div>
+            </details>
         </div>
         """
 
@@ -361,7 +346,7 @@ def main():
             vec_avg = hypercube_avgs[vec_idx]
             vec_raw_result = results[vec_idx]
             vec_profit = profits[vec_idx]
-            vec_params = params_list[vec_idx]
+            vec_params = global_params[vec_idx]
 
             n_idxs = master_neighbor_indices[vec_idx]
             neighbor_results = results[n_idxs]
@@ -392,8 +377,9 @@ def main():
         # -------------------------------
 
     # Serialize data for embedding
-    # Use a customized JSON encoder or just standard json.dumps since we converted numpy to lists
     json_data = json.dumps(vector_data_store)
+    json_params = json.dumps(global_params)
+    json_trends = json.dumps(global_trends)
 
     # 3. Generate HTML Report
     html_content = f"""
@@ -446,7 +432,6 @@ def main():
                     <p>Results ordered by vector rank in the first file ({first_filename}).</p>
                     <p>Fixed Scale: [{y_min:.2f}, {y_max:.2f}] | Hypercube Size: {HYPERCUBE} | Back Graph: {BACK_GRAPH}</p>
                 </div>
-                <button class="save-btn" onclick="saveReport()">Save Report Analysis</button>
             </div>
 
             <details open>
@@ -458,12 +443,11 @@ def main():
 
             <!-- Standard View REMOVED as per request -->
 
-            <details open>
-                <summary>Sliding Window View (Last {BACK_GRAPH} Overlay) - Interactive</summary>
-                <div class="section-content">
-                    {html_sliding_rows}
-                </div>
-            </details>
+            <div style="text-align:left; margin-bottom: 20px;">
+                <h2>Sliding Window View</h2>
+                <p>Click on a file below to load its interactive charts.</p>
+                {html_sliding_rows}
+            </div>
         </div>
 
         <!-- Dashboard -->
@@ -513,6 +497,11 @@ def main():
         <script>
             // Embedded Data
             const vectorData = {json_data};
+            const globalParams = {json_params};
+            const globalTrends = {json_trends};
+            const yMin = {y_min};
+            const yMax = {y_max};
+            const backGraph = {BACK_GRAPH};
 
             // Global Chart Registry
             const charts = {{}}; // id -> Chart instance
@@ -525,142 +514,151 @@ def main():
 
             // Initialize
             document.addEventListener('DOMContentLoaded', () => {{
-                // Initialize Charts for Sliding Window
-                initCharts();
-
+                // No automatic chart loading to prevent browser freeze
+                // Charts are loaded via lazyLoadCharts when user expands details
                 restoreState();
                 updateDashboard();
             }});
 
-            function initCharts() {{
-                for (const [filename, data] of Object.entries(vectorData)) {{
-                    const safeFname = filename.replace(/\\./g, '_').replace(/ /g, '_');
+            function lazyLoadCharts(filename, safeFname) {{
+                // Check if charts already exist to avoid re-creating
+                if (charts['overlay-chart-' + safeFname]) return;
 
-                    // X-Axis Labels (Rank 0 to N)
-                    // We assume all files have same length vectors (Master list)
-                    // Just create an array [0, 1, ..., N-1]
-                    const len = data.chartData.results.length;
-                    const labels = Array.from({{length: len}}, (v, k) => k);
+                // Use requestAnimationFrame to let UI update (open accordion) before processing heavy charts
+                requestAnimationFrame(() => {{
+                    renderFileCharts(filename, safeFname);
+                }});
+            }}
 
-                    // --- Overlay Chart ---
-                    const ctxOverlay = document.getElementById('overlay-chart-' + safeFname);
-                    if (ctxOverlay) {{
-                        const datasets = [];
+            function renderFileCharts(filename, safeFname) {{
+                const data = vectorData[filename];
+                if (!data) return;
 
-                        // Add previous trends (faded)
-                        if (data.overlayData && data.overlayData.length > 0) {{
-                            data.overlayData.forEach((trend, i) => {{
-                                // Calculate alpha
-                                const alpha = 0.2 + (0.6 * (i / data.overlayData.length));
-                                // Randomish color but consistent?
-                                // Let's just use grey/blue variants
-                                datasets.push({{
-                                    label: `Prev ${{i+1}}`,
-                                    data: trend,
-                                    borderColor: `rgba(100, 100, 100, ${{alpha}})`,
-                                    borderWidth: 1,
-                                    pointRadius: 0,
-                                    fill: false,
-                                    tension: 0.1
-                                }});
-                            }});
-                        }}
+                // X-Axis Labels (Rank 0 to N)
+                // We assume all files have same length vectors (Master list)
+                const len = data.r.length;
+                const labels = Array.from({{length: len}}, (v, k) => k);
 
-                        // Add Current Trend (Orange) - Optional? Usually overlay implies comparison.
-                        // Let's add current trend as bold orange
+                const fileIdx = data.idx;
+                const currentTrend = globalTrends[fileIdx];
+
+                // --- Overlay Chart ---
+                const ctxOverlay = document.getElementById('overlay-chart-' + safeFname);
+                if (ctxOverlay) {{
+                    const datasets = [];
+
+                    // Reconstruct Previous Trends using globalTrends and fileIdx
+                    const startIdx = Math.max(0, fileIdx - backGraph);
+                    const endIdx = fileIdx; // Exclusive
+
+                    let opacityStep = 0.6 / (endIdx - startIdx);
+                    if(endIdx === startIdx) opacityStep = 0;
+
+                    for(let i=startIdx; i<endIdx; i++) {{
+                        const pastTrend = globalTrends[i];
+                        const relativeIndex = i - startIdx;
+                        const alpha = 0.2 + (relativeIndex * opacityStep);
+
                         datasets.push({{
-                             label: 'Current Trend',
-                             data: data.chartData.trend,
-                             borderColor: 'orange',
-                             borderWidth: 2,
-                             pointRadius: 0,
-                             fill: false,
-                             tension: 0.1
+                            label: `Prev trend`,
+                            data: pastTrend,
+                            borderColor: `rgba(100, 100, 100, ${{alpha}})`,
+                            borderWidth: 1,
+                            pointRadius: 0,
+                            fill: false,
+                            tension: 0.1
                         }});
-
-                        const chartOverlay = new Chart(ctxOverlay, {{
-                            type: 'line',
-                            data: {{
-                                labels: labels,
-                                datasets: datasets
-                            }},
-                            options: {{
-                                responsive: true,
-                                maintainAspectRatio: false,
-                                plugins: {{
-                                    legend: {{ display: false }},
-                                    zoom: {{
-                                        pan: {{
-                                            enabled: true,
-                                            mode: 'x',
-                                        }},
-                                        zoom: {{
-                                            wheel: {{ enabled: true }},
-                                            pinch: {{ enabled: true }},
-                                            mode: 'x',
-                                        }}
-                                    }}
-                                }},
-                                scales: {{
-                                    x: {{ ticks: {{ maxTicksLimit: 20 }} }},
-                                    y: {{ min: {y_min}, max: {y_max} }}
-                                }}
-                            }}
-                        }});
-                        charts['overlay-chart-' + safeFname] = chartOverlay;
                     }}
 
-                    // --- Current File Chart ---
-                    const ctxCurrent = document.getElementById('current-chart-' + safeFname);
-                    if (ctxCurrent) {{
-                        const chartCurrent = new Chart(ctxCurrent, {{
-                            data: {{
-                                labels: labels,
-                                datasets: [
-                                    {{
-                                        type: 'line',
-                                        label: 'Hypercube Avg',
-                                        data: data.chartData.trend,
-                                        borderColor: 'orange',
-                                        borderWidth: 2,
-                                        pointRadius: 0,
-                                        tension: 0.1,
-                                        order: 1
+                    // Add Current Trend (Orange)
+                    datasets.push({{
+                            label: 'Current Trend',
+                            data: currentTrend,
+                            borderColor: 'orange',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            fill: false,
+                            tension: 0.1
+                    }});
+
+                    const chartOverlay = new Chart(ctxOverlay, {{
+                        type: 'line',
+                        data: {{
+                            labels: labels,
+                            datasets: datasets
+                        }},
+                        options: {{
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {{
+                                legend: {{ display: false }},
+                                zoom: {{
+                                    pan: {{
+                                        enabled: true,
+                                        mode: 'x',
                                     }},
-                                    {{
-                                        type: 'scatter', // or 'bar', scatter is good for dense points, but 'line' with fill is what we had.
-                                        // To mimic fill_between, we can use a line with fill: 'origin' or fill: true.
-                                        // But 'Raw Result' is discrete per vector.
-                                        // Let's use a filled line chart for raw data to match original look
-                                        type: 'line',
-                                        label: 'Raw Result',
-                                        data: data.chartData.results,
-                                        backgroundColor: 'rgba(65, 105, 225, 0.5)', // royalblue alpha 0.5
-                                        borderColor: 'rgba(65, 105, 225, 0.8)',
-                                        borderWidth: 0, // No line stroke, just fill?
-                                        pointRadius: 1, // Small points
-                                        fill: true, // Fill to bottom
-                                        order: 2
-                                    }}
-                                ]
-                            }},
-                            options: {{
-                                responsive: true,
-                                maintainAspectRatio: false,
-                                plugins: {{
                                     zoom: {{
-                                        pan: {{ enabled: true, mode: 'x' }},
-                                        zoom: {{ wheel: {{ enabled: true }}, pinch: {{ enabled: true }}, mode: 'x' }}
+                                        wheel: {{ enabled: true }},
+                                        pinch: {{ enabled: true }},
+                                        mode: 'x',
                                     }}
-                                }},
-                                scales: {{
-                                    x: {{ ticks: {{ maxTicksLimit: 20 }} }},
-                                    y: {{ min: {y_min}, max: {y_max} }}
                                 }}
+                            }},
+                            scales: {{
+                                x: {{ ticks: {{ maxTicksLimit: 20 }} }},
+                                y: {{ min: yMin, max: yMax }}
                             }}
-                        }});
-                        charts['current-chart-' + safeFname] = chartCurrent;
-                    }}
+                        }}
+                    }});
+                    charts['overlay-chart-' + safeFname] = chartOverlay;
+                }}
+
+                // --- Current File Chart ---
+                const ctxCurrent = document.getElementById('current-chart-' + safeFname);
+                if (ctxCurrent) {{
+                    const chartCurrent = new Chart(ctxCurrent, {{
+                        data: {{
+                            labels: labels,
+                            datasets: [
+                                {{
+                                    type: 'line',
+                                    label: 'Hypercube Avg',
+                                    data: currentTrend,
+                                    borderColor: 'orange',
+                                    borderWidth: 2,
+                                    pointRadius: 0,
+                                    tension: 0.1,
+                                    order: 1
+                                }},
+                                {{
+                                    type: 'scatter',
+                                    label: 'Raw Result',
+                                    data: data.r,
+                                    backgroundColor: 'rgba(65, 105, 225, 0.5)',
+                                    borderColor: 'rgba(65, 105, 225, 0.8)',
+                                    borderWidth: 0,
+                                    pointRadius: 1,
+                                    fill: true,
+                                    order: 2
+                                }}
+                            ]
+                        }},
+                        options: {{
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {{
+                                zoom: {{
+                                    pan: {{ enabled: true, mode: 'x' }},
+                                    zoom: {{ wheel: {{ enabled: true }}, pinch: {{ enabled: true }}, mode: 'x' }}
+                                }}
+                            }},
+                            scales: {{
+                                x: {{ ticks: {{ maxTicksLimit: 20 }} }},
+                                y: {{ min: yMin, max: yMax }}
+                            }}
+                        }}
+                    }});
+                    charts['current-chart-' + safeFname] = chartCurrent;
                 }}
             }}
 
@@ -680,7 +678,8 @@ def main():
             function submitVector(filename, safeFname) {{
                 const input = document.getElementById('input-' + safeFname);
                 const rank = parseInt(input.value);
-                const maxRank = vectorData[filename].vectors.length - 1;
+                const data = vectorData[filename];
+                const maxRank = data.r.length - 1;
 
                 if (isNaN(rank) || rank < 0 || rank > maxRank) {{
                     alert('Invalid Rank. Please enter a value between 0 and ' + maxRank);
@@ -691,10 +690,12 @@ def main():
                 selectedTrades[filename] = rank;
 
                 // Provide feedback
-                const data = vectorData[filename].vectors[rank];
+                const profit = data.p[rank];
+                const result = data.r[rank];
+
                 const resDiv = document.getElementById('result-' + safeFname);
-                resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{data.p}}<br>Result: ${{data.r}}`;
-                resDiv.style.color = data.p >= 0 ? 'green' : 'red';
+                resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{profit}}<br>Result: ${{result}}`;
+                resDiv.style.color = profit >= 0 ? 'green' : 'red';
 
                 updateDashboard();
             }}
@@ -712,7 +713,9 @@ def main():
                             filename: fname,
                             date: info.date,
                             rank: rank,
-                            data: info.vectors[rank]
+                            p: info.p[rank],
+                            r: info.r[rank],
+                            v: globalParams[rank]
                         }});
                     }}
                 }}
@@ -735,14 +738,14 @@ def main():
                         <td>${{t.date}}</td>
                         <td title="${{t.filename}}">${{t.filename.substring(0, 20)}}...</td>
                         <td>${{t.rank}}</td>
-                        <td style="color: ${{t.data.p >= 0 ? 'green' : 'red'}}">${{t.data.p.toFixed(2)}}</td>
-                        <td>${{t.data.r.toFixed(4)}}</td>
-                        <td style="font-size:0.8em">${{t.data.v}}</td>
+                        <td style="color: ${{t.p >= 0 ? 'green' : 'red'}}">${{t.p.toFixed(2)}}</td>
+                        <td>${{t.r.toFixed(4)}}</td>
+                        <td style="font-size:0.8em">${{t.v}}</td>
                     `;
                     tbody.appendChild(row);
 
                     // Update Equity
-                    equity += t.data.p;
+                    equity += t.p;
                     equityCurve.push(equity);
                     labels.push(t.date.toString());
 
@@ -751,10 +754,7 @@ def main():
                     let dd = (peak - equity) / peak;
                     drawdowns.push(dd);
 
-                    // Simple return approx (profit / previous equity) - assuming fixed lot size or compounding?
-                    // User asked for plot from 10k account. We'll stick to absolute profit addition.
-                    // For Sharpe, we can use the raw PnL series mean/std.
-                    returns.push(t.data.p);
+                    returns.push(t.p);
                 }});
 
                 // Update Metrics
@@ -825,18 +825,10 @@ def main():
 
                 // 1. Update input attributes
                 for (const [fname, rank] of Object.entries(selectedTrades)) {{
-                     // We need to find the safe ID for the input.
-                     // The input ID is 'input-' + safeFname
-                     // But we only have 'fname'. We need to convert it.
                      const safeFname = fname.replace(/\\./g, '_').replace(/ /g, '_');
                     const input = document.getElementById('input-' + safeFname);
                     if (input) input.setAttribute('value', rank);
                 }}
-
-                // 2. Clone and Clean
-                // We want to save the file such that when opened, it loads the state.
-                // The easiest way is to rely on 'selectedTrades' being hardcoded into the script?
-                // No, simpler: We save the DOM. The 'restoreState' function will read from the inputs!
 
                 const htmlContent = document.documentElement.outerHTML;
                 const blob = new Blob([htmlContent], {{type: 'text/html'}});
@@ -852,31 +844,24 @@ def main():
             }}
 
             function restoreState() {{
-                // Read from inputs to restore 'selectedTrades' if this is a saved file
                 const inputs = document.querySelectorAll('.rank-input');
                 inputs.forEach(input => {{
                     if (input.value && input.value !== '') {{
                         // ID is 'input-safeFname'
                         const safeId = input.id.replace('input-', '');
-                        // We need to map safeId back to original filename?
-                        // Or just store safeId -> rank in selectedTrades?
-                        // Actually, 'vectorData' keys are original filenames.
-                        // We need to find which key corresponds to this safeId.
-
-                        // Let's iterate vectorData to find match
                         for(const fname of Object.keys(vectorData)) {{
                             const s = fname.replace(/\\./g, '_').replace(/ /g, '_');
                             if (s === safeId) {{
                                 selectedTrades[fname] = parseInt(input.value);
-
-                                // Visual feedback
                                 if (vectorData[fname]) {{
                                     const rank = parseInt(input.value);
-                                    const data = vectorData[fname].vectors[rank];
+                                    const data = vectorData[fname];
+                                    const profit = data.p[rank];
+                                    const result = data.r[rank];
                                     const resDiv = document.getElementById('result-' + safeId);
-                                     if(resDiv && data) {{
-                                        resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{data.p}}<br>Result: ${{data.r}}`;
-                                        resDiv.style.color = data.p >= 0 ? 'green' : 'red';
+                                     if(resDiv) {{
+                                        resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{profit}}<br>Result: ${{result}}`;
+                                        resDiv.style.color = profit >= 0 ? 'green' : 'red';
                                      }}
                                 }}
                                 break;
