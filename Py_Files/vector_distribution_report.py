@@ -10,6 +10,7 @@ import base64
 import io
 import warnings
 import json
+import shutil
 from sklearn.manifold import TSNE
 from sklearn.neighbors import KDTree
 
@@ -108,6 +109,13 @@ def main():
         print(f"Error: Directory '{target_dir}' does not exist.")
         return
 
+    # Create output directory
+    output_dir_name = "Vector_Distribution_Report_Output"
+    output_dir = os.path.join(target_dir, output_dir_name)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"Created output directory: {output_dir}")
+
     # Find and sort CSV files
     csv_files = glob.glob(os.path.join(target_dir, "*.csv"))
     if not csv_files:
@@ -204,21 +212,12 @@ def main():
     # -------------------------------------------
 
     # 2. Process All Files
-    all_trends = [] # Stores hypercube avg trend lines (numpy arrays) for overlay logic
+
+    # Store Global Trends (Hypercube Averages) for ALL files
+    # This prevents storing redundant sliding window history for each file.
+    global_trends = []
 
     # Store data for JS charts and tables
-    # Structure:
-    # {
-    #   filename: {
-    #     date: int,
-    #     r: [float], # Raw results (flat array)
-    #     p: [float], # Profits (flat array)
-    #     t: [float]  # Hypercube Avg Trend (flat array)
-    #     o: [ // Array of previous trends
-    #        [float], [float], ...
-    #     ]
-    #   }
-    # }
     vector_data_store = {}
 
     html_sliding_rows = ""
@@ -267,30 +266,20 @@ def main():
 
         # -----------------------------------
 
-        # Collect Overlay Data (Previous Trends)
-        prev_trends_data = []
-        if len(all_trends) > 0:
-            # We want the last BACK_GRAPH trends
-            start_idx = max(0, len(all_trends) - BACK_GRAPH)
-            # Convert numpy arrays to lists for JSON serialization
-            prev_trends_subset = all_trends[start_idx:]
-            prev_trends_data = [t.tolist() for t in prev_trends_subset]
+        # Store current trend globally
+        global_trends.append([round(x, 4) for x in hypercube_avgs])
 
         # Use rounding to reduce JSON size further
         results_list = [round(x, 4) for x in results]
         profits_list = [round(x, 2) for x in profits]
-        trend_list = [round(x, 4) for x in hypercube_avgs]
 
+        # We store the index of this file in the global list for the UI to know which trends to fetch
         vector_data_store[filename] = {
             'date': file_date,
+            'idx': processed_count,
             'r': results_list,
-            'p': profits_list,
-            't': trend_list,
-            'o': prev_trends_data
+            'p': profits_list
         }
-
-        # Store current trend for future overlays
-        all_trends.append(hypercube_avgs)
 
         processed_count += 1
 
@@ -385,11 +374,19 @@ def main():
         """
         # -------------------------------
 
-    # Serialize data for embedding
-    json_data = json.dumps(vector_data_store)
-    json_params = json.dumps(global_params)
+    # Write Data to External JS File
+    print("Writing data to vector_data.js...")
+    data_js_path = os.path.join(output_dir, "vector_data.js")
+    with open(data_js_path, "w", encoding='utf-8') as f:
+        # We assign to global window objects
+        f.write(f"window.vectorData = {json.dumps(vector_data_store)};\n")
+        f.write(f"window.globalParams = {json.dumps(global_params)};\n")
+        f.write(f"window.globalTrends = {json.dumps(global_trends)};\n")
+        f.write(f"window.backGraph = {BACK_GRAPH};\n") # Pass configuration
+        f.write(f"window.yMin = {y_min};\n")
+        f.write(f"window.yMax = {y_max};\n")
 
-    # 3. Generate HTML Report
+    # 3. Generate HTML Report (index.html)
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -402,6 +399,8 @@ def main():
         <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
         <!-- Chart.js Zoom Plugin -->
         <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+        <!-- External Data -->
+        <script src="vector_data.js"></script>
 
         <style>
             body {{ font-family: Arial, sans-serif; margin: 20px; text-align: center; background-color: #f4f4f9; }}
@@ -440,7 +439,6 @@ def main():
                     <p>Results ordered by vector rank in the first file ({first_filename}).</p>
                     <p>Fixed Scale: [{y_min:.2f}, {y_max:.2f}] | Hypercube Size: {HYPERCUBE} | Back Graph: {BACK_GRAPH}</p>
                 </div>
-                <button class="save-btn" onclick="saveReport()">Save Report Analysis</button>
             </div>
 
             <details open>
@@ -449,8 +447,6 @@ def main():
                     {html_top3_rows}
                 </div>
             </details>
-
-            <!-- Standard View REMOVED as per request -->
 
             <details open>
                 <summary>Sliding Window View (Last {BACK_GRAPH} Overlay) - Interactive</summary>
@@ -505,9 +501,8 @@ def main():
         </div>
 
         <script>
-            // Embedded Data
-            const vectorData = {json_data};
-            const globalParams = {json_params};
+            // Data is loaded from vector_data.js
+            // Variables: window.vectorData, window.globalParams, window.globalTrends
 
             // Global Chart Registry
             const charts = {{}}; // id -> Chart instance
@@ -523,49 +518,61 @@ def main():
                 // Initialize Charts for Sliding Window
                 initCharts();
 
-                restoreState();
+                // Check for saved state (not implemented for file-split version easily, but keeping placeholder)
+                // restoreState();
                 updateDashboard();
             }});
 
             function initCharts() {{
-                for (const [filename, data] of Object.entries(vectorData)) {{
+                if(!window.vectorData) {{
+                    console.error("Vector Data not loaded.");
+                    return;
+                }}
+
+                for (const [filename, data] of Object.entries(window.vectorData)) {{
                     const safeFname = filename.replace(/\\./g, '_').replace(/ /g, '_');
 
                     // X-Axis Labels (Rank 0 to N)
                     // We assume all files have same length vectors (Master list)
-                    // Just create an array [0, 1, ..., N-1]
                     const len = data.r.length;
                     const labels = Array.from({{length: len}}, (v, k) => k);
+
+                    const fileIdx = data.idx;
+                    const currentTrend = window.globalTrends[fileIdx];
 
                     // --- Overlay Chart ---
                     const ctxOverlay = document.getElementById('overlay-chart-' + safeFname);
                     if (ctxOverlay) {{
                         const datasets = [];
 
-                        // Add previous trends (faded)
-                        if (data.o && data.o.length > 0) {{
-                            data.o.forEach((trend, i) => {{
-                                // Calculate alpha
-                                const alpha = 0.2 + (0.6 * (i / data.o.length));
-                                // Randomish color but consistent?
-                                // Let's just use grey/blue variants
-                                datasets.push({{
-                                    label: `Prev ${{i+1}}`,
-                                    data: trend,
-                                    borderColor: `rgba(100, 100, 100, ${{alpha}})`,
-                                    borderWidth: 1,
-                                    pointRadius: 0,
-                                    fill: false,
-                                    tension: 0.1
-                                }});
+                        // Reconstruct Previous Trends using globalTrends and fileIdx
+                        // We want trends from [fileIdx - BACK_GRAPH, fileIdx - 1]
+                        const startIdx = Math.max(0, fileIdx - window.backGraph);
+                        const endIdx = fileIdx; // Exclusive
+
+                        let opacityStep = 0.6 / (endIdx - startIdx);
+                        if(endIdx === startIdx) opacityStep = 0;
+
+                        for(let i=startIdx; i<endIdx; i++) {{
+                            const pastTrend = window.globalTrends[i];
+                            const relativeIndex = i - startIdx;
+                            const alpha = 0.2 + (relativeIndex * opacityStep);
+
+                            datasets.push({{
+                                label: `Prev trend`,
+                                data: pastTrend,
+                                borderColor: `rgba(100, 100, 100, ${{alpha}})`,
+                                borderWidth: 1,
+                                pointRadius: 0,
+                                fill: false,
+                                tension: 0.1
                             }});
                         }}
 
-                        // Add Current Trend (Orange) - Optional? Usually overlay implies comparison.
-                        // Let's add current trend as bold orange
+                        // Add Current Trend (Orange)
                         datasets.push({{
                              label: 'Current Trend',
-                             data: data.t,
+                             data: currentTrend,
                              borderColor: 'orange',
                              borderWidth: 2,
                              pointRadius: 0,
@@ -598,7 +605,7 @@ def main():
                                 }},
                                 scales: {{
                                     x: {{ ticks: {{ maxTicksLimit: 20 }} }},
-                                    y: {{ min: {y_min}, max: {y_max} }}
+                                    y: {{ min: window.yMin, max: window.yMax }}
                                 }}
                             }}
                         }});
@@ -615,7 +622,7 @@ def main():
                                     {{
                                         type: 'line',
                                         label: 'Hypercube Avg',
-                                        data: data.t,
+                                        data: currentTrend,
                                         borderColor: 'orange',
                                         borderWidth: 2,
                                         pointRadius: 0,
@@ -623,18 +630,14 @@ def main():
                                         order: 1
                                     }},
                                     {{
-                                        type: 'scatter', // or 'bar', scatter is good for dense points, but 'line' with fill is what we had.
-                                        // To mimic fill_between, we can use a line with fill: 'origin' or fill: true.
-                                        // But 'Raw Result' is discrete per vector.
-                                        // Let's use a filled line chart for raw data to match original look
                                         type: 'line',
                                         label: 'Raw Result',
                                         data: data.r,
-                                        backgroundColor: 'rgba(65, 105, 225, 0.5)', // royalblue alpha 0.5
+                                        backgroundColor: 'rgba(65, 105, 225, 0.5)',
                                         borderColor: 'rgba(65, 105, 225, 0.8)',
-                                        borderWidth: 0, // No line stroke, just fill?
-                                        pointRadius: 1, // Small points
-                                        fill: true, // Fill to bottom
+                                        borderWidth: 0,
+                                        pointRadius: 1,
+                                        fill: true,
                                         order: 2
                                     }}
                                 ]
@@ -650,7 +653,7 @@ def main():
                                 }},
                                 scales: {{
                                     x: {{ ticks: {{ maxTicksLimit: 20 }} }},
-                                    y: {{ min: {y_min}, max: {y_max} }}
+                                    y: {{ min: window.yMin, max: window.yMax }}
                                 }}
                             }}
                         }});
@@ -675,7 +678,8 @@ def main():
             function submitVector(filename, safeFname) {{
                 const input = document.getElementById('input-' + safeFname);
                 const rank = parseInt(input.value);
-                const maxRank = vectorData[filename].r.length - 1;
+                const data = window.vectorData[filename];
+                const maxRank = data.r.length - 1;
 
                 if (isNaN(rank) || rank < 0 || rank > maxRank) {{
                     alert('Invalid Rank. Please enter a value between 0 and ' + maxRank);
@@ -686,8 +690,8 @@ def main():
                 selectedTrades[filename] = rank;
 
                 // Provide feedback
-                const profit = vectorData[filename].p[rank];
-                const result = vectorData[filename].r[rank];
+                const profit = data.p[rank];
+                const result = data.r[rank];
 
                 const resDiv = document.getElementById('result-' + safeFname);
                 resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{profit}}<br>Result: ${{result}}`;
@@ -703,15 +707,15 @@ def main():
                 // Convert state to array and sort by date
                 let trades = [];
                 for (const [fname, rank] of Object.entries(selectedTrades)) {{
-                    if (vectorData[fname]) {{
-                        const info = vectorData[fname];
+                    if (window.vectorData[fname]) {{
+                        const info = window.vectorData[fname];
                         trades.push({{
                             filename: fname,
                             date: info.date,
                             rank: rank,
                             p: info.p[rank],
                             r: info.r[rank],
-                            v: globalParams[rank]
+                            v: window.globalParams[rank]
                         }});
                     }}
                 }}
@@ -750,9 +754,6 @@ def main():
                     let dd = (peak - equity) / peak;
                     drawdowns.push(dd);
 
-                    // Simple return approx (profit / previous equity) - assuming fixed lot size or compounding?
-                    // User asked for plot from 10k account. We'll stick to absolute profit addition.
-                    // For Sharpe, we can use the raw PnL series mean/std.
                     returns.push(t.p);
                 }});
 
@@ -817,84 +818,17 @@ def main():
                     }}
                 }});
             }}
-
-            function saveReport() {{
-                // Serialize current DOM to a string
-                // We need to make sure the input values are preserved in the DOM before serializing
-
-                // 1. Update input attributes
-                for (const [fname, rank] of Object.entries(selectedTrades)) {{
-                     // We need to find the safe ID for the input.
-                     // The input ID is 'input-' + safeFname
-                     // But we only have 'fname'. We need to convert it.
-                     const safeFname = fname.replace(/\\./g, '_').replace(/ /g, '_');
-                    const input = document.getElementById('input-' + safeFname);
-                    if (input) input.setAttribute('value', rank);
-                }}
-
-                // 2. Clone and Clean
-                // We want to save the file such that when opened, it loads the state.
-                // The easiest way is to rely on 'selectedTrades' being hardcoded into the script?
-                // No, simpler: We save the DOM. The 'restoreState' function will read from the inputs!
-
-                const htmlContent = document.documentElement.outerHTML;
-                const blob = new Blob([htmlContent], {{type: 'text/html'}});
-                const url = URL.createObjectURL(blob);
-
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'Vector_Distribution_Report_Saved.html';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-            }}
-
-            function restoreState() {{
-                // Read from inputs to restore 'selectedTrades' if this is a saved file
-                const inputs = document.querySelectorAll('.rank-input');
-                inputs.forEach(input => {{
-                    if (input.value && input.value !== '') {{
-                        // ID is 'input-safeFname'
-                        const safeId = input.id.replace('input-', '');
-                        // We need to map safeId back to original filename?
-                        // Or just store safeId -> rank in selectedTrades?
-                        // Actually, 'vectorData' keys are original filenames.
-                        // We need to find which key corresponds to this safeId.
-
-                        // Let's iterate vectorData to find match
-                        for(const fname of Object.keys(vectorData)) {{
-                            const s = fname.replace(/\\./g, '_').replace(/ /g, '_');
-                            if (s === safeId) {{
-                                selectedTrades[fname] = parseInt(input.value);
-
-                                // Visual feedback
-                                if (vectorData[fname]) {{
-                                    const rank = parseInt(input.value);
-                                    const profit = vectorData[fname].p[rank];
-                                    const result = vectorData[fname].r[rank];
-                                    const resDiv = document.getElementById('result-' + safeId);
-                                     if(resDiv) {{
-                                        resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{profit}}<br>Result: ${{result}}`;
-                                        resDiv.style.color = profit >= 0 ? 'green' : 'red';
-                                     }}
-                                }}
-                                break;
-                            }}
-                        }}
-                    }}
-                }});
-            }}
         </script>
     </body>
     </html>
     """
 
-    output_path = os.path.join(target_dir, "Vector_Distribution_Report.html")
-    with open(output_path, "w", encoding='utf-8') as f:
+    index_path = os.path.join(output_dir, "index.html")
+    with open(index_path, "w", encoding='utf-8') as f:
         f.write(html_content)
 
-    print(f"Report generated successfully: {output_path}")
+    print(f"Report generated successfully: {index_path}")
+    print(f"Data file: {data_js_path}")
 
 if __name__ == "__main__":
     main()
