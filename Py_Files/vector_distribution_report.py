@@ -109,13 +109,6 @@ def main():
         print(f"Error: Directory '{target_dir}' does not exist.")
         return
 
-    # Create output directory
-    output_dir_name = "Vector_Distribution_Report_Output"
-    output_dir = os.path.join(target_dir, output_dir_name)
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-        print(f"Created output directory: {output_dir}")
-
     # Find and sort CSV files
     csv_files = glob.glob(os.path.join(target_dir, "*.csv"))
     if not csv_files:
@@ -288,35 +281,44 @@ def main():
 
         safe_fname = filename.replace('.', '_').replace(' ', '_')
 
+        # We use a details/summary approach for LAZY LOADING
+        # The onclick event triggers the rendering for this specific file
+
         html_sliding_rows += f"""
         <div class="plot-container" id="container-{safe_fname}">
-            <h3>{filename} (Sliding Window Analysis)</h3>
+            <details>
+                <summary onclick="lazyLoadCharts('{filename}', '{safe_fname}')" style="font-size: 1.1em; font-weight: bold; cursor: pointer; padding: 10px; background-color: #eee;">
+                    {filename} (Click to Load Analysis)
+                </summary>
 
-            <!-- Top Row: Overlay Graph + Controls -->
-            <div style="display: flex; gap: 20px; align-items: flex-start; margin-bottom: 20px;">
-                <div style="flex: 2; height: 400px; position: relative;">
-                    <h4 style="margin-bottom: 5px;">Previous {BACK_GRAPH} Trends Overlay (Hypercube Avg)</h4>
-                    <canvas id="overlay-chart-{safe_fname}"></canvas>
-                    <button onclick="resetZoom('overlay-chart-{safe_fname}')" style="position:absolute; top:10px; right:10px; z-index:10; font-size:0.8em;">Reset Zoom</button>
-                </div>
-                <div style="flex: 1; padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #ddd;">
-                    <h4>Evaluate Vector Strategy</h4>
-                    <p>Select a Vector Rank to evaluate for this week.</p>
-                    <div style="margin-bottom: 15px;">
-                        <label style="display:block; margin-bottom:5px; font-weight:bold;">Vector Rank (0-{len(master_vectors)-1}):</label>
-                        <input type="number" id="input-{safe_fname}" class="rank-input" min="0" max="{len(master_vectors)-1}" placeholder="Enter Rank" style="width: 100%; padding: 8px; margin-bottom: 10px;">
-                        <button onclick="submitVector('{filename}', '{safe_fname}')" style="width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Submit</button>
+                <div class="section-content">
+                    <!-- Top Row: Overlay Graph + Controls -->
+                    <div style="display: flex; gap: 20px; align-items: flex-start; margin-bottom: 20px;">
+                        <div style="flex: 2; height: 400px; position: relative;">
+                            <h4 style="margin-bottom: 5px;">Previous {BACK_GRAPH} Trends Overlay (Hypercube Avg)</h4>
+                            <canvas id="overlay-chart-{safe_fname}"></canvas>
+                            <button onclick="resetZoom('overlay-chart-{safe_fname}')" style="position:absolute; top:10px; right:10px; z-index:10; font-size:0.8em;">Reset Zoom</button>
+                        </div>
+                        <div style="flex: 1; padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #ddd;">
+                            <h4>Evaluate Vector Strategy</h4>
+                            <p>Select a Vector Rank to evaluate for this week.</p>
+                            <div style="margin-bottom: 15px;">
+                                <label style="display:block; margin-bottom:5px; font-weight:bold;">Vector Rank (0-{len(master_vectors)-1}):</label>
+                                <input type="number" id="input-{safe_fname}" class="rank-input" min="0" max="{len(master_vectors)-1}" placeholder="Enter Rank" style="width: 100%; padding: 8px; margin-bottom: 10px;">
+                                <button onclick="submitVector('{filename}', '{safe_fname}')" style="width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Submit</button>
+                            </div>
+                            <div id="result-{safe_fname}" style="margin-top: 10px; font-size: 0.9em; color: #555;"></div>
+                        </div>
                     </div>
-                    <div id="result-{safe_fname}" style="margin-top: 10px; font-size: 0.9em; color: #555;"></div>
-                </div>
-            </div>
 
-            <!-- Bottom Row: Current File Graph -->
-            <div style="width: 100%; height: 400px; position: relative;">
-                <h4 style="margin-bottom: 5px;">Current File: {filename}</h4>
-                <canvas id="current-chart-{safe_fname}"></canvas>
-                 <button onclick="resetZoom('current-chart-{safe_fname}')" style="position:absolute; top:10px; right:10px; z-index:10; font-size:0.8em;">Reset Zoom</button>
-            </div>
+                    <!-- Bottom Row: Current File Graph -->
+                    <div style="width: 100%; height: 400px; position: relative;">
+                        <h4 style="margin-bottom: 5px;">Current File: {filename}</h4>
+                        <canvas id="current-chart-{safe_fname}"></canvas>
+                         <button onclick="resetZoom('current-chart-{safe_fname}')" style="position:absolute; top:10px; right:10px; z-index:10; font-size:0.8em;">Reset Zoom</button>
+                    </div>
+                </div>
+            </details>
         </div>
         """
 
@@ -374,19 +376,12 @@ def main():
         """
         # -------------------------------
 
-    # Write Data to External JS File
-    print("Writing data to vector_data.js...")
-    data_js_path = os.path.join(output_dir, "vector_data.js")
-    with open(data_js_path, "w", encoding='utf-8') as f:
-        # We assign to global window objects
-        f.write(f"window.vectorData = {json.dumps(vector_data_store)};\n")
-        f.write(f"window.globalParams = {json.dumps(global_params)};\n")
-        f.write(f"window.globalTrends = {json.dumps(global_trends)};\n")
-        f.write(f"window.backGraph = {BACK_GRAPH};\n") # Pass configuration
-        f.write(f"window.yMin = {y_min};\n")
-        f.write(f"window.yMax = {y_max};\n")
+    # Serialize data for embedding
+    json_data = json.dumps(vector_data_store)
+    json_params = json.dumps(global_params)
+    json_trends = json.dumps(global_trends)
 
-    # 3. Generate HTML Report (index.html)
+    # 3. Generate HTML Report
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -399,8 +394,6 @@ def main():
         <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
         <!-- Chart.js Zoom Plugin -->
         <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
-        <!-- External Data -->
-        <script src="vector_data.js"></script>
 
         <style>
             body {{ font-family: Arial, sans-serif; margin: 20px; text-align: center; background-color: #f4f4f9; }}
@@ -448,12 +441,13 @@ def main():
                 </div>
             </details>
 
-            <details open>
-                <summary>Sliding Window View (Last {BACK_GRAPH} Overlay) - Interactive</summary>
-                <div class="section-content">
-                    {html_sliding_rows}
-                </div>
-            </details>
+            <!-- Standard View REMOVED as per request -->
+
+            <div style="text-align:left; margin-bottom: 20px;">
+                <h2>Sliding Window View</h2>
+                <p>Click on a file below to load its interactive charts.</p>
+                {html_sliding_rows}
+            </div>
         </div>
 
         <!-- Dashboard -->
@@ -501,8 +495,13 @@ def main():
         </div>
 
         <script>
-            // Data is loaded from vector_data.js
-            // Variables: window.vectorData, window.globalParams, window.globalTrends
+            // Embedded Data
+            const vectorData = {json_data};
+            const globalParams = {json_params};
+            const globalTrends = {json_trends};
+            const yMin = {y_min};
+            const yMax = {y_max};
+            const backGraph = {BACK_GRAPH};
 
             // Global Chart Registry
             const charts = {{}}; // id -> Chart instance
@@ -515,150 +514,151 @@ def main():
 
             // Initialize
             document.addEventListener('DOMContentLoaded', () => {{
-                // Initialize Charts for Sliding Window
-                initCharts();
-
-                // Check for saved state (not implemented for file-split version easily, but keeping placeholder)
-                // restoreState();
+                // No automatic chart loading to prevent browser freeze
+                // Charts are loaded via lazyLoadCharts when user expands details
+                restoreState();
                 updateDashboard();
             }});
 
-            function initCharts() {{
-                if(!window.vectorData) {{
-                    console.error("Vector Data not loaded.");
-                    return;
+            function lazyLoadCharts(filename, safeFname) {{
+                // Check if charts already exist to avoid re-creating
+                if (charts['overlay-chart-' + safeFname]) return;
+
+                // Use requestAnimationFrame to let UI update (open accordion) before processing heavy charts
+                requestAnimationFrame(() => {{
+                    renderFileCharts(filename, safeFname);
+                }});
+            }}
+
+            function renderFileCharts(filename, safeFname) {{
+                const data = vectorData[filename];
+                if (!data) return;
+
+                // X-Axis Labels (Rank 0 to N)
+                // We assume all files have same length vectors (Master list)
+                const len = data.r.length;
+                const labels = Array.from({{length: len}}, (v, k) => k);
+
+                const fileIdx = data.idx;
+                const currentTrend = globalTrends[fileIdx];
+
+                // --- Overlay Chart ---
+                const ctxOverlay = document.getElementById('overlay-chart-' + safeFname);
+                if (ctxOverlay) {{
+                    const datasets = [];
+
+                    // Reconstruct Previous Trends using globalTrends and fileIdx
+                    const startIdx = Math.max(0, fileIdx - backGraph);
+                    const endIdx = fileIdx; // Exclusive
+
+                    let opacityStep = 0.6 / (endIdx - startIdx);
+                    if(endIdx === startIdx) opacityStep = 0;
+
+                    for(let i=startIdx; i<endIdx; i++) {{
+                        const pastTrend = globalTrends[i];
+                        const relativeIndex = i - startIdx;
+                        const alpha = 0.2 + (relativeIndex * opacityStep);
+
+                        datasets.push({{
+                            label: `Prev trend`,
+                            data: pastTrend,
+                            borderColor: `rgba(100, 100, 100, ${{alpha}})`,
+                            borderWidth: 1,
+                            pointRadius: 0,
+                            fill: false,
+                            tension: 0.1
+                        }});
+                    }}
+
+                    // Add Current Trend (Orange)
+                    datasets.push({{
+                            label: 'Current Trend',
+                            data: currentTrend,
+                            borderColor: 'orange',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            fill: false,
+                            tension: 0.1
+                    }});
+
+                    const chartOverlay = new Chart(ctxOverlay, {{
+                        type: 'line',
+                        data: {{
+                            labels: labels,
+                            datasets: datasets
+                        }},
+                        options: {{
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {{
+                                legend: {{ display: false }},
+                                zoom: {{
+                                    pan: {{
+                                        enabled: true,
+                                        mode: 'x',
+                                    }},
+                                    zoom: {{
+                                        wheel: {{ enabled: true }},
+                                        pinch: {{ enabled: true }},
+                                        mode: 'x',
+                                    }}
+                                }}
+                            }},
+                            scales: {{
+                                x: {{ ticks: {{ maxTicksLimit: 20 }} }},
+                                y: {{ min: yMin, max: yMax }}
+                            }}
+                        }}
+                    }});
+                    charts['overlay-chart-' + safeFname] = chartOverlay;
                 }}
 
-                for (const [filename, data] of Object.entries(window.vectorData)) {{
-                    const safeFname = filename.replace(/\\./g, '_').replace(/ /g, '_');
-
-                    // X-Axis Labels (Rank 0 to N)
-                    // We assume all files have same length vectors (Master list)
-                    const len = data.r.length;
-                    const labels = Array.from({{length: len}}, (v, k) => k);
-
-                    const fileIdx = data.idx;
-                    const currentTrend = window.globalTrends[fileIdx];
-
-                    // --- Overlay Chart ---
-                    const ctxOverlay = document.getElementById('overlay-chart-' + safeFname);
-                    if (ctxOverlay) {{
-                        const datasets = [];
-
-                        // Reconstruct Previous Trends using globalTrends and fileIdx
-                        // We want trends from [fileIdx - BACK_GRAPH, fileIdx - 1]
-                        const startIdx = Math.max(0, fileIdx - window.backGraph);
-                        const endIdx = fileIdx; // Exclusive
-
-                        let opacityStep = 0.6 / (endIdx - startIdx);
-                        if(endIdx === startIdx) opacityStep = 0;
-
-                        for(let i=startIdx; i<endIdx; i++) {{
-                            const pastTrend = window.globalTrends[i];
-                            const relativeIndex = i - startIdx;
-                            const alpha = 0.2 + (relativeIndex * opacityStep);
-
-                            datasets.push({{
-                                label: `Prev trend`,
-                                data: pastTrend,
-                                borderColor: `rgba(100, 100, 100, ${{alpha}})`,
-                                borderWidth: 1,
-                                pointRadius: 0,
-                                fill: false,
-                                tension: 0.1
-                            }});
+                // --- Current File Chart ---
+                const ctxCurrent = document.getElementById('current-chart-' + safeFname);
+                if (ctxCurrent) {{
+                    const chartCurrent = new Chart(ctxCurrent, {{
+                        data: {{
+                            labels: labels,
+                            datasets: [
+                                {{
+                                    type: 'line',
+                                    label: 'Hypercube Avg',
+                                    data: currentTrend,
+                                    borderColor: 'orange',
+                                    borderWidth: 2,
+                                    pointRadius: 0,
+                                    tension: 0.1,
+                                    order: 1
+                                }},
+                                {{
+                                    type: 'scatter',
+                                    label: 'Raw Result',
+                                    data: data.r,
+                                    backgroundColor: 'rgba(65, 105, 225, 0.5)',
+                                    borderColor: 'rgba(65, 105, 225, 0.8)',
+                                    borderWidth: 0,
+                                    pointRadius: 1,
+                                    fill: true,
+                                    order: 2
+                                }}
+                            ]
+                        }},
+                        options: {{
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {{
+                                zoom: {{
+                                    pan: {{ enabled: true, mode: 'x' }},
+                                    zoom: {{ wheel: {{ enabled: true }}, pinch: {{ enabled: true }}, mode: 'x' }}
+                                }}
+                            }},
+                            scales: {{
+                                x: {{ ticks: {{ maxTicksLimit: 20 }} }},
+                                y: {{ min: yMin, max: yMax }}
+                            }}
                         }}
-
-                        // Add Current Trend (Orange)
-                        datasets.push({{
-                             label: 'Current Trend',
-                             data: currentTrend,
-                             borderColor: 'orange',
-                             borderWidth: 2,
-                             pointRadius: 0,
-                             fill: false,
-                             tension: 0.1
-                        }});
-
-                        const chartOverlay = new Chart(ctxOverlay, {{
-                            type: 'line',
-                            data: {{
-                                labels: labels,
-                                datasets: datasets
-                            }},
-                            options: {{
-                                responsive: true,
-                                maintainAspectRatio: false,
-                                plugins: {{
-                                    legend: {{ display: false }},
-                                    zoom: {{
-                                        pan: {{
-                                            enabled: true,
-                                            mode: 'x',
-                                        }},
-                                        zoom: {{
-                                            wheel: {{ enabled: true }},
-                                            pinch: {{ enabled: true }},
-                                            mode: 'x',
-                                        }}
-                                    }}
-                                }},
-                                scales: {{
-                                    x: {{ ticks: {{ maxTicksLimit: 20 }} }},
-                                    y: {{ min: window.yMin, max: window.yMax }}
-                                }}
-                            }}
-                        }});
-                        charts['overlay-chart-' + safeFname] = chartOverlay;
-                    }}
-
-                    // --- Current File Chart ---
-                    const ctxCurrent = document.getElementById('current-chart-' + safeFname);
-                    if (ctxCurrent) {{
-                        const chartCurrent = new Chart(ctxCurrent, {{
-                            data: {{
-                                labels: labels,
-                                datasets: [
-                                    {{
-                                        type: 'line',
-                                        label: 'Hypercube Avg',
-                                        data: currentTrend,
-                                        borderColor: 'orange',
-                                        borderWidth: 2,
-                                        pointRadius: 0,
-                                        tension: 0.1,
-                                        order: 1
-                                    }},
-                                    {{
-                                        type: 'line',
-                                        label: 'Raw Result',
-                                        data: data.r,
-                                        backgroundColor: 'rgba(65, 105, 225, 0.5)',
-                                        borderColor: 'rgba(65, 105, 225, 0.8)',
-                                        borderWidth: 0,
-                                        pointRadius: 1,
-                                        fill: true,
-                                        order: 2
-                                    }}
-                                ]
-                            }},
-                            options: {{
-                                responsive: true,
-                                maintainAspectRatio: false,
-                                plugins: {{
-                                    zoom: {{
-                                        pan: {{ enabled: true, mode: 'x' }},
-                                        zoom: {{ wheel: {{ enabled: true }}, pinch: {{ enabled: true }}, mode: 'x' }}
-                                    }}
-                                }},
-                                scales: {{
-                                    x: {{ ticks: {{ maxTicksLimit: 20 }} }},
-                                    y: {{ min: window.yMin, max: window.yMax }}
-                                }}
-                            }}
-                        }});
-                        charts['current-chart-' + safeFname] = chartCurrent;
-                    }}
+                    }});
+                    charts['current-chart-' + safeFname] = chartCurrent;
                 }}
             }}
 
@@ -678,7 +678,7 @@ def main():
             function submitVector(filename, safeFname) {{
                 const input = document.getElementById('input-' + safeFname);
                 const rank = parseInt(input.value);
-                const data = window.vectorData[filename];
+                const data = vectorData[filename];
                 const maxRank = data.r.length - 1;
 
                 if (isNaN(rank) || rank < 0 || rank > maxRank) {{
@@ -707,15 +707,15 @@ def main():
                 // Convert state to array and sort by date
                 let trades = [];
                 for (const [fname, rank] of Object.entries(selectedTrades)) {{
-                    if (window.vectorData[fname]) {{
-                        const info = window.vectorData[fname];
+                    if (vectorData[fname]) {{
+                        const info = vectorData[fname];
                         trades.push({{
                             filename: fname,
                             date: info.date,
                             rank: rank,
                             p: info.p[rank],
                             r: info.r[rank],
-                            v: window.globalParams[rank]
+                            v: globalParams[rank]
                         }});
                     }}
                 }}
@@ -818,17 +818,68 @@ def main():
                     }}
                 }});
             }}
+
+            function saveReport() {{
+                // Serialize current DOM to a string
+                // We need to make sure the input values are preserved in the DOM before serializing
+
+                // 1. Update input attributes
+                for (const [fname, rank] of Object.entries(selectedTrades)) {{
+                     const safeFname = fname.replace(/\\./g, '_').replace(/ /g, '_');
+                    const input = document.getElementById('input-' + safeFname);
+                    if (input) input.setAttribute('value', rank);
+                }}
+
+                const htmlContent = document.documentElement.outerHTML;
+                const blob = new Blob([htmlContent], {{type: 'text/html'}});
+                const url = URL.createObjectURL(blob);
+
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'Vector_Distribution_Report_Saved.html';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }}
+
+            function restoreState() {{
+                const inputs = document.querySelectorAll('.rank-input');
+                inputs.forEach(input => {{
+                    if (input.value && input.value !== '') {{
+                        // ID is 'input-safeFname'
+                        const safeId = input.id.replace('input-', '');
+                        for(const fname of Object.keys(vectorData)) {{
+                            const s = fname.replace(/\\./g, '_').replace(/ /g, '_');
+                            if (s === safeId) {{
+                                selectedTrades[fname] = parseInt(input.value);
+                                if (vectorData[fname]) {{
+                                    const rank = parseInt(input.value);
+                                    const data = vectorData[fname];
+                                    const profit = data.p[rank];
+                                    const result = data.r[rank];
+                                    const resDiv = document.getElementById('result-' + safeId);
+                                     if(resDiv) {{
+                                        resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{profit}}<br>Result: ${{result}}`;
+                                        resDiv.style.color = profit >= 0 ? 'green' : 'red';
+                                     }}
+                                }}
+                                break;
+                            }}
+                        }}
+                    }}
+                }});
+            }}
         </script>
     </body>
     </html>
     """
 
-    index_path = os.path.join(output_dir, "index.html")
-    with open(index_path, "w", encoding='utf-8') as f:
+    output_path = os.path.join(target_dir, "Vector_Distribution_Report.html")
+    with open(output_path, "w", encoding='utf-8') as f:
         f.write(html_content)
 
-    print(f"Report generated successfully: {index_path}")
-    print(f"Data file: {data_js_path}")
+    print(f"Report generated successfully: {output_path}")
 
 if __name__ == "__main__":
     main()
