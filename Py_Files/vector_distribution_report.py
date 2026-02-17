@@ -73,96 +73,6 @@ def get_date_from_filename(filename):
             return int(p)
     return float('inf')
 
-def generate_plot(results, hypercube_avg, filename, y_min=None, y_max=None):
-    """
-    Generates a matplotlib plot for the results distribution.
-    Replaces rolling mean with Hypercube Average.
-    """
-    plt.figure(figsize=(12, 6))
-
-    # X-axis is just the index (Rank)
-    x = np.arange(len(results))
-
-    # Plot the raw data as a filled area/bar
-    plt.fill_between(x, results, color='royalblue', alpha=0.8, label='Raw Result')
-
-    # Plot Hypercube Average line
-    if hypercube_avg is not None:
-        plt.plot(x, hypercube_avg, color='orange', linewidth=2, label=f'Hypercube Avg (Size={HYPERCUBE})')
-
-    plt.title(f"Result Distribution: {filename}")
-    plt.xlabel("Vector Rank (Based on First File)")
-    plt.ylabel("Result")
-
-    # Set fixed Y-axis scale if provided
-    if y_min is not None and y_max is not None:
-        plt.ylim(y_min, y_max)
-
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-
-    # Save to base64
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png')
-    buf.seek(0)
-    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-    plt.close()
-
-    return img_base64
-
-def generate_overlay_plot(trends_list, y_min=None, y_max=None):
-    """
-    Generates a matplotlib plot with multiple overlayed trend lines.
-    Older lines have lower opacity.
-    """
-    plt.figure(figsize=(12, 6))
-
-    num_trends = len(trends_list)
-
-    # Check if there is anything to plot
-    if num_trends > 0:
-        # Assuming all trends have the same length (x-axis)
-        # Verify valid trend exists
-        valid_trends = [t for t in trends_list if t is not None]
-        if valid_trends:
-            x = np.arange(len(valid_trends[0]))
-
-            for i, trend in enumerate(trends_list):
-                if trend is None: continue
-
-                # Use random color
-                color = np.random.rand(3,)
-
-                # Calculate alpha: increasing for newer lines
-                # Range alpha from 0.2 to 1.0
-                alpha = 0.2 + (0.8 * (i / (num_trends - 1))) if num_trends > 1 else 1.0
-
-                plt.plot(x, trend, color=color, linewidth=2, alpha=alpha)
-
-    plt.title(f"Previous {num_trends} Trends Overlay (Hypercube Avg)")
-    plt.xlabel("Vector Rank (Based on First File)")
-    plt.ylabel("Result")
-
-    # Set fixed Y-axis scale if provided
-    if y_min is not None and y_max is not None:
-        plt.ylim(y_min, y_max)
-
-    # Detailed X-Axis and Grid
-    plt.grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.7)
-    plt.minorticks_on()
-    plt.gca().xaxis.set_minor_locator(ticker.AutoMinorLocator(5)) # 5 minor ticks per major
-    plt.tight_layout()
-
-    # Save to base64
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png')
-    buf.seek(0)
-    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-    plt.close()
-
-    return img_base64
-
 def generate_histogram(data, title):
     """
     Generates a simple histogram for the distribution of results inside a hypercube.
@@ -290,11 +200,25 @@ def main():
     # -------------------------------------------
 
     # 2. Process All Files
-    all_trends = [] # Stores hypercube avg trend lines (numpy arrays)
-    vector_data_store = {} # Stores data for JS {filename: {date, vectors: [r, p, params]}}
+    all_trends = [] # Stores hypercube avg trend lines (numpy arrays) for overlay logic
 
-    # We will build HTML parts dynamically
-    html_standard_rows = ""
+    # Store data for JS charts and tables
+    # Structure:
+    # {
+    #   filename: {
+    #     date: int,
+    #     vectors: [{r, p, v}],
+    #     chartData: {
+    #        results: [float], // Raw results
+    #        trend: [float]    // Hypercube Avg Trend
+    #     },
+    #     overlayData: [ // Array of previous trends
+    #        [float], [float], ...
+    #     ]
+    #   }
+    # }
+    vector_data_store = {}
+
     html_sliding_rows = ""
     html_top3_rows = ""
 
@@ -336,9 +260,6 @@ def main():
         # --- Calculate Hypercube Average ---
         hypercube_avgs = np.zeros_like(results)
 
-        # Optimize: results is a numpy array. We can access indices directly.
-        # Loop through each vector and average its neighbors
-        # We can iterate because we pre-calculated indices
         for i, neighbor_idxs in enumerate(master_neighbor_indices):
             hypercube_avgs[i] = np.mean(results[neighbor_idxs])
 
@@ -352,68 +273,72 @@ def main():
         for r, p, v in zip(results, profits, params_list):
             file_vectors.append({'r': round(r, 4), 'p': round(p, 2), 'v': v})
 
+        # Collect Overlay Data (Previous Trends)
+        prev_trends_data = []
+        if len(all_trends) > 0:
+            # We want the last BACK_GRAPH trends
+            start_idx = max(0, len(all_trends) - BACK_GRAPH)
+            # Convert numpy arrays to lists for JSON serialization
+            prev_trends_subset = all_trends[start_idx:]
+            prev_trends_data = [t.tolist() for t in prev_trends_subset]
+
         vector_data_store[filename] = {
             'date': file_date,
-            'vectors': file_vectors
+            'vectors': file_vectors,
+            'chartData': {
+                'results': results.tolist(),
+                'trend': hypercube_avgs.tolist()
+            },
+            'overlayData': prev_trends_data
         }
 
-        # Generate Plot with fixed scaling and hypercube average
-        img_std = generate_plot(results, hypercube_avgs, filename, y_min=y_min, y_max=y_max)
+        # Store current trend for future overlays
+        all_trends.append(hypercube_avgs)
 
         processed_count += 1
 
-        # Add to Standard View HTML
-        html_standard_rows += f"""
-            <div class="plot-container">
-                <h3>{filename}</h3>
-                <img src="data:image/png;base64,{img_std}" alt="Plot for {filename}">
+        # We only generate the HTML container here. The Chart.js rendering happens on load.
+        # We need unique IDs for the canvases.
+
+        safe_fname = filename.replace('.', '_').replace(' ', '_')
+
+        # Only show Sliding Window if we have history (or just always show it, but empty overlay if first file)
+        # Requirement: "Sliding Window View (Last x Overlay)"
+
+        html_sliding_rows += f"""
+        <div class="plot-container" id="container-{safe_fname}">
+            <h3>{filename} (Sliding Window Analysis)</h3>
+
+            <!-- Top Row: Overlay Graph + Controls -->
+            <div style="display: flex; gap: 20px; align-items: flex-start; margin-bottom: 20px;">
+                <div style="flex: 2; height: 400px; position: relative;">
+                    <h4 style="margin-bottom: 5px;">Previous {BACK_GRAPH} Trends Overlay (Hypercube Avg)</h4>
+                    <canvas id="overlay-chart-{safe_fname}"></canvas>
+                    <button onclick="resetZoom('overlay-chart-{safe_fname}')" style="position:absolute; top:10px; right:10px; z-index:10; font-size:0.8em;">Reset Zoom</button>
+                </div>
+                <div style="flex: 1; padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #ddd;">
+                    <h4>Evaluate Vector Strategy</h4>
+                    <p>Select a Vector Rank to evaluate for this week.</p>
+                    <div style="margin-bottom: 15px;">
+                        <label style="display:block; margin-bottom:5px; font-weight:bold;">Vector Rank (0-{len(master_vectors)-1}):</label>
+                        <input type="number" id="input-{safe_fname}" class="rank-input" min="0" max="{len(master_vectors)-1}" placeholder="Enter Rank" style="width: 100%; padding: 8px; margin-bottom: 10px;">
+                        <button onclick="submitVector('{filename}', '{safe_fname}')" style="width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Submit</button>
+                    </div>
+                    <div id="result-{safe_fname}" style="margin-top: 10px; font-size: 0.9em; color: #555;"></div>
+                </div>
             </div>
+
+            <!-- Bottom Row: Current File Graph -->
+            <div style="width: 100%; height: 400px; position: relative;">
+                <h4 style="margin-bottom: 5px;">Current File: {filename}</h4>
+                <canvas id="current-chart-{safe_fname}"></canvas>
+                 <button onclick="resetZoom('current-chart-{safe_fname}')" style="position:absolute; top:10px; right:10px; z-index:10; font-size:0.8em;">Reset Zoom</button>
+            </div>
+        </div>
         """
-
-        # Handle Sliding Window Logic (Store Hypercube Avg)
-        all_trends.append(hypercube_avgs)
-
-        if len(all_trends) > BACK_GRAPH:
-            # Get previous BACK_GRAPH trends (excluding current)
-            prev_trends = all_trends[-(BACK_GRAPH + 1) : -1]
-
-            # Generate Overlay Plot
-            img_overlay = generate_overlay_plot(prev_trends, y_min=y_min, y_max=y_max)
-
-            # Add to Sliding View HTML (New Layout)
-            html_sliding_rows += f"""
-            <div class="plot-container" id="container-{filename.replace('.', '_')}">
-                <h3>{filename} (Sliding Window Analysis)</h3>
-
-                <!-- Top Row: Overlay Graph + Controls -->
-                <div style="display: flex; gap: 20px; align-items: flex-start; margin-bottom: 20px;">
-                    <div style="flex: 2;">
-                        <h4 style="margin-bottom: 5px;">Previous {BACK_GRAPH} Trends Overlay (Hypercube Avg)</h4>
-                        <img src="data:image/png;base64,{img_overlay}" style="width: 100%; border: 1px solid #eee;">
-                    </div>
-                    <div style="flex: 1; padding: 20px; background: #f8f9fa; border-radius: 8px; border: 1px solid #ddd;">
-                        <h4>Evaluate Vector Strategy</h4>
-                        <p>Select a Vector Rank to evaluate for this week.</p>
-                        <div style="margin-bottom: 15px;">
-                            <label style="display:block; margin-bottom:5px; font-weight:bold;">Vector Rank (0-{len(master_vectors)-1}):</label>
-                            <input type="number" id="input-{filename}" class="rank-input" min="0" max="{len(master_vectors)-1}" placeholder="Enter Rank" style="width: 100%; padding: 8px; margin-bottom: 10px;">
-                            <button onclick="submitVector('{filename}')" style="width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Submit</button>
-                        </div>
-                        <div id="result-{filename}" style="margin-top: 10px; font-size: 0.9em; color: #555;"></div>
-                    </div>
-                </div>
-
-                <!-- Bottom Row: Current File Graph -->
-                <div style="width: 100%;">
-                    <h4 style="margin-bottom: 5px;">Current File: {filename}</h4>
-                    <img src="data:image/png;base64,{img_std}" style="width: 100%; border: 1px solid #eee;">
-                </div>
-            </div>
-            """
 
         # --- Top 3 Hypercube Vectors ---
         # Identify top 3 vectors by Hypercube Average with EXCLUSION logic
-        # Sort ALL candidates first
         sorted_indices = np.argsort(hypercube_avgs)[::-1]
 
         top_selected_indices = []
@@ -426,10 +351,7 @@ def main():
             if cand_idx in excluded_indices:
                 continue
 
-            # Select this vector
             top_selected_indices.append(cand_idx)
-
-            # Add its neighbors to exclusion list (vectors inside its hypercube)
             neighbors = master_neighbor_indices[cand_idx]
             excluded_indices.update(neighbors)
 
@@ -441,11 +363,9 @@ def main():
             vec_profit = profits[vec_idx]
             vec_params = params_list[vec_idx]
 
-            # Get neighbor results for distribution
             n_idxs = master_neighbor_indices[vec_idx]
             neighbor_results = results[n_idxs]
 
-            # Generate Histogram
             img_hist = generate_histogram(neighbor_results, f"Rank {rank} (ID: {vec_idx}) Distribution")
 
             top3_html_content += f"""
@@ -472,6 +392,7 @@ def main():
         # -------------------------------
 
     # Serialize data for embedding
+    # Use a customized JSON encoder or just standard json.dumps since we converted numpy to lists
     json_data = json.dumps(vector_data_store)
 
     # 3. Generate HTML Report
@@ -481,7 +402,13 @@ def main():
     <head>
         <meta charset="UTF-8">
         <title>Vector Distribution Report</title>
+        <!-- Chart.js -->
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <!-- Hammer.js (required for zoom) -->
+        <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+        <!-- Chart.js Zoom Plugin -->
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+
         <style>
             body {{ font-family: Arial, sans-serif; margin: 20px; text-align: center; background-color: #f4f4f9; }}
             .container {{ max-width: 1600px; margin: 0 auto; padding-bottom: 100px; }}
@@ -529,15 +456,10 @@ def main():
                 </div>
             </details>
 
-            <details>
-                <summary>Standard View</summary>
-                <div class="section-content">
-                    {html_standard_rows}
-                </div>
-            </details>
+            <!-- Standard View REMOVED as per request -->
 
-            <details>
-                <summary>Sliding Window View (Last {BACK_GRAPH} Overlay)</summary>
+            <details open>
+                <summary>Sliding Window View (Last {BACK_GRAPH} Overlay) - Interactive</summary>
                 <div class="section-content">
                     {html_sliding_rows}
                 </div>
@@ -592,17 +514,161 @@ def main():
             // Embedded Data
             const vectorData = {json_data};
 
+            // Global Chart Registry
+            const charts = {{}}; // id -> Chart instance
+
             // State Management
             let selectedTrades = {{}}; // {{ filename: rank }}
 
-            // Chart Instance
+            // Chart Instance for Dashboard
             let profitChart = null;
 
             // Initialize
             document.addEventListener('DOMContentLoaded', () => {{
+                // Initialize Charts for Sliding Window
+                initCharts();
+
                 restoreState();
                 updateDashboard();
             }});
+
+            function initCharts() {{
+                for (const [filename, data] of Object.entries(vectorData)) {{
+                    const safeFname = filename.replace(/\./g, '_').replace(/ /g, '_');
+
+                    // X-Axis Labels (Rank 0 to N)
+                    // We assume all files have same length vectors (Master list)
+                    // Just create an array [0, 1, ..., N-1]
+                    const len = data.chartData.results.length;
+                    const labels = Array.from({{length: len}}, (v, k) => k);
+
+                    // --- Overlay Chart ---
+                    const ctxOverlay = document.getElementById('overlay-chart-' + safeFname);
+                    if (ctxOverlay) {{
+                        const datasets = [];
+
+                        // Add previous trends (faded)
+                        if (data.overlayData && data.overlayData.length > 0) {{
+                            data.overlayData.forEach((trend, i) => {{
+                                // Calculate alpha
+                                const alpha = 0.2 + (0.6 * (i / data.overlayData.length));
+                                // Randomish color but consistent?
+                                // Let's just use grey/blue variants
+                                datasets.push({{
+                                    label: `Prev ${{i+1}}`,
+                                    data: trend,
+                                    borderColor: `rgba(100, 100, 100, ${{alpha}})`,
+                                    borderWidth: 1,
+                                    pointRadius: 0,
+                                    fill: false,
+                                    tension: 0.1
+                                }});
+                            }});
+                        }}
+
+                        // Add Current Trend (Orange) - Optional? Usually overlay implies comparison.
+                        // Let's add current trend as bold orange
+                        datasets.push({{
+                             label: 'Current Trend',
+                             data: data.chartData.trend,
+                             borderColor: 'orange',
+                             borderWidth: 2,
+                             pointRadius: 0,
+                             fill: false,
+                             tension: 0.1
+                        }});
+
+                        const chartOverlay = new Chart(ctxOverlay, {{
+                            type: 'line',
+                            data: {{
+                                labels: labels,
+                                datasets: datasets
+                            }},
+                            options: {{
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {{
+                                    legend: {{ display: false }},
+                                    zoom: {{
+                                        pan: {{
+                                            enabled: true,
+                                            mode: 'x',
+                                        }},
+                                        zoom: {{
+                                            wheel: {{ enabled: true }},
+                                            pinch: {{ enabled: true }},
+                                            mode: 'x',
+                                        }}
+                                    }}
+                                }},
+                                scales: {{
+                                    x: {{ ticks: {{ maxTicksLimit: 20 }} }},
+                                    y: {{ min: {y_min}, max: {y_max} }}
+                                }}
+                            }}
+                        }});
+                        charts['overlay-chart-' + safeFname] = chartOverlay;
+                    }}
+
+                    // --- Current File Chart ---
+                    const ctxCurrent = document.getElementById('current-chart-' + safeFname);
+                    if (ctxCurrent) {{
+                        const chartCurrent = new Chart(ctxCurrent, {{
+                            data: {{
+                                labels: labels,
+                                datasets: [
+                                    {{
+                                        type: 'line',
+                                        label: 'Hypercube Avg',
+                                        data: data.chartData.trend,
+                                        borderColor: 'orange',
+                                        borderWidth: 2,
+                                        pointRadius: 0,
+                                        tension: 0.1,
+                                        order: 1
+                                    }},
+                                    {{
+                                        type: 'scatter', // or 'bar', scatter is good for dense points, but 'line' with fill is what we had.
+                                        // To mimic fill_between, we can use a line with fill: 'origin' or fill: true.
+                                        // But 'Raw Result' is discrete per vector.
+                                        // Let's use a filled line chart for raw data to match original look
+                                        type: 'line',
+                                        label: 'Raw Result',
+                                        data: data.chartData.results,
+                                        backgroundColor: 'rgba(65, 105, 225, 0.5)', // royalblue alpha 0.5
+                                        borderColor: 'rgba(65, 105, 225, 0.8)',
+                                        borderWidth: 0, // No line stroke, just fill?
+                                        pointRadius: 1, // Small points
+                                        fill: true, // Fill to bottom
+                                        order: 2
+                                    }}
+                                ]
+                            }},
+                            options: {{
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {{
+                                    zoom: {{
+                                        pan: {{ enabled: true, mode: 'x' }},
+                                        zoom: {{ wheel: {{ enabled: true }}, pinch: {{ enabled: true }}, mode: 'x' }}
+                                    }}
+                                }},
+                                scales: {{
+                                    x: {{ ticks: {{ maxTicksLimit: 20 }} }},
+                                    y: {{ min: {y_min}, max: {y_max} }}
+                                }}
+                            }}
+                        }});
+                        charts['current-chart-' + safeFname] = chartCurrent;
+                    }}
+                }}
+            }}
+
+            function resetZoom(chartId) {{
+                if (charts[chartId]) {{
+                    charts[chartId].resetZoom();
+                }}
+            }}
 
             function toggleDashboard() {{
                 const d = document.getElementById('dashboard');
@@ -611,8 +677,8 @@ def main():
                 icon.textContent = d.classList.contains('minimized') ? '▲' : '▼';
             }}
 
-            function submitVector(filename) {{
-                const input = document.getElementById('input-' + filename);
+            function submitVector(filename, safeFname) {{
+                const input = document.getElementById('input-' + safeFname);
                 const rank = parseInt(input.value);
                 const maxRank = vectorData[filename].vectors.length - 1;
 
@@ -626,7 +692,7 @@ def main():
 
                 // Provide feedback
                 const data = vectorData[filename].vectors[rank];
-                const resDiv = document.getElementById('result-' + filename);
+                const resDiv = document.getElementById('result-' + safeFname);
                 resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{data.p}}<br>Result: ${{data.r}}`;
                 resDiv.style.color = data.p >= 0 ? 'green' : 'red';
 
@@ -759,7 +825,11 @@ def main():
 
                 // 1. Update input attributes
                 for (const [fname, rank] of Object.entries(selectedTrades)) {{
-                    const input = document.getElementById('input-' + fname);
+                     // We need to find the safe ID for the input.
+                     // The input ID is 'input-' + safeFname
+                     // But we only have 'fname'. We need to convert it.
+                     const safeFname = fname.replace(/\./g, '_').replace(/ /g, '_');
+                    const input = document.getElementById('input-' + safeFname);
                     if (input) input.setAttribute('value', rank);
                 }}
 
@@ -786,18 +856,31 @@ def main():
                 const inputs = document.querySelectorAll('.rank-input');
                 inputs.forEach(input => {{
                     if (input.value && input.value !== '') {{
-                        const filename = input.id.replace('input-', '');
-                        selectedTrades[filename] = parseInt(input.value);
+                        // ID is 'input-safeFname'
+                        const safeId = input.id.replace('input-', '');
+                        // We need to map safeId back to original filename?
+                        // Or just store safeId -> rank in selectedTrades?
+                        // Actually, 'vectorData' keys are original filenames.
+                        // We need to find which key corresponds to this safeId.
 
-                        // Also restore visual feedback
-                        if (vectorData[filename]) {{
-                            const rank = parseInt(input.value);
-                             const data = vectorData[filename].vectors[rank];
-                             const resDiv = document.getElementById('result-' + filename);
-                             if(resDiv && data) {{
-                                resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{data.p}}<br>Result: ${{data.r}}`;
-                                resDiv.style.color = data.p >= 0 ? 'green' : 'red';
-                             }}
+                        // Let's iterate vectorData to find match
+                        for(const fname of Object.keys(vectorData)) {{
+                            const s = fname.replace(/\./g, '_').replace(/ /g, '_');
+                            if (s === safeId) {{
+                                selectedTrades[fname] = parseInt(input.value);
+
+                                // Visual feedback
+                                if (vectorData[fname]) {{
+                                    const rank = parseInt(input.value);
+                                    const data = vectorData[fname].vectors[rank];
+                                    const resDiv = document.getElementById('result-' + safeId);
+                                     if(resDiv && data) {{
+                                        resDiv.innerHTML = `<strong>Selected Rank ${{rank}}</strong><br>Profit: ${{data.p}}<br>Result: ${{data.r}}`;
+                                        resDiv.style.color = data.p >= 0 ? 'green' : 'red';
+                                     }}
+                                }}
+                                break;
+                            }}
                         }}
                     }}
                 }});
