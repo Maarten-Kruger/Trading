@@ -22,6 +22,7 @@ SMOOTHING_WINDOW = 573  # (Deprecated/Secondary) Controls the smoothness of the 
 BACK_GRAPH = 10         # Number of previous graphs to overlay
 TSNE_PERPLEXITY = 30    # Perplexity for t-SNE dimensionality reduction
 HYPERCUBE = 1           # Hypercube size (steps) for averaging neighbors
+HYPERCUBE_THRESHOLD = 10 # Only display Hypercube Average if above this threshold
 # ---------------------
 
 def read_csv_robust(filepath):
@@ -502,6 +503,7 @@ def main():
             const yMin = {y_min};
             const yMax = {y_max};
             const backGraph = {BACK_GRAPH};
+            const hcThreshold = {HYPERCUBE_THRESHOLD};
 
             // Global Chart Registry
             const charts = {{}}; // id -> Chart instance
@@ -540,7 +542,13 @@ def main():
                 const labels = Array.from({{length: len}}, (v, k) => k);
 
                 const fileIdx = data.idx;
-                const currentTrend = globalTrends[fileIdx];
+
+                // Helper to filter data based on threshold
+                const filterData = (arr) => {{
+                    return arr.map(val => (val >= hcThreshold) ? val : null);
+                }};
+
+                const currentTrend = filterData(globalTrends[fileIdx]);
 
                 // --- Overlay Chart ---
                 const ctxOverlay = document.getElementById('overlay-chart-' + safeFname);
@@ -555,7 +563,7 @@ def main():
                     if(endIdx === startIdx) opacityStep = 0;
 
                     for(let i=startIdx; i<endIdx; i++) {{
-                        const pastTrend = globalTrends[i];
+                        const pastTrend = filterData(globalTrends[i]);
                         const relativeIndex = i - startIdx;
                         const alpha = 0.2 + (relativeIndex * opacityStep);
 
@@ -566,7 +574,8 @@ def main():
                             borderWidth: 1,
                             pointRadius: 0,
                             fill: false,
-                            tension: 0.1
+                            tension: 0.1,
+                            spanGaps: false // Ensure gaps are shown
                         }});
                     }}
 
@@ -578,7 +587,8 @@ def main():
                             borderWidth: 2,
                             pointRadius: 0,
                             fill: false,
-                            tension: 0.1
+                            tension: 0.1,
+                            spanGaps: false
                     }});
 
                     const chartOverlay = new Chart(ctxOverlay, {{
@@ -628,7 +638,8 @@ def main():
                                     borderWidth: 2,
                                     pointRadius: 0,
                                     tension: 0.1,
-                                    order: 1
+                                    order: 1,
+                                    spanGaps: false
                                 }},
                                 {{
                                     type: 'scatter',
@@ -637,7 +648,7 @@ def main():
                                     backgroundColor: 'rgba(65, 105, 225, 0.5)',
                                     borderColor: 'rgba(65, 105, 225, 0.8)',
                                     borderWidth: 0,
-                                    pointRadius: 1,
+                                    pointRadius: 2,
                                     fill: true,
                                     order: 2
                                 }}
