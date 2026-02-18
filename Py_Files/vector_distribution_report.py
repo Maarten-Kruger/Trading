@@ -23,6 +23,7 @@ BACK_GRAPH = 10         # Number of previous graphs to overlay
 TSNE_PERPLEXITY = 30    # Perplexity for t-SNE dimensionality reduction
 HYPERCUBE = 1           # Hypercube size (steps) for averaging neighbors
 HYPERCUBE_THRESHOLD = 10 # Only display Hypercube Average if above this threshold
+TRACKED_VECTORS = ["10, 50, 15, 20, 700, 800"]
 # ---------------------
 
 def read_csv_robust(filepath):
@@ -204,6 +205,43 @@ def main():
     master_neighbor_indices = tree.query_radius(grid_coords, r=HYPERCUBE)
     print("Neighbor pre-computation complete.")
     # -------------------------------------------
+
+    # --- Generate Tracked Vectors Reference Table (Global) ---
+    tracked_ref_html = ""
+    if TRACKED_VECTORS:
+        tracked_ref_rows = ""
+        for t_vec in TRACKED_VECTORS:
+            try:
+                t_idx = global_params.index(t_vec)
+                tracked_ref_rows += f"""
+                <tr>
+                    <td>{t_vec}</td>
+                    <td>{t_idx}</td>
+                </tr>
+                """
+            except ValueError:
+                pass
+
+        if tracked_ref_rows:
+            tracked_ref_html = f"""
+            <details>
+                <summary style="font-size: 1.2em; font-weight: bold; cursor: pointer; padding: 10px; background-color: #e9ecef; margin-bottom: 20px;">Tracked Vectors Reference</summary>
+                <div class="section-content">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 0.9em; max-width: 800px; margin: 0 auto;">
+                        <thead>
+                            <tr style="background-color: #f8f9fa;">
+                                <th style="border: 1px solid #ddd; padding: 10px;">Vector Parameters</th>
+                                <th style="border: 1px solid #ddd; padding: 10px;">Vector Rank (Index)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {tracked_ref_rows}
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+            """
+    # ---------------------------------------------------------
 
     # 2. Process All Files
 
@@ -434,6 +472,8 @@ def main():
                     <p>Fixed Scale: [{y_min:.2f}, {y_max:.2f}] | Hypercube Size: {HYPERCUBE} | Back Graph: {BACK_GRAPH}</p>
                 </div>
             </div>
+
+            {tracked_ref_html}
 
             <details open>
                 <summary>Top 3 Vectors (Hypercube Analysis)</summary>
