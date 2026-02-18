@@ -478,7 +478,12 @@ def main():
                             <input type="number" id="threshold-input" placeholder="Enter Result Threshold (e.g. 50)">
                             <button onclick="calculateThresholdStats()">Calculate</button>
                         </div>
-                        <div id="threshold-results" style="margin-top: 15px; max-height: 200px; overflow-y: auto; display: none;"></div>
+                        <div style="display: flex; gap: 20px; margin-top: 15px;">
+                            <div id="threshold-results" style="flex: 1; max-height: 300px; overflow-y: auto; display: none;"></div>
+                            <div id="threshold-chart-container" style="flex: 1; height: 300px; display: none;">
+                                <canvas id="threshold-chart"></canvas>
+                            </div>
+                        </div>
                     </div>
 
                     <p>Showing distribution of the Top {TOP_N} vectors predicted by the strategy, sorted by their ACTUAL result in each file.</p>
@@ -517,6 +522,7 @@ def main():
             const reportData = {json_report_data};
             const rankData = {json_rank_data};
             const charts = {{}};
+            let thresholdChart = null;
 
             function lazyLoadCharts(filename, safeFname) {{
                 if (charts[safeFname]) return;
@@ -713,6 +719,7 @@ def main():
                 const input = document.getElementById('threshold-input');
                 const threshold = parseFloat(input.value);
                 const display = document.getElementById('threshold-results');
+                const chartContainer = document.getElementById('threshold-chart-container');
 
                 if (isNaN(threshold)) {{
                     alert("Please enter a valid numeric threshold.");
@@ -721,8 +728,10 @@ def main():
 
                 let html = '<table style="width:100%; border:1px solid #ddd;"><thead><tr><th>File</th><th>Count > ' + threshold + '</th><th>%</th></tr></thead><tbody>';
 
-                const filenames = Object.keys(reportData).sort(); // Should sort naturally or we use stored order?
-                // reportData keys are filenames. We can iterate them.
+                const filenames = Object.keys(reportData).sort();
+
+                const chartLabels = [];
+                const chartData = [];
 
                 for (const fname of filenames) {{
                     const rData = reportData[fname];
@@ -733,11 +742,60 @@ def main():
                     const pct = (total > 0) ? ((count / total) * 100).toFixed(1) : 0;
 
                     html += `<tr><td>${{fname}}</td><td>${{count}} / ${{total}}</td><td>${{pct}}%</td></tr>`;
+
+                    chartLabels.push(fname);
+                    chartData.push(count);
                 }}
 
                 html += '</tbody></table>';
                 display.innerHTML = html;
                 display.style.display = 'block';
+                chartContainer.style.display = 'block';
+
+                // --- Generate/Update Chart ---
+                const ctx = document.getElementById('threshold-chart').getContext('2d');
+
+                if (thresholdChart) {{
+                    thresholdChart.destroy();
+                }}
+
+                thresholdChart = new Chart(ctx, {{
+                    type: 'bar',
+                    data: {{
+                        labels: chartLabels,
+                        datasets: [{{
+                            label: `Count > ${{threshold}}`,
+                            data: chartData,
+                            backgroundColor: 'rgba(75, 192, 192, 0.6)',
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            borderWidth: 1
+                        }}]
+                    }},
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {{
+                            y: {{
+                                beginAtZero: true,
+                                ticks: {{
+                                    stepSize: 1
+                                }}
+                            }},
+                            x: {{
+                                ticks: {{
+                                    display: false // Hide long filenames on X axis for cleanliness
+                                }}
+                            }}
+                        }},
+                        plugins: {{
+                            tooltip: {{
+                                callbacks: {{
+                                    title: (ctx) => ctx[0].label
+                                }}
+                            }}
+                        }}
+                    }}
+                }});
             }}
         </script>
     </body>
