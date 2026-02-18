@@ -6,8 +6,6 @@ import pandas as pd
 import numpy as np
 import warnings
 import json
-import base64
-import io
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from sklearn.neighbors import KDTree
@@ -97,23 +95,6 @@ def calculate_drawdowns(equity_curve):
     max_dd = np.max(drawdowns) if drawdowns else 0
     avg_dd = np.mean(drawdowns) if drawdowns else 0
     return max_dd * 100, avg_dd * 100
-
-def generate_static_plot_base64(x, y, title, xlabel, ylabel, color='blue'):
-    """Generates a matplotlib plot and returns base64 string."""
-    plt.figure(figsize=(10, 4))
-    plt.plot(x, y, color=color, linewidth=2)
-    plt.title(title)
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=100)
-    buf.seek(0)
-    img_str = base64.b64encode(buf.read()).decode('utf-8')
-    plt.close()
-    return img_str
 
 def generate_final_verdict_pdf(output_path, rank1_data):
     """Generates a PDF report for the Top Rank."""
@@ -271,8 +252,6 @@ def main():
                 rank_history[rank]['params'].append(global_params[vec_idx])
 
         # Prepare Data for File View
-        # Requirement: X=Rank, Y=Result. Order: Highest Rank to Lowest Rank.
-        # So we keep the order of top_n_indices (which is already sorted by score).
 
         sorted_indices = top_n_indices
         sorted_pred_scores = prediction_scores[sorted_indices]
@@ -281,11 +260,11 @@ def main():
         sorted_pred_ranks = np.arange(1, TOP_N + 1)
         sorted_params = [global_params[idx] for idx in sorted_indices]
 
-        # Calculate Smooth Average Line (Moving Average of Actual Results)
+        # Calculate Smooth Average Line
         smooth_series = pd.Series(sorted_act_results).rolling(window=SMOOTHING_WINDOW, min_periods=1, center=True).mean()
         smooth_values = [round(x, 4) for x in smooth_series.fillna(0).tolist()]
 
-        # Calculate Average Line (Scalar Mean)
+        # Calculate Average Line
         avg_value = round(np.mean(sorted_act_results), 4)
 
         safe_fname = current_filename.replace('.', '_').replace(' ', '_')
@@ -327,9 +306,8 @@ def main():
     # --- Process Rank History & Summary ---
     print("Processing Rank Analysis...")
     html_rank_rows = ""
-    rank_stats_summary = [] # List of dicts for summary graphs
+    rank_stats_summary = []
 
-    # Store aggregated data for Summary Graphs
     ranks_x = []
     max_dds_y = []
     avg_dds_y = []
@@ -357,31 +335,18 @@ def main():
             'sharpe': round(sharpe, 3)
         }
 
-        # Collect for Summary
         ranks_x.append(r)
         max_dds_y.append(max_dd)
         avg_dds_y.append(avg_dd)
         profits_y.append(total_pl)
 
-        # Generate Static Image for Rank Analysis (Equity Curve)
-        # Using Matplotlib to base64
-        # We plot Equity Curve only (or maybe profit?)
-        # User asked for "Rank performance tracking" -> "Graph per Rank: Profit over time"
-        # Equity curve is best representation of profit over time.
-
-        img_base64 = generate_static_plot_base64(
-            x=range(len(equity)),
-            y=equity,
-            title=f"Rank {r} Equity Curve",
-            xlabel="Time",
-            ylabel="Equity ($)",
-            color='green' if total_pl >= 0 else 'red'
-        )
+        # Generate Interactive Chart container for Rank Analysis
+        rank_safe_id = f"rank-{r}"
 
         html_rank_rows += f"""
         <div class="plot-container">
             <details>
-                <summary>Rank {r} Performance (Click to Expand)</summary>
+                <summary onclick="lazyLoadRankChart({r})">Rank {r} Performance (Click to Expand)</summary>
                 <div class="section-content">
                     <!-- Stats Table -->
                     <table style="width: 100%; margin-bottom: 20px; font-size: 0.9em; background: #f9f9f9;">
@@ -399,9 +364,10 @@ def main():
                         </tr>
                     </table>
 
-                    <!-- Static Image -->
-                    <div style="text-align: center;">
-                        <img src="data:image/png;base64,{img_base64}" style="max-width: 100%; border: 1px solid #eee;">
+                    <!-- Interactive Chart Container -->
+                    <div style="height: 400px; position: relative;">
+                        <h4 style="margin:0;">Simulated Account Equity ($10k Start)</h4>
+                        <canvas id="chart-{rank_safe_id}"></canvas>
                     </div>
                 </div>
             </details>
@@ -414,7 +380,6 @@ def main():
         'max_dd': max_dds_y,
         'avg_dd': avg_dds_y,
         'profit': profits_y,
-        # Smooth Lines
         'profit_smooth': pd.Series(profits_y).rolling(window=SMOOTHING_WINDOW, min_periods=1, center=True).mean().fillna(0).tolist(),
         'max_dd_smooth': pd.Series(max_dds_y).rolling(window=SMOOTHING_WINDOW, min_periods=1, center=True).mean().fillna(0).tolist(),
     }
@@ -422,13 +387,13 @@ def main():
     # Generate Final Verdict PDF
     print("Generating Final Verdict PDF...")
     pdf_path = os.path.join(target_dir, "Final_Verdict.pdf")
-    # Rank 1 data
     generate_final_verdict_pdf(pdf_path, rank_history[1])
     print(f"PDF Saved: {pdf_path}")
 
     # Serialize JSON for JS
     json_report_data = json.dumps(report_data)
     json_summary_data = json.dumps(summary_data)
+    json_rank_history = json.dumps(rank_history)
 
     # HTML Template
     html_content = f"""
@@ -484,7 +449,7 @@ def main():
             <details style="margin-bottom: 40px; border: 2px solid #aaa;">
                 <summary style="background-color: #ddd;">Section 2: Rank Analysis (Performance over Time)</summary>
                 <div class="section-content">
-                    <p>Static analysis of specific Prediction Ranks across all files.</p>
+                    <p>Interactive analysis of specific Prediction Ranks across all files.</p>
                     {html_rank_rows}
                 </div>
             </details>
@@ -493,6 +458,7 @@ def main():
         <script>
             const reportData = {json_report_data};
             const summaryData = {json_summary_data};
+            const rankHistory = {json_rank_history};
             const charts = {{}};
 
             // --- Render Summary Charts ---
@@ -640,6 +606,52 @@ def main():
                     }}
                 }});
                 charts[safeFname] = chart;
+            }}
+
+            function lazyLoadRankChart(rank) {{
+                const chartId = 'chart-rank-' + rank;
+                if (charts[chartId]) return;
+
+                const data = rankHistory[rank];
+                if (!data) return;
+
+                // X-Axis labels: Start + Filenames
+                const labels = ['Start'].concat(data.filenames);
+
+                const ctx = document.getElementById(chartId).getContext('2d');
+                const chart = new Chart(ctx, {{
+                    type: 'line',
+                    data: {{
+                        labels: labels,
+                        datasets: [{{
+                            label: 'Equity ($)',
+                            data: data.equity_curve,
+                            borderColor: 'green',
+                            backgroundColor: 'rgba(0, 128, 0, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.1,
+                            pointRadius: 0,
+                            pointHoverRadius: 5
+                        }}]
+                    }},
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: {{ mode: 'index', intersect: false }},
+                        scales: {{
+                            x: {{ display: false }} // Hide dense labels
+                        }},
+                        plugins: {{
+                            tooltip: {{
+                                callbacks: {{
+                                    title: (ctx) => ctx[0].label
+                                }}
+                            }}
+                        }}
+                    }}
+                }});
+                charts[chartId] = chart;
             }}
 
             function updateInfoPanel(filename, safeFname, idx) {{
