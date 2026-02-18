@@ -754,7 +754,7 @@ def main():
                     sumPct += pctVal;
                     fileCount++;
 
-                    html += `<tr><td>${fname}</td><td>${count} / ${total}</td><td>${pctVal.toFixed(1)}%</td></tr>`;
+                    html += `<tr><td>${{fname}}</td><td>${{count}} / ${{total}}</td><td>${{pctVal.toFixed(1)}}%</td></tr>`;
                 }}
 
                 html += '</tbody></table>';
@@ -779,10 +779,10 @@ def main():
                 thresholdChart = new Chart(ctx, {{
                     type: 'bar',
                     data: {{
-                        labels: chartLabels,
+                        labels: binLabels,
                         datasets: [{{
                             label: `Count > ${{threshold}}`,
-                            data: chartData,
+                            data: bins,
                             backgroundColor: 'rgba(75, 192, 192, 0.6)',
                             borderColor: 'rgba(75, 192, 192, 1)',
                             borderWidth: 1
