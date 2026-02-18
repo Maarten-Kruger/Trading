@@ -15,6 +15,7 @@ warnings.filterwarnings("ignore")
 HYPERCUBE = 1           # Hypercube size (steps) for averaging neighbors
 FILE_LOOKBACK = 5       # Number of past files to average for prediction
 TOP_N = 100             # Number of top predicted vectors to evaluate
+INITIAL_EQUITY = 10000  # Initial account balance for simulation
 # ---------------------
 
 def read_csv_robust(filepath):
@@ -66,6 +67,31 @@ def get_date_from_filename(filename):
         if len(p) == 8 and p.startswith("20") and p.isdigit():
             return int(p)
     return float('inf')
+
+def calculate_sharpe_ratio(returns):
+    """Calculates annualized Sharpe Ratio assuming weekly data."""
+    if len(returns) < 2:
+        return 0.0
+    mean_return = np.mean(returns)
+    std_return = np.std(returns, ddof=1)
+    if std_return == 0:
+        return 0.0
+    return (mean_return / std_return) * np.sqrt(52)
+
+def calculate_drawdowns(equity_curve):
+    """Calculates Max Drawdown and Average Drawdown."""
+    peak = equity_curve[0]
+    drawdowns = []
+
+    for val in equity_curve:
+        if val > peak:
+            peak = val
+        dd = (peak - val) / peak if peak > 0 else 0
+        drawdowns.append(dd)
+
+    max_dd = np.max(drawdowns) if drawdowns else 0
+    avg_dd = np.mean(drawdowns) if drawdowns else 0
+    return max_dd * 100, avg_dd * 100
 
 def main():
     print("--- Vector Prediction Distribution Generator ---")
@@ -213,7 +239,7 @@ def main():
     report_data = {}
 
     # Rank-based history storage
-    # { rank_id (1..N): { filenames: [], results: [], profits: [], params: [], dates: [] } }
+    # { rank_id (1..N): { filenames: [], results: [], profits: [], params: [] } }
     rank_history = {r: {'filenames': [], 'results': [], 'profits': [], 'params': []} for r in range(1, TOP_N + 1)}
 
     for k in range(FILE_LOOKBACK, len(valid_files_indices)):
@@ -309,8 +335,35 @@ def main():
 
     # --- Generate Rank Analysis HTML ---
     html_rank_rows = ""
+
+    # Pre-calculate stats for each Rank
     for r in range(1, TOP_N + 1):
+        rank_data = rank_history[r]
+        profits = rank_data['profits']
+
+        # Calculate Equity Curve
+        equity = [INITIAL_EQUITY]
+        current_balance = INITIAL_EQUITY
+        for p in profits:
+            current_balance += p
+            equity.append(current_balance)
+
+        rank_data['equity_curve'] = equity
+
+        total_pl = current_balance - INITIAL_EQUITY
+        max_dd, avg_dd = calculate_drawdowns(equity)
+        sharpe = calculate_sharpe_ratio(profits)
+
+        # Add to rank_data for JS
+        rank_data['stats'] = {
+            'total_pl': round(total_pl, 2),
+            'max_dd': round(max_dd, 2),
+            'avg_dd': round(avg_dd, 2),
+            'sharpe': round(sharpe, 3)
+        }
+
         rank_id = f"rank-{r}"
+
         html_rank_rows += f"""
         <div class="plot-container">
             <details>
@@ -318,12 +371,39 @@ def main():
                     Prediction Rank {r} Performance
                 </summary>
                 <div class="section-content">
+
+                    <!-- Stats Table -->
+                    <table style="width: 100%; margin-bottom: 20px; font-size: 0.9em; background: #f9f9f9;">
+                        <tr>
+                            <th style="text-align:center;">Total P/L ($)</th>
+                            <th style="text-align:center;">Max Drawdown (%)</th>
+                            <th style="text-align:center;">Avg Drawdown (%)</th>
+                            <th style="text-align:center;">Sharpe Ratio</th>
+                        </tr>
+                        <tr>
+                            <td style="text-align:center; font-weight:bold; color: { 'green' if total_pl >= 0 else 'red' }">${total_pl:.2f}</td>
+                            <td style="text-align:center;">{max_dd:.2f}%</td>
+                            <td style="text-align:center;">{avg_dd:.2f}%</td>
+                            <td style="text-align:center;">{sharpe:.3f}</td>
+                        </tr>
+                    </table>
+
                     <div style="display: flex; gap: 20px;">
-                        <div style="flex: 3; height: 400px; position: relative;">
-                            <h4>Rank {r} Result over Time</h4>
-                            <canvas id="chart-rank-{r}"></canvas>
+                        <div style="flex: 3; height: 800px; position: relative; display: flex; flex-direction: column; gap: 20px;">
+                             <!-- Chart 1: Result over Time -->
+                            <div style="flex: 1; position: relative;">
+                                <h4 style="margin:0;">Rank {r} Result over Time</h4>
+                                <canvas id="chart-rank-{r}"></canvas>
+                            </div>
+
+                            <!-- Chart 2: Equity Curve -->
+                            <div style="flex: 1; position: relative;">
+                                <h4 style="margin:0;">Simulated Account Equity ($10k Start)</h4>
+                                <canvas id="chart-equity-{r}"></canvas>
+                            </div>
                         </div>
-                        <div style="flex: 1; padding: 20px; background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px;">
+
+                        <div style="flex: 1; padding: 20px; background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; height: fit-content;">
                             <h4 id="info-title-rank-{r}">Select a point...</h4>
                             <div id="info-content-rank-{r}" style="font-size: 0.9em;">
                                 <p>Click on a data point in the graph to see details for this file.</p>
@@ -357,6 +437,18 @@ def main():
             table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
             th, td {{ border: 1px solid #ddd; padding: 6px; text-align: left; }}
             th {{ background-color: #f2f2f2; }}
+
+            .calc-box {{
+                background: #eef;
+                padding: 15px;
+                margin-bottom: 20px;
+                border: 1px solid #ccd;
+                border-radius: 5px;
+                text-align: left;
+            }}
+            .calc-box input {{ padding: 8px; width: 200px; margin-right: 10px; }}
+            .calc-box button {{ padding: 8px 15px; cursor: pointer; background: #007bff; color: #fff; border: none; border-radius: 4px; }}
+            .calc-box button:hover {{ background: #0056b3; }}
         </style>
     </head>
     <body>
@@ -367,6 +459,16 @@ def main():
             <details open style="margin-bottom: 40px; border: 2px solid #aaa;">
                 <summary style="background-color: #ddd;">Section 1: File Analysis (Prediction vs Actual)</summary>
                 <div class="section-content">
+
+                    <div class="calc-box">
+                        <label><strong>Count Results Above Threshold:</strong></label><br>
+                        <div style="margin-top:5px;">
+                            <input type="number" id="threshold-input" placeholder="Enter Result Threshold (e.g. 50)">
+                            <button onclick="calculateThresholdStats()">Calculate</button>
+                        </div>
+                        <div id="threshold-results" style="margin-top: 15px; max-height: 200px; overflow-y: auto; display: none;"></div>
+                    </div>
+
                     <p>Showing distribution of the Top {TOP_N} vectors predicted by the strategy, sorted by their ACTUAL result in each file.</p>
                     {html_file_rows}
                 </div>
@@ -470,18 +572,20 @@ def main():
             }}
 
             function lazyLoadRankChart(rank) {{
-                const chartId = 'rank-' + rank;
-                if (charts[chartId]) return;
+                const chartId1 = 'rank-' + rank;
+                const chartId2 = 'equity-' + rank;
+
+                if (charts[chartId1]) return; // Assume if one loaded, both loaded
 
                 const data = rankData[rank];
                 if (!data) return;
 
-                const ctx = document.getElementById('chart-rank-' + rank).getContext('2d');
-
-                const chart = new Chart(ctx, {{
+                // --- Chart 1: Results over Time ---
+                const ctx1 = document.getElementById('chart-rank-' + rank).getContext('2d');
+                const chart1 = new Chart(ctx1, {{
                     type: 'line',
                     data: {{
-                        labels: data.filenames, // X-Axis is Filenames
+                        labels: data.filenames,
                         datasets: [{{
                             label: `Rank ${{rank}} Result`,
                             data: data.results,
@@ -496,38 +600,63 @@ def main():
                     options: {{
                         responsive: true,
                         maintainAspectRatio: false,
-                        interaction: {{
-                            mode: 'index',
-                            intersect: false,
+                        interaction: {{ mode: 'index', intersect: false }},
+                        scales: {{
+                            x: {{ display: false }} // Hide Labels as requested
                         }},
                         plugins: {{
                             tooltip: {{
                                 callbacks: {{
-                                    title: function(context) {{
-                                        return context[0].label; // Filename
-                                    }},
-                                    label: function(context) {{
-                                        const idx = context.dataIndex;
-                                        return [
-                                            `Result: ${{data.results[idx]}}`,
-                                            `Profit: ${{data.profits[idx]}}`
-                                        ];
-                                    }}
+                                    title: (ctx) => ctx[0].label,
+                                    label: (ctx) => [`Result: ${{data.results[ctx.dataIndex]}}`, `Profit: ${{data.profits[ctx.dataIndex]}}`]
                                 }}
                             }}
                         }},
                         onClick: (e) => {{
-                            const points = chart.getElementsAtEventForMode(e, 'nearest', {{ intersect: true }}, true);
-                            if (points.length) {{
-                                const firstPoint = points[0];
-                                const idx = firstPoint.index;
-                                updateRankInfoPanel(rank, idx);
+                            const points = chart1.getElementsAtEventForMode(e, 'nearest', {{ intersect: true }}, true);
+                            if (points.length) updateRankInfoPanel(rank, points[0].index);
+                        }}
+                    }}
+                }});
+                charts[chartId1] = chart1;
+
+                // --- Chart 2: Equity Curve ---
+                // X-axis has one more point than filenames (Start)
+                const equityLabels = ['Start'].concat(data.filenames);
+
+                const ctx2 = document.getElementById('chart-equity-' + rank).getContext('2d');
+                const chart2 = new Chart(ctx2, {{
+                    type: 'line',
+                    data: {{
+                        labels: equityLabels,
+                        datasets: [{{
+                            label: 'Account Balance ($)',
+                            data: data.equity_curve,
+                            borderColor: '#28a745',
+                            backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            fill: true,
+                            tension: 0.1
+                        }}]
+                    }},
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: {{ mode: 'index', intersect: false }},
+                        scales: {{
+                            x: {{ display: false }} // Hide Labels as requested
+                        }},
+                        plugins: {{
+                            tooltip: {{
+                                callbacks: {{
+                                    title: (ctx) => ctx[0].label,
+                                }}
                             }}
                         }}
                     }}
                 }});
-
-                charts[chartId] = chart;
+                charts[chartId2] = chart2;
             }}
 
             function updateRankInfoPanel(rank, idx) {{
@@ -548,6 +677,37 @@ def main():
                         <tr><td>Params</td><td style="font-size:0.8em; word-break:break-all;">${{data.params[idx]}}</td></tr>
                     </table>
                 `;
+            }}
+
+            function calculateThresholdStats() {{
+                const input = document.getElementById('threshold-input');
+                const threshold = parseFloat(input.value);
+                const display = document.getElementById('threshold-results');
+
+                if (isNaN(threshold)) {{
+                    alert("Please enter a valid numeric threshold.");
+                    return;
+                }}
+
+                let html = '<table style="width:100%; border:1px solid #ddd;"><thead><tr><th>File</th><th>Count > ' + threshold + '</th><th>%</th></tr></thead><tbody>';
+
+                const filenames = Object.keys(reportData).sort(); // Should sort naturally or we use stored order?
+                // reportData keys are filenames. We can iterate them.
+
+                for (const fname of filenames) {{
+                    const rData = reportData[fname];
+                    if (!rData) continue;
+
+                    const count = rData.act_results.filter(r => r >= threshold).length;
+                    const total = rData.act_results.length;
+                    const pct = (total > 0) ? ((count / total) * 100).toFixed(1) : 0;
+
+                    html += `<tr><td>${{fname}}</td><td>${{count}} / ${{total}}</td><td>${{pct}}%</td></tr>`;
+                }}
+
+                html += '</tbody></table>';
+                display.innerHTML = html;
+                display.style.display = 'block';
             }}
         </script>
     </body>
