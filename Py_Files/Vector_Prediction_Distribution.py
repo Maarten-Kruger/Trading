@@ -207,16 +207,14 @@ def main():
     # 3. Prediction Loop
     print("Running Prediction Logic...")
 
-    html_rows = ""
+    html_file_rows = ""
     # Data storage for JS
     # Structure: { filename: { sorted_indices: [], params: [], pred_scores: [], act_results: [], act_profits: [], pred_ranks: [] } }
     report_data = {}
 
-    # We iterate through valid files
-    # We need at least FILE_LOOKBACK previous valid files to make a prediction for the current one
-
-    # Map from 'valid_index' to 'real_index' (in all lists)
-    # valid_files_indices[k] gives the index in all_file_* lists
+    # Rank-based history storage
+    # { rank_id (1..N): { filenames: [], results: [], profits: [], params: [], dates: [] } }
+    rank_history = {r: {'filenames': [], 'results': [], 'profits': [], 'params': []} for r in range(1, TOP_N + 1)}
 
     for k in range(FILE_LOOKBACK, len(valid_files_indices)):
         current_real_idx = valid_files_indices[k]
@@ -245,6 +243,16 @@ def main():
         current_results = all_file_results[current_real_idx]
         current_profits = all_file_profits[current_real_idx]
 
+        # --- Capture Rank-Based History (Before Sorting) ---
+        for i, vec_idx in enumerate(top_n_indices):
+            rank = i + 1
+            if rank <= TOP_N:
+                rank_history[rank]['filenames'].append(current_filename)
+                rank_history[rank]['results'].append(round(current_results[vec_idx], 4))
+                rank_history[rank]['profits'].append(round(current_profits[vec_idx], 2))
+                rank_history[rank]['params'].append(global_params[vec_idx])
+        # ---------------------------------------------------
+
         # Extract data for Top N
         selected_indices = top_n_indices
         selected_pred_scores = prediction_scores[selected_indices]
@@ -252,8 +260,7 @@ def main():
         selected_act_profits = current_profits[selected_indices]
         selected_pred_ranks = np.arange(1, TOP_N + 1) # Rank 1 is highest score
 
-        # SORT by ACTUAL RESULT (Descending) as requested
-        # We need to sort the parallel arrays
+        # SORT by ACTUAL RESULT (Descending) as requested for File View
         sort_order = np.argsort(selected_act_results)[::-1]
 
         sorted_indices = selected_indices[sort_order]
@@ -263,9 +270,7 @@ def main():
         sorted_pred_ranks = selected_pred_ranks[sort_order]
 
         # Prepare Data for JS
-        # Store params just for these N vectors to save space
         sorted_params = [global_params[idx] for idx in sorted_indices]
-
         safe_fname = current_filename.replace('.', '_').replace(' ', '_')
 
         report_data[current_filename] = {
@@ -277,8 +282,8 @@ def main():
             'pred_ranks': sorted_pred_ranks.tolist()
         }
 
-        # Generate HTML Row
-        html_rows += f"""
+        # Generate HTML Row for File View
+        html_file_rows += f"""
         <div class="plot-container" id="container-{safe_fname}">
             <details>
                 <summary onclick="lazyLoadCharts('{current_filename}', '{safe_fname}')">
@@ -302,8 +307,37 @@ def main():
         </div>
         """
 
+    # --- Generate Rank Analysis HTML ---
+    html_rank_rows = ""
+    for r in range(1, TOP_N + 1):
+        rank_id = f"rank-{r}"
+        html_rank_rows += f"""
+        <div class="plot-container">
+            <details>
+                <summary onclick="lazyLoadRankChart({r})">
+                    Prediction Rank {r} Performance
+                </summary>
+                <div class="section-content">
+                    <div style="display: flex; gap: 20px;">
+                        <div style="flex: 3; height: 400px; position: relative;">
+                            <h4>Rank {r} Result over Time</h4>
+                            <canvas id="chart-rank-{r}"></canvas>
+                        </div>
+                        <div style="flex: 1; padding: 20px; background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px;">
+                            <h4 id="info-title-rank-{r}">Select a point...</h4>
+                            <div id="info-content-rank-{r}" style="font-size: 0.9em;">
+                                <p>Click on a data point in the graph to see details for this file.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </details>
+        </div>
+        """
+
     # Serialize Data
     json_report_data = json.dumps(report_data)
+    json_rank_data = json.dumps(rank_history)
 
     # 4. Generate HTML File
     html_content = f"""
@@ -329,13 +363,27 @@ def main():
         <div class="container">
             <h1>Vector Prediction Distribution Report</h1>
             <p><strong>Config:</strong> Lookback={FILE_LOOKBACK} | Hypercube={HYPERCUBE} | Top N={TOP_N}</p>
-            <p>Showing distribution of the Top {TOP_N} vectors predicted by the strategy, sorted by their ACTUAL result in the current file.</p>
 
-            {html_rows}
+            <details open style="margin-bottom: 40px; border: 2px solid #aaa;">
+                <summary style="background-color: #ddd;">Section 1: File Analysis (Prediction vs Actual)</summary>
+                <div class="section-content">
+                    <p>Showing distribution of the Top {TOP_N} vectors predicted by the strategy, sorted by their ACTUAL result in each file.</p>
+                    {html_file_rows}
+                </div>
+            </details>
+
+            <details style="margin-bottom: 40px; border: 2px solid #aaa;">
+                <summary style="background-color: #ddd;">Section 2: Rank Analysis (Performance over Time)</summary>
+                <div class="section-content">
+                    <p>Showing the actual result of specific Prediction Ranks across all files.</p>
+                    {html_rank_rows}
+                </div>
+            </details>
         </div>
 
         <script>
             const reportData = {json_report_data};
+            const rankData = {json_rank_data};
             const charts = {{}};
 
             function lazyLoadCharts(filename, safeFname) {{
@@ -416,6 +464,87 @@ def main():
                         <tr><td>Actual Result</td><td>${{data.act_results[idx]}}</td></tr>
                         <tr><td>Prediction Rank</td><td>${{data.pred_ranks[idx]}}</td></tr>
                         <tr><td>Prediction Score</td><td>${{data.pred_scores[idx]}}</td></tr>
+                        <tr><td>Params</td><td style="font-size:0.8em; word-break:break-all;">${{data.params[idx]}}</td></tr>
+                    </table>
+                `;
+            }}
+
+            function lazyLoadRankChart(rank) {{
+                const chartId = 'rank-' + rank;
+                if (charts[chartId]) return;
+
+                const data = rankData[rank];
+                if (!data) return;
+
+                const ctx = document.getElementById('chart-rank-' + rank).getContext('2d');
+
+                const chart = new Chart(ctx, {{
+                    type: 'line',
+                    data: {{
+                        labels: data.filenames, // X-Axis is Filenames
+                        datasets: [{{
+                            label: `Rank ${{rank}} Result`,
+                            data: data.results,
+                            borderColor: 'seagreen',
+                            backgroundColor: 'rgba(46, 139, 87, 0.2)',
+                            borderWidth: 2,
+                            pointRadius: 3,
+                            fill: true,
+                            tension: 0.1
+                        }}]
+                    }},
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: {{
+                            mode: 'index',
+                            intersect: false,
+                        }},
+                        plugins: {{
+                            tooltip: {{
+                                callbacks: {{
+                                    title: function(context) {{
+                                        return context[0].label; // Filename
+                                    }},
+                                    label: function(context) {{
+                                        const idx = context.dataIndex;
+                                        return [
+                                            `Result: ${{data.results[idx]}}`,
+                                            `Profit: ${{data.profits[idx]}}`
+                                        ];
+                                    }}
+                                }}
+                            }}
+                        }},
+                        onClick: (e) => {{
+                            const points = chart.getElementsAtEventForMode(e, 'nearest', {{ intersect: true }}, true);
+                            if (points.length) {{
+                                const firstPoint = points[0];
+                                const idx = firstPoint.index;
+                                updateRankInfoPanel(rank, idx);
+                            }}
+                        }}
+                    }}
+                }});
+
+                charts[chartId] = chart;
+            }}
+
+            function updateRankInfoPanel(rank, idx) {{
+                const data = rankData[rank];
+                const infoTitle = document.getElementById('info-title-rank-' + rank);
+                const infoContent = document.getElementById('info-content-rank-' + rank);
+
+                const fname = data.filenames[idx];
+
+                infoTitle.textContent = `Detail for Rank ${{rank}} on ${{fname.substring(0, 15)}}...`;
+
+                infoContent.innerHTML = `
+                    <table>
+                        <tr><th>Parameter</th><th>Value</th></tr>
+                        <tr><td>Filename</td><td style="font-size:0.8em; word-break:break-all;">${{fname}}</td></tr>
+                        <tr><td><strong>Actual Profit</strong></td><td style="color: ${{data.profits[idx] >= 0 ? 'green' : 'red'}}"><strong>${{data.profits[idx]}}</strong></td></tr>
+                        <tr><td>Actual Result</td><td>${{data.results[idx]}}</td></tr>
                         <tr><td>Params</td><td style="font-size:0.8em; word-break:break-all;">${{data.params[idx]}}</td></tr>
                     </table>
                 `;
