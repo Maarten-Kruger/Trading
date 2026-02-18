@@ -335,6 +335,7 @@ def main():
 
     # --- Generate Rank Analysis HTML ---
     html_rank_rows = ""
+    rank_summary_rows = ""
 
     # Pre-calculate stats for each Rank
     for r in range(1, TOP_N + 1):
@@ -362,6 +363,17 @@ def main():
             'sharpe': round(sharpe, 3)
         }
 
+        # Append to summary table rows
+        rank_summary_rows += f"""
+        <tr>
+            <td style="text-align:center;">{r}</td>
+            <td style="text-align:center; color: {'green' if total_pl >= 0 else 'red'}">${total_pl:.2f}</td>
+            <td style="text-align:center;">{max_dd:.2f}%</td>
+            <td style="text-align:center;">{avg_dd:.2f}%</td>
+            <td style="text-align:center;">{sharpe:.3f}</td>
+        </tr>
+        """
+
         rank_id = f"rank-{r}"
 
         html_rank_rows += f"""
@@ -372,7 +384,7 @@ def main():
                 </summary>
                 <div class="section-content">
 
-                    <!-- Stats Table -->
+                    <!-- Stats Table (Individual) -->
                     <table style="width: 100%; margin-bottom: 20px; font-size: 0.9em; background: #f9f9f9;">
                         <tr>
                             <th style="text-align:center;">Total P/L ($)</th>
@@ -389,15 +401,15 @@ def main():
                     </table>
 
                     <div style="display: flex; gap: 20px;">
-                        <div style="flex: 3; height: 800px; position: relative; display: flex; flex-direction: column; gap: 20px;">
+                        <div style="flex: 3; display: flex; flex-direction: column; gap: 20px;">
                              <!-- Chart 1: Result over Time -->
-                            <div style="flex: 1; position: relative;">
+                            <div style="height: 400px; position: relative;">
                                 <h4 style="margin:0;">Rank {r} Result over Time</h4>
                                 <canvas id="chart-rank-{r}"></canvas>
                             </div>
 
                             <!-- Chart 2: Equity Curve -->
-                            <div style="flex: 1; position: relative;">
+                            <div style="height: 400px; position: relative;">
                                 <h4 style="margin:0;">Simulated Account Equity ($10k Start)</h4>
                                 <canvas id="chart-equity-{r}"></canvas>
                             </div>
@@ -478,6 +490,24 @@ def main():
                 <summary style="background-color: #ddd;">Section 2: Rank Analysis (Performance over Time)</summary>
                 <div class="section-content">
                     <p>Showing the actual result of specific Prediction Ranks across all files.</p>
+
+                    <div style="max-height: 300px; overflow-y: auto; margin-bottom: 30px; border: 1px solid #ccc;">
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <thead style="position: sticky; top: 0; background: #eee; z-index: 10;">
+                                <tr>
+                                    <th style="text-align:center;">Rank</th>
+                                    <th style="text-align:center;">Total P/L ($)</th>
+                                    <th style="text-align:center;">Max Drawdown (%)</th>
+                                    <th style="text-align:center;">Avg Drawdown (%)</th>
+                                    <th style="text-align:center;">Sharpe Ratio</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {rank_summary_rows}
+                            </tbody>
+                        </table>
+                    </div>
+
                     {html_rank_rows}
                 </div>
             </details>
