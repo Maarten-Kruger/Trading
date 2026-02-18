@@ -205,6 +205,36 @@ def main():
     print("Neighbor pre-computation complete.")
     # -------------------------------------------
 
+    # --- Generate Tracked Vectors Reference Table (Global - All Vectors) ---
+    tracked_ref_rows = ""
+    for t_idx, t_vec in enumerate(global_params):
+        tracked_ref_rows += f"""
+        <tr>
+            <td>{t_vec}</td>
+            <td>{t_idx}</td>
+        </tr>
+        """
+
+    tracked_ref_html = f"""
+    <details>
+        <summary style="font-size: 1.2em; font-weight: bold; cursor: pointer; padding: 10px; background-color: #e9ecef; margin-bottom: 20px;">Tracked Vectors Reference (All Vectors)</summary>
+        <div class="section-content" style="max-height: 500px; overflow-y: auto; padding: 10px; border: 1px solid #ddd;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.9em; margin: 0 auto;">
+                <thead style="position: sticky; top: 0; background-color: #f8f9fa;">
+                    <tr>
+                        <th style="border: 1px solid #ddd; padding: 10px;">Vector Parameters</th>
+                        <th style="border: 1px solid #ddd; padding: 10px;">Vector Rank (Index)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {tracked_ref_rows}
+                </tbody>
+            </table>
+        </div>
+    </details>
+    """
+    # ---------------------------------------------------------
+
     # 2. Process All Files
 
     # Store Global Trends (Hypercube Averages) for ALL files
@@ -434,6 +464,8 @@ def main():
                     <p>Fixed Scale: [{y_min:.2f}, {y_max:.2f}] | Hypercube Size: {HYPERCUBE} | Back Graph: {BACK_GRAPH}</p>
                 </div>
             </div>
+
+            {tracked_ref_html}
 
             <details open>
                 <summary>Top 3 Vectors (Hypercube Analysis)</summary>

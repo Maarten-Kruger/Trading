@@ -478,7 +478,12 @@ def main():
                             <input type="number" id="threshold-input" placeholder="Enter Result Threshold (e.g. 50)">
                             <button onclick="calculateThresholdStats()">Calculate</button>
                         </div>
-                        <div id="threshold-results" style="margin-top: 15px; max-height: 200px; overflow-y: auto; display: none;"></div>
+                        <div style="display: flex; gap: 20px; margin-top: 15px;">
+                            <div id="threshold-results" style="flex: 1; max-height: 300px; overflow-y: auto; display: none;"></div>
+                            <div id="threshold-chart-container" style="flex: 1; height: 300px; display: none;">
+                                <canvas id="threshold-chart"></canvas>
+                            </div>
+                        </div>
                     </div>
 
                     <p>Showing distribution of the Top {TOP_N} vectors predicted by the strategy, sorted by their ACTUAL result in each file.</p>
@@ -517,6 +522,7 @@ def main():
             const reportData = {json_report_data};
             const rankData = {json_rank_data};
             const charts = {{}};
+            let thresholdChart = null;
 
             function lazyLoadCharts(filename, safeFname) {{
                 if (charts[safeFname]) return;
@@ -713,6 +719,7 @@ def main():
                 const input = document.getElementById('threshold-input');
                 const threshold = parseFloat(input.value);
                 const display = document.getElementById('threshold-results');
+                const chartContainer = document.getElementById('threshold-chart-container');
 
                 if (isNaN(threshold)) {{
                     alert("Please enter a valid numeric threshold.");
@@ -721,8 +728,15 @@ def main():
 
                 let html = '<table style="width:100%; border:1px solid #ddd;"><thead><tr><th>File</th><th>Count > ' + threshold + '</th><th>%</th></tr></thead><tbody>';
 
-                const filenames = Object.keys(reportData).sort(); // Should sort naturally or we use stored order?
-                // reportData keys are filenames. We can iterate them.
+                const filenames = Object.keys(reportData).sort();
+
+                // --- Histogram Logic ---
+                // We want to bin the *percentages* of vectors passing the threshold.
+                // Bins: 0-10, 10-20, ..., 90-100
+                const bins = new Array(10).fill(0);
+                const binLabels = ['0-10%', '10-20%', '20-30%', '30-40%', '40-50%', '50-60%', '60-70%', '70-80%', '80-90%', '90-100%'];
+                let sumPct = 0;
+                let fileCount = 0;
 
                 for (const fname of filenames) {{
                     const rData = reportData[fname];
@@ -730,14 +744,75 @@ def main():
 
                     const count = rData.act_results.filter(r => r >= threshold).length;
                     const total = rData.act_results.length;
-                    const pct = (total > 0) ? ((count / total) * 100).toFixed(1) : 0;
+                    const pctVal = (total > 0) ? (count / total) * 100 : 0;
 
-                    html += `<tr><td>${{fname}}</td><td>${{count}} / ${{total}}</td><td>${{pct}}%</td></tr>`;
+                    // Binning
+                    let binIndex = Math.floor(pctVal / 10);
+                    if (binIndex >= 10) binIndex = 9; // Handle 100%
+                    bins[binIndex]++;
+
+                    sumPct += pctVal;
+                    fileCount++;
+
+                    html += `<tr><td>${fname}</td><td>${count} / ${total}</td><td>${pctVal.toFixed(1)}%</td></tr>`;
                 }}
 
                 html += '</tbody></table>';
-                display.innerHTML = html;
+
+                // Add Average Statistic
+                const avgPct = (fileCount > 0) ? (sumPct / fileCount).toFixed(2) : 0;
+                const statsHtml = `<div style="padding: 10px; background: #e0f7fa; border: 1px solid #b2ebf2; border-radius: 4px; margin-bottom: 10px; text-align: center;">
+                                    <strong>Average Percentage Above Threshold: ${{avgPct}}%</strong>
+                                   </div>`;
+
+                display.innerHTML = statsHtml + html;
                 display.style.display = 'block';
+                chartContainer.style.display = 'block';
+
+                // --- Generate/Update Chart (Histogram Style) ---
+                const ctx = document.getElementById('threshold-chart').getContext('2d');
+
+                if (thresholdChart) {{
+                    thresholdChart.destroy();
+                }}
+
+                thresholdChart = new Chart(ctx, {{
+                    type: 'bar',
+                    data: {{
+                        labels: chartLabels,
+                        datasets: [{{
+                            label: `Count > ${{threshold}}`,
+                            data: chartData,
+                            backgroundColor: 'rgba(75, 192, 192, 0.6)',
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            borderWidth: 1
+                        }}]
+                    }},
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {{
+                            y: {{
+                                beginAtZero: true,
+                                ticks: {{
+                                    stepSize: 1
+                                }}
+                            }},
+                            x: {{
+                                ticks: {{
+                                    display: false // Hide long filenames on X axis for cleanliness
+                                }}
+                            }}
+                        }},
+                        plugins: {{
+                            tooltip: {{
+                                callbacks: {{
+                                    title: (ctx) => ctx[0].label
+                                }}
+                            }}
+                        }}
+                    }}
+                }});
             }}
         </script>
     </body>
