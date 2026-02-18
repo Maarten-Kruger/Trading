@@ -730,8 +730,13 @@ def main():
 
                 const filenames = Object.keys(reportData).sort();
 
-                const chartLabels = [];
-                const chartData = [];
+                // --- Histogram Logic ---
+                // We want to bin the *percentages* of vectors passing the threshold.
+                // Bins: 0-10, 10-20, ..., 90-100
+                const bins = new Array(10).fill(0);
+                const binLabels = ['0-10%', '10-20%', '20-30%', '30-40%', '40-50%', '50-60%', '60-70%', '70-80%', '80-90%', '90-100%'];
+                let sumPct = 0;
+                let fileCount = 0;
 
                 for (const fname of filenames) {{
                     const rData = reportData[fname];
@@ -739,20 +744,32 @@ def main():
 
                     const count = rData.act_results.filter(r => r >= threshold).length;
                     const total = rData.act_results.length;
-                    const pct = (total > 0) ? ((count / total) * 100).toFixed(1) : 0;
+                    const pctVal = (total > 0) ? (count / total) * 100 : 0;
 
-                    html += `<tr><td>${{fname}}</td><td>${{count}} / ${{total}}</td><td>${{pct}}%</td></tr>`;
+                    // Binning
+                    let binIndex = Math.floor(pctVal / 10);
+                    if (binIndex >= 10) binIndex = 9; // Handle 100%
+                    bins[binIndex]++;
 
-                    chartLabels.push(fname);
-                    chartData.push(count);
+                    sumPct += pctVal;
+                    fileCount++;
+
+                    html += `<tr><td>${fname}</td><td>${count} / ${total}</td><td>${pctVal.toFixed(1)}%</td></tr>`;
                 }}
 
                 html += '</tbody></table>';
-                display.innerHTML = html;
+
+                // Add Average Statistic
+                const avgPct = (fileCount > 0) ? (sumPct / fileCount).toFixed(2) : 0;
+                const statsHtml = `<div style="padding: 10px; background: #e0f7fa; border: 1px solid #b2ebf2; border-radius: 4px; margin-bottom: 10px; text-align: center;">
+                                    <strong>Average Percentage Above Threshold: ${{avgPct}}%</strong>
+                                   </div>`;
+
+                display.innerHTML = statsHtml + html;
                 display.style.display = 'block';
                 chartContainer.style.display = 'block';
 
-                // --- Generate/Update Chart ---
+                // --- Generate/Update Chart (Histogram Style) ---
                 const ctx = document.getElementById('threshold-chart').getContext('2d');
 
                 if (thresholdChart) {{
