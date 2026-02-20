@@ -20,6 +20,7 @@ TOP_N = 100             # Number of top predicted vectors to evaluate
 INITIAL_EQUITY = 10000  # Initial account balance for simulation
 SMOOTHING_WINDOW = 10   # Window for smooth average line
 EMA_WEIGHT = 0.3        # Weight for Exponential Moving Average
+PENALTY_FACTOR = 1.0    # Penalty for standard deviation in Hypercube Average
 # ---------------------
 
 def read_csv_robust(filepath):
@@ -215,7 +216,10 @@ def main():
 
         hypercube_avgs = np.zeros_like(results)
         for idx, neighbor_idxs in enumerate(master_neighbor_indices):
-            hypercube_avgs[idx] = np.mean(results[neighbor_idxs])
+            neighbors = results[neighbor_idxs]
+            mean_val = np.mean(neighbors)
+            std_val = np.std(neighbors)
+            hypercube_avgs[idx] = mean_val - (PENALTY_FACTOR * std_val)
 
         all_file_hypercube_avgs.append(hypercube_avgs)
         all_file_results.append(results)
@@ -435,7 +439,7 @@ def main():
     <body>
         <div class="container">
             <h1>Vector Prediction Distribution Report</h1>
-            <p><strong>Config:</strong> Lookback={FILE_LOOKBACK} | Hypercube={HYPERCUBE} | Top N={TOP_N}</p>
+            <p><strong>Config:</strong> Lookback={FILE_LOOKBACK} | Hypercube={HYPERCUBE} | Top N={TOP_N} | EMA Weight={EMA_WEIGHT} | Penalty Factor={PENALTY_FACTOR}</p>
             <p><a href="Final_Verdict.pdf" target="_blank" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px;">Download Final Verdict PDF</a></p>
 
             <details open style="margin-bottom: 40px; border: 2px solid #aaa;">
