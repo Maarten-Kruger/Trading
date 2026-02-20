@@ -19,6 +19,8 @@ FILE_LOOKBACK = 5       # Number of past files to average for prediction
 TOP_N = 100             # Number of top predicted vectors to evaluate
 INITIAL_EQUITY = 10000  # Initial account balance for simulation
 SMOOTHING_WINDOW = 10   # Window for smooth average line
+EMA_WEIGHT = 0.3        # Weight for Exponential Moving Average
+PENALTY_FACTOR = 1.0    # Penalty for standard deviation in Hypercube Average
 # ---------------------
 
 def read_csv_robust(filepath):
@@ -214,7 +216,10 @@ def main():
 
         hypercube_avgs = np.zeros_like(results)
         for idx, neighbor_idxs in enumerate(master_neighbor_indices):
-            hypercube_avgs[idx] = np.mean(results[neighbor_idxs])
+            neighbors = results[neighbor_idxs]
+            mean_val = np.mean(neighbors)
+            std_val = np.std(neighbors)
+            hypercube_avgs[idx] = mean_val - (PENALTY_FACTOR * std_val)
 
         all_file_hypercube_avgs.append(hypercube_avgs)
         all_file_results.append(results)
@@ -228,13 +233,28 @@ def main():
     report_data = {}
     rank_history = {r: {'filenames': [], 'results': [], 'profits': [], 'params': []} for r in range(1, TOP_N + 1)}
 
+    # Initialize EMA with first valid file
+    if len(valid_files_indices) > 0:
+        first_idx = valid_files_indices[0]
+        current_ema = all_file_hypercube_avgs[first_idx].copy()
+
+        # Warm up EMA with subsequent files up to FILE_LOOKBACK
+        for i in range(1, FILE_LOOKBACK):
+            if i < len(valid_files_indices):
+                idx = valid_files_indices[i]
+                val = all_file_hypercube_avgs[idx]
+                current_ema = EMA_WEIGHT * val + (1 - EMA_WEIGHT) * current_ema
+
     for k in range(FILE_LOOKBACK, len(valid_files_indices)):
         current_real_idx = valid_files_indices[k]
         current_filename = all_file_dates[current_real_idx]
-        lookback_indices = [valid_files_indices[j] for j in range(k - FILE_LOOKBACK, k)]
 
-        past_avgs_list = [all_file_hypercube_avgs[idx] for idx in lookback_indices]
-        prediction_scores = np.mean(np.vstack(past_avgs_list), axis=0)
+        # Use current EMA as prediction scores
+        prediction_scores = current_ema
+
+        # Update EMA for the next iteration (incorporating current file's data)
+        current_val = all_file_hypercube_avgs[current_real_idx]
+        current_ema = EMA_WEIGHT * current_val + (1 - EMA_WEIGHT) * current_ema
 
         # Select Top N Indices based on Prediction Score (Descending)
         top_n_indices = np.argsort(prediction_scores)[-TOP_N:][::-1]
