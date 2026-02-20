@@ -439,7 +439,7 @@ def main():
     <body>
         <div class="container">
             <h1>Vector Prediction Distribution Report</h1>
-            <p><strong>Config:</strong> Lookback={FILE_LOOKBACK} | Hypercube={HYPERCUBE} | Top N={TOP_N}</p>
+            <p><strong>Config:</strong> Lookback={FILE_LOOKBACK} | Hypercube={HYPERCUBE} | Top N={TOP_N} | EMA Weight={EMA_WEIGHT} | Penalty Factor={PENALTY_FACTOR}</p>
             <p><a href="Final_Verdict.pdf" target="_blank" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px;">Download Final Verdict PDF</a></p>
 
             <details open style="margin-bottom: 40px; border: 2px solid #aaa;">
