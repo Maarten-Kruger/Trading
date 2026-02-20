@@ -23,6 +23,7 @@ BACK_GRAPH = 10         # Number of previous graphs to overlay
 TSNE_PERPLEXITY = 30    # Perplexity for t-SNE dimensionality reduction
 HYPERCUBE = 1           # Hypercube size (steps) for averaging neighbors
 HYPERCUBE_THRESHOLD = 10 # Only display Hypercube Average if above this threshold
+PENALTY_FACTOR = 1.0    # Penalty for standard deviation in Hypercube Average
 # ---------------------
 
 def read_csv_robust(filepath):
@@ -286,7 +287,10 @@ def main():
         hypercube_avgs = np.zeros_like(results)
 
         for i, neighbor_idxs in enumerate(master_neighbor_indices):
-            hypercube_avgs[i] = np.mean(results[neighbor_idxs])
+            neighbors = results[neighbor_idxs]
+            mean_val = np.mean(neighbors)
+            std_val = np.std(neighbors)
+            hypercube_avgs[i] = mean_val - (PENALTY_FACTOR * std_val)
 
         # -----------------------------------
 
@@ -461,7 +465,7 @@ def main():
                 <div style="text-align:left;">
                     <h1>Vector Distribution Report</h1>
                     <p>Results ordered by vector rank in the first file ({first_filename}).</p>
-                    <p>Fixed Scale: [{y_min:.2f}, {y_max:.2f}] | Hypercube Size: {HYPERCUBE} | Back Graph: {BACK_GRAPH}</p>
+                    <p>Fixed Scale: [{y_min:.2f}, {y_max:.2f}] | Hypercube Size: {HYPERCUBE} | Back Graph: {BACK_GRAPH} | Penalty Factor: {PENALTY_FACTOR} | TSNE Perplexity: {TSNE_PERPLEXITY}</p>
                 </div>
             </div>
 
