@@ -19,7 +19,7 @@ warnings.filterwarnings("ignore")
 
 # --- Configuration ---
 SMOOTHING_WINDOW = 573  # (Deprecated/Secondary) Controls the smoothness of the moving average line if needed
-BACK_GRAPH = 5         # Number of previous graphs to overlay
+BACK_GRAPH = 10         # Number of previous graphs to overlay
 TSNE_PERPLEXITY = 30    # Perplexity for t-SNE dimensionality reduction
 HYPERCUBE = 1           # Hypercube size (steps) for averaging neighbors
 HYPERCUBE_THRESHOLD = 10 # Only display Hypercube Average if above this threshold
@@ -614,18 +614,6 @@ def main():
                             spanGaps: false // Ensure gaps are shown
                         }});
                     }}
-
-                    // Add Current Trend (Orange)
-                    datasets.push({{
-                            label: 'Current Trend',
-                            data: currentTrend,
-                            borderColor: 'orange',
-                            borderWidth: 2,
-                            pointRadius: 0,
-                            fill: false,
-                            tension: 0.1,
-                            spanGaps: false
-                    }});
 
                     const chartOverlay = new Chart(ctxOverlay, {{
                         type: 'line',
