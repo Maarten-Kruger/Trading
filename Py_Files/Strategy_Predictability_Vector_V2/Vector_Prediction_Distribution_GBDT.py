@@ -9,6 +9,7 @@ import json
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from sklearn.neighbors import KDTree
+import xgboost as xgb
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -20,7 +21,7 @@ TOP_N = 10000             # Number of top predicted vectors to evaluate
 INITIAL_EQUITY = 10000  # Initial account balance for simulation
 SMOOTHING_WINDOW = 25   # Window for smooth average line
 EMA_WEIGHT = 0.6        # Weight for Exponential Moving Average
-PENALTY_FACTOR = 0    # Penalty for standard deviation in Hypercube Average
+PENALTY_FACTOR = 0      # Penalty for standard deviation in Hypercube Average
 # ---------------------
 
 def read_csv_robust(filepath):
@@ -135,7 +136,7 @@ def main():
     # Use Agg backend
     plt.switch_backend('Agg')
 
-    print("--- Vector Prediction Distribution Generator ---")
+    print("--- Vector Prediction Distribution Generator (GBDT) ---")
 
     if len(sys.argv) > 1:
         target_dir = sys.argv[1]
@@ -154,8 +155,10 @@ def main():
     csv_files.sort(key=get_date_from_filename)
     print(f"Found {len(csv_files)} files.")
 
-    if len(csv_files) <= FILE_LOOKBACK:
-        print(f"Error: Not enough files ({len(csv_files)}) for lookback of {FILE_LOOKBACK}.")
+    # Need at least 2 * FILE_LOOKBACK + 1 to ensure enough history for features + target for training
+    min_files_needed = 2 * FILE_LOOKBACK + 1
+    if len(csv_files) < min_files_needed:
+        print(f"Error: Not enough files ({len(csv_files)}). Need at least {min_files_needed} for GBDT training window.")
         return
 
     # 1. Process Master File
@@ -176,6 +179,7 @@ def main():
     master_vectors.reset_index(drop=True, inplace=True)
     master_vectors['Master_Index'] = master_vectors.index
     global_params = master_vectors[vector_cols].astype(str).agg(', '.join, axis=1).tolist()
+    num_vectors = len(master_vectors)
 
     # Pre-compute Hypercube Neighbors
     print(f"Pre-computing Hypercube Neighbors (Size={HYPERCUBE})...")
@@ -201,9 +205,9 @@ def main():
         current_df = read_csv_robust(filepath)
 
         if current_df.empty or 'Result' not in current_df.columns:
-            all_file_hypercube_avgs.append(None)
-            all_file_results.append(None)
-            all_file_profits.append(None)
+            all_file_hypercube_avgs.append(np.zeros(num_vectors))
+            all_file_results.append(np.zeros(num_vectors))
+            all_file_profits.append(np.zeros(num_vectors))
             continue
 
         merged_df = pd.merge(master_vectors, current_df, on=vector_cols, how='left')
@@ -227,34 +231,123 @@ def main():
         all_file_dates.append(filename)
         valid_files_indices.append(i)
 
+    # Calculate EMA History
+    # We need EMA at each time step t (calculated from 0..t)
+    print("Calculating EMA History...")
+    all_file_emas = []
+    if len(valid_files_indices) > 0:
+        current_ema = np.zeros(num_vectors)
+        # Initialization
+        if len(valid_files_indices) > 0:
+             current_ema = all_file_hypercube_avgs[valid_files_indices[0]].copy()
+
+        # We store the EMA *after* processing file i.
+        # But for prediction at i, we need EMA derived from 0..i-1?
+        # Let's align: EMA[t] is the EMA value available *at time t* (using data up to t).
+
+        for k in range(len(valid_files_indices)):
+            real_idx = valid_files_indices[k]
+            val = all_file_hypercube_avgs[real_idx]
+            if k == 0:
+                current_ema = val
+            else:
+                current_ema = EMA_WEIGHT * val + (1 - EMA_WEIGHT) * current_ema
+            all_file_emas.append(current_ema.copy())
+
     # 3. Prediction Loop
-    print("Running Prediction Logic...")
+    print("Running GBDT Prediction Logic...")
     html_file_rows = ""
     report_data = {}
     rank_history = {r: {'filenames': [], 'results': [], 'profits': [], 'params': []} for r in range(1, TOP_N + 1)}
 
-    # Initialize EMA with first valid file
-    if len(valid_files_indices) > 0:
-        first_idx = valid_files_indices[0]
-        current_ema = all_file_hypercube_avgs[first_idx].copy()
+    # We start prediction when we have enough history to form at least one training sample without looking into the future (negative indexing).
+    # Training Sample needs:
+    #   Features from [t-Lookback, t-1]
+    #   Target at t
+    # The smallest 't' we can use for training is 'FILE_LOOKBACK'.
+    # Because for t=FILE_LOOKBACK, features are from indices 0 to FILE_LOOKBACK-1 (valid).
+    #
+    # We are at step 'k' (predicting k).
+    # We construct training set from targets t in range [k - FILE_LOOKBACK, k - 1].
+    # The smallest 't' in this range is (k - FILE_LOOKBACK).
+    # We need (k - FILE_LOOKBACK) >= FILE_LOOKBACK to have valid features for that first sample.
+    # So k >= 2 * FILE_LOOKBACK.
 
-        # Warm up EMA with subsequent files up to FILE_LOOKBACK
-        for i in range(1, FILE_LOOKBACK):
-            if i < len(valid_files_indices):
-                idx = valid_files_indices[i]
-                val = all_file_hypercube_avgs[idx]
-                current_ema = EMA_WEIGHT * val + (1 - EMA_WEIGHT) * current_ema
+    start_prediction_idx = 2 * FILE_LOOKBACK
 
-    for k in range(FILE_LOOKBACK, len(valid_files_indices)):
+    for k in range(start_prediction_idx, len(valid_files_indices)):
         current_real_idx = valid_files_indices[k]
         current_filename = all_file_dates[current_real_idx]
 
-        # Use current EMA as prediction scores
-        prediction_scores = current_ema
+        print(f"Predicting for file {k}: {current_filename}")
 
-        # Update EMA for the next iteration (incorporating current file's data)
-        current_val = all_file_hypercube_avgs[current_real_idx]
-        current_ema = EMA_WEIGHT * current_val + (1 - EMA_WEIGHT) * current_ema
+        # --- Build Training Data ---
+        # Window of files to train on: [k - FILE_LOOKBACK, k - 1]
+        # For each file 't' in this window, we construct a sample (X, y)
+        #   y = Result at t
+        #   X = Features derived from [t - FILE_LOOKBACK, t - 1]
+
+        X_train_list = []
+        y_train_list = []
+
+        training_indices = range(k - FILE_LOOKBACK, k)
+
+        for t in training_indices:
+            # Target
+            y_t = all_file_results[valid_files_indices[t]]
+
+            # Features
+            # 1. Past Results (Lookback)
+            # 2. Past Hypercube Avgs (Lookback)
+            # 3. EMA at t-1
+
+            feature_vectors = []
+
+            # Add Past Results and Hypercube Avgs
+            for lag in range(1, FILE_LOOKBACK + 1):
+                past_idx = valid_files_indices[t - lag]
+                feature_vectors.append(all_file_results[past_idx])
+                feature_vectors.append(all_file_hypercube_avgs[past_idx])
+
+            # Add EMA at t-1 (Index t-1 in our stored EMAs)
+            # Note: all_file_emas[t-1] corresponds to EMA after file t-1.
+            feature_vectors.append(all_file_emas[t-1])
+
+            # Stack features: (num_vectors, num_features)
+            X_t = np.column_stack(feature_vectors)
+
+            X_train_list.append(X_t)
+            y_train_list.append(y_t)
+
+        X_train = np.vstack(X_train_list)
+        y_train = np.concatenate(y_train_list)
+
+        # --- Train Model ---
+        model = xgb.XGBRegressor(
+            n_estimators=100,
+            learning_rate=0.1,
+            max_depth=5,
+            n_jobs=-1,
+            tree_method="hist",  # Faster
+            random_state=42
+        )
+        model.fit(X_train, y_train)
+
+        # --- Build Prediction Features ---
+        # Predicting for 'k'. Features from [k - FILE_LOOKBACK, k - 1]
+
+        pred_features_list = []
+        for lag in range(1, FILE_LOOKBACK + 1):
+            past_idx = valid_files_indices[k - lag]
+            pred_features_list.append(all_file_results[past_idx])
+            pred_features_list.append(all_file_hypercube_avgs[past_idx])
+
+        pred_features_list.append(all_file_emas[k-1])
+
+        X_pred = np.column_stack(pred_features_list)
+
+        # --- Predict ---
+        prediction_scores = model.predict(X_pred)
 
         # Select Top N Indices based on Prediction Score (Descending)
         top_n_indices = np.argsort(prediction_scores)[-TOP_N:][::-1]
@@ -272,7 +365,6 @@ def main():
                 rank_history[rank]['params'].append(global_params[vec_idx])
 
         # Prepare Data for File View
-
         sorted_indices = top_n_indices
         sorted_pred_scores = prediction_scores[sorted_indices]
         sorted_act_results = current_results[sorted_indices]
@@ -421,7 +513,7 @@ def main():
     <html>
     <head>
         <meta charset="UTF-8">
-        <title>Vector Prediction Distribution Report</title>
+        <title>Vector Prediction Distribution Report (GBDT)</title>
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
             body {{ font-family: Arial, sans-serif; margin: 20px; text-align: center; background-color: #f4f4f9; }}
@@ -438,8 +530,8 @@ def main():
     </head>
     <body>
         <div class="container">
-            <h1>Vector Prediction Distribution Report</h1>
-            <p><strong>Config:</strong> Lookback={FILE_LOOKBACK} | Hypercube={HYPERCUBE} | Top N={TOP_N} | EMA Weight={EMA_WEIGHT} | Penalty Factor={PENALTY_FACTOR}</p>
+            <h1>Vector Prediction Distribution Report (GBDT)</h1>
+            <p><strong>Config:</strong> Lookback={FILE_LOOKBACK} | Hypercube={HYPERCUBE} | Top N={TOP_N} | Model=XGBoost</p>
             <p><a href="Final_Verdict.pdf" target="_blank" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px;">Download Final Verdict PDF</a></p>
 
             <details open style="margin-bottom: 40px; border: 2px solid #aaa;">

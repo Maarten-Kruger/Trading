@@ -19,8 +19,13 @@ FILE_LOOKBACK = 5       # Number of past files to average for prediction
 TOP_N = 10000             # Number of top predicted vectors to evaluate
 INITIAL_EQUITY = 10000  # Initial account balance for simulation
 SMOOTHING_WINDOW = 25   # Window for smooth average line
-EMA_WEIGHT = 0.6        # Weight for Exponential Moving Average
-PENALTY_FACTOR = 0    # Penalty for standard deviation in Hypercube Average
+PENALTY_FACTOR = 0      # Penalty for standard deviation in Hypercube Average
+
+# Holt-Winters Configuration
+HW_ALPHA = 0.4          # Level smoothing factor
+HW_BETA = 0.2           # Trend smoothing factor
+HW_GAMMA = 0.2          # Seasonality smoothing factor
+SEASONAL_PERIOD = 4     # Season length (e.g. 4 for monthly in weekly data)
 # ---------------------
 
 def read_csv_robust(filepath):
@@ -135,7 +140,7 @@ def main():
     # Use Agg backend
     plt.switch_backend('Agg')
 
-    print("--- Vector Prediction Distribution Generator ---")
+    print("--- Vector Prediction Distribution Generator (Holt-Winters) ---")
 
     if len(sys.argv) > 1:
         target_dir = sys.argv[1]
@@ -176,6 +181,7 @@ def main():
     master_vectors.reset_index(drop=True, inplace=True)
     master_vectors['Master_Index'] = master_vectors.index
     global_params = master_vectors[vector_cols].astype(str).agg(', '.join, axis=1).tolist()
+    num_vectors = len(master_vectors)
 
     # Pre-compute Hypercube Neighbors
     print(f"Pre-computing Hypercube Neighbors (Size={HYPERCUBE})...")
@@ -228,100 +234,142 @@ def main():
         valid_files_indices.append(i)
 
     # 3. Prediction Loop
-    print("Running Prediction Logic...")
+    print("Running Holt-Winters Prediction Logic...")
     html_file_rows = ""
     report_data = {}
     rank_history = {r: {'filenames': [], 'results': [], 'profits': [], 'params': []} for r in range(1, TOP_N + 1)}
 
-    # Initialize EMA with first valid file
+    # Holt-Winters State
+    L = np.zeros(num_vectors) # Level
+    T = np.zeros(num_vectors) # Trend
+    S_buffer = np.zeros((num_vectors, SEASONAL_PERIOD)) # Seasonality Buffer (store S values for one cycle)
+
+    # Initialize State
     if len(valid_files_indices) > 0:
         first_idx = valid_files_indices[0]
-        current_ema = all_file_hypercube_avgs[first_idx].copy()
+        L = all_file_hypercube_avgs[first_idx].copy()
+        # T and S remain 0 initially
 
-        # Warm up EMA with subsequent files up to FILE_LOOKBACK
-        for i in range(1, FILE_LOOKBACK):
-            if i < len(valid_files_indices):
-                idx = valid_files_indices[i]
-                val = all_file_hypercube_avgs[idx]
-                current_ema = EMA_WEIGHT * val + (1 - EMA_WEIGHT) * current_ema
+    # Warm-up / Iteration
+    # We iterate through all valid files.
+    # At each step k, we update state using data from k.
+    # Then we predict k+1.
+    # But we can only generate report if k >= FILE_LOOKBACK?
+    # Actually we can predict from step 1, but we usually respect FILE_LOOKBACK for stability or consistency with other methods.
 
-    for k in range(FILE_LOOKBACK, len(valid_files_indices)):
+    for k in range(len(valid_files_indices)):
         current_real_idx = valid_files_indices[k]
-        current_filename = all_file_dates[current_real_idx]
 
-        # Use current EMA as prediction scores
-        prediction_scores = current_ema
+        # --- Prediction Step (Predicting THIS file k using Past State) ---
+        # State (L, T, S) currently holds values updated up to k-1.
+        # So we can predict k.
 
-        # Update EMA for the next iteration (incorporating current file's data)
-        current_val = all_file_hypercube_avgs[current_real_idx]
-        current_ema = EMA_WEIGHT * current_val + (1 - EMA_WEIGHT) * current_ema
+        if k >= FILE_LOOKBACK:
+            current_filename = all_file_dates[current_real_idx]
 
-        # Select Top N Indices based on Prediction Score (Descending)
-        top_n_indices = np.argsort(prediction_scores)[-TOP_N:][::-1]
+            # Predict Score for file k
+            # Forecast = L_{k-1} + T_{k-1} + S_{k - m}
+            # Current time index for prediction is k.
+            # Season index for k is k % m.
+            # S value to use is at S_buffer[:, k % m].
 
-        current_results = all_file_results[current_real_idx]
-        current_profits = all_file_profits[current_real_idx]
+            season_idx = k % SEASONAL_PERIOD
+            S_component = S_buffer[:, season_idx]
 
-        # Rank-based history (Rank 1 is index 0 of top_n_indices)
-        for i, vec_idx in enumerate(top_n_indices):
-            rank = i + 1
-            if rank <= TOP_N:
-                rank_history[rank]['filenames'].append(current_filename)
-                rank_history[rank]['results'].append(round(current_results[vec_idx], 4))
-                rank_history[rank]['profits'].append(round(current_profits[vec_idx], 2))
-                rank_history[rank]['params'].append(global_params[vec_idx])
+            prediction_scores = L + T + S_component
 
-        # Prepare Data for File View
+            # Select Top N Indices based on Prediction Score (Descending)
+            top_n_indices = np.argsort(prediction_scores)[-TOP_N:][::-1]
 
-        sorted_indices = top_n_indices
-        sorted_pred_scores = prediction_scores[sorted_indices]
-        sorted_act_results = current_results[sorted_indices]
-        sorted_act_profits = current_profits[sorted_indices]
-        sorted_pred_ranks = np.arange(1, TOP_N + 1)
-        sorted_params = [global_params[idx] for idx in sorted_indices]
+            current_results = all_file_results[current_real_idx]
+            current_profits = all_file_profits[current_real_idx]
 
-        # Calculate Smooth Average Line
-        smooth_series = pd.Series(sorted_act_results).rolling(window=SMOOTHING_WINDOW, min_periods=1, center=True).mean()
-        smooth_values = [round(x, 4) for x in smooth_series.fillna(0).tolist()]
+            # Rank-based history (Rank 1 is index 0 of top_n_indices)
+            for i, vec_idx in enumerate(top_n_indices):
+                rank = i + 1
+                if rank <= TOP_N:
+                    rank_history[rank]['filenames'].append(current_filename)
+                    rank_history[rank]['results'].append(round(current_results[vec_idx], 4))
+                    rank_history[rank]['profits'].append(round(current_profits[vec_idx], 2))
+                    rank_history[rank]['params'].append(global_params[vec_idx])
 
-        # Calculate Average Line
-        avg_value = round(np.mean(sorted_act_results), 4)
+            # Prepare Data for File View
+            sorted_indices = top_n_indices
+            sorted_pred_scores = prediction_scores[sorted_indices]
+            sorted_act_results = current_results[sorted_indices]
+            sorted_act_profits = current_profits[sorted_indices]
+            sorted_pred_ranks = np.arange(1, TOP_N + 1)
+            sorted_params = [global_params[idx] for idx in sorted_indices]
 
-        safe_fname = current_filename.replace('.', '_').replace(' ', '_')
-        report_data[current_filename] = {
-            'indices': sorted_indices.tolist(),
-            'params': sorted_params,
-            'pred_scores': [round(x, 4) for x in sorted_pred_scores.tolist()],
-            'act_results': [round(x, 4) for x in sorted_act_results.tolist()],
-            'act_profits': [round(x, 2) for x in sorted_act_profits.tolist()],
-            'pred_ranks': sorted_pred_ranks.tolist(),
-            'smooth': smooth_values,
-            'avg': avg_value
-        }
+            # Calculate Smooth Average Line
+            smooth_series = pd.Series(sorted_act_results).rolling(window=SMOOTHING_WINDOW, min_periods=1, center=True).mean()
+            smooth_values = [round(x, 4) for x in smooth_series.fillna(0).tolist()]
 
-        html_file_rows += f"""
-        <div class="plot-container" id="container-{safe_fname}">
-            <details>
-                <summary onclick="lazyLoadCharts('{current_filename}', '{safe_fname}')">
-                    {current_filename} (Click to Load Prediction Analysis)
-                </summary>
-                <div class="section-content">
-                    <div style="display: flex; gap: 20px;">
-                        <div style="flex: 3; height: 500px; position: relative;">
-                            <h4>Distribution of Prediction Results (Sorted by Prediction Rank)</h4>
-                            <canvas id="chart-{safe_fname}"></canvas>
-                        </div>
-                        <div style="flex: 1; padding: 20px; background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px;">
-                            <h4 id="info-title-{safe_fname}">Select a point...</h4>
-                            <div id="info-content-{safe_fname}" style="font-size: 0.9em;">
-                                <p>Click on a data point in the graph to see vector details.</p>
+            # Calculate Average Line
+            avg_value = round(np.mean(sorted_act_results), 4)
+
+            safe_fname = current_filename.replace('.', '_').replace(' ', '_')
+            report_data[current_filename] = {
+                'indices': sorted_indices.tolist(),
+                'params': sorted_params,
+                'pred_scores': [round(x, 4) for x in sorted_pred_scores.tolist()],
+                'act_results': [round(x, 4) for x in sorted_act_results.tolist()],
+                'act_profits': [round(x, 2) for x in sorted_act_profits.tolist()],
+                'pred_ranks': sorted_pred_ranks.tolist(),
+                'smooth': smooth_values,
+                'avg': avg_value
+            }
+
+            html_file_rows += f"""
+            <div class="plot-container" id="container-{safe_fname}">
+                <details>
+                    <summary onclick="lazyLoadCharts('{current_filename}', '{safe_fname}')">
+                        {current_filename} (Click to Load Prediction Analysis)
+                    </summary>
+                    <div class="section-content">
+                        <div style="display: flex; gap: 20px;">
+                            <div style="flex: 3; height: 500px; position: relative;">
+                                <h4>Distribution of Prediction Results (Sorted by Prediction Rank)</h4>
+                                <canvas id="chart-{safe_fname}"></canvas>
+                            </div>
+                            <div style="flex: 1; padding: 20px; background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px;">
+                                <h4 id="info-title-{safe_fname}">Select a point...</h4>
+                                <div id="info-content-{safe_fname}" style="font-size: 0.9em;">
+                                    <p>Click on a data point in the graph to see vector details.</p>
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
-            </details>
-        </div>
-        """
+                </details>
+            </div>
+            """
+
+        # --- Update State (Using actual data from k) ---
+        if k == 0:
+            # Initialization already done roughly (L=data, T=0, S=0)
+            pass
+        else:
+            Y_t = all_file_hypercube_avgs[current_real_idx]
+            season_idx = k % SEASONAL_PERIOD
+
+            S_old = S_buffer[:, season_idx]
+            L_prev = L
+            T_prev = T
+
+            # Holt-Winters Updates
+            # L_t = alpha * (Y_t - S_{t-m}) + (1-alpha) * (L_{t-1} + T_{t-1})
+            L_new = HW_ALPHA * (Y_t - S_old) + (1 - HW_ALPHA) * (L_prev + T_prev)
+
+            # T_t = beta * (L_t - L_{t-1}) + (1-beta) * T_{t-1}
+            T_new = HW_BETA * (L_new - L_prev) + (1 - HW_BETA) * T_prev
+
+            # S_t = gamma * (Y_t - L_t) + (1-gamma) * S_{t-m}
+            S_new = HW_GAMMA * (Y_t - L_new) + (1 - HW_GAMMA) * S_old
+
+            # Store State
+            L = L_new
+            T = T_new
+            S_buffer[:, season_idx] = S_new
 
     # --- Process Rank History & Summary ---
     print("Processing Rank Analysis...")
@@ -336,6 +384,12 @@ def main():
     for r in range(1, TOP_N + 1):
         rank_data = rank_history[r]
         profits = rank_data['profits']
+
+        if not profits:
+            # If no predictions (e.g. fewer files than lookback), handle gracefully
+            rank_data['equity_curve'] = [INITIAL_EQUITY]
+            rank_data['stats'] = {'total_pl': 0, 'max_dd': 0, 'avg_dd': 0, 'sharpe': 0}
+            continue
 
         equity = [INITIAL_EQUITY]
         current_balance = INITIAL_EQUITY
@@ -405,10 +459,13 @@ def main():
     }
 
     # Generate Final Verdict PDF
-    print("Generating Final Verdict PDF...")
-    pdf_path = os.path.join(target_dir, "Final_Verdict.pdf")
-    generate_final_verdict_pdf(pdf_path, rank_history[1])
-    print(f"PDF Saved: {pdf_path}")
+    if rank_history[1]['profits']:
+        print("Generating Final Verdict PDF...")
+        pdf_path = os.path.join(target_dir, "Final_Verdict.pdf")
+        generate_final_verdict_pdf(pdf_path, rank_history[1])
+        print(f"PDF Saved: {pdf_path}")
+    else:
+        print("No predictions made, skipping PDF generation.")
 
     # Serialize JSON for JS
     json_report_data = json.dumps(report_data)
@@ -421,7 +478,7 @@ def main():
     <html>
     <head>
         <meta charset="UTF-8">
-        <title>Vector Prediction Distribution Report</title>
+        <title>Vector Prediction Distribution Report (Holt-Winters)</title>
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
             body {{ font-family: Arial, sans-serif; margin: 20px; text-align: center; background-color: #f4f4f9; }}
@@ -438,8 +495,9 @@ def main():
     </head>
     <body>
         <div class="container">
-            <h1>Vector Prediction Distribution Report</h1>
-            <p><strong>Config:</strong> Lookback={FILE_LOOKBACK} | Hypercube={HYPERCUBE} | Top N={TOP_N} | EMA Weight={EMA_WEIGHT} | Penalty Factor={PENALTY_FACTOR}</p>
+            <h1>Vector Prediction Distribution Report (Holt-Winters)</h1>
+            <p><strong>Config:</strong> Lookback={FILE_LOOKBACK} | Hypercube={HYPERCUBE} | Top N={TOP_N} | Seasonality={SEASONAL_PERIOD}</p>
+            <p><strong>Params:</strong> Alpha={HW_ALPHA} | Beta={HW_BETA} | Gamma={HW_GAMMA}</p>
             <p><a href="Final_Verdict.pdf" target="_blank" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px;">Download Final Verdict PDF</a></p>
 
             <details open style="margin-bottom: 40px; border: 2px solid #aaa;">
