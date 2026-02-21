@@ -14,13 +14,13 @@ from sklearn.neighbors import KDTree
 warnings.filterwarnings("ignore")
 
 # --- Configuration ---
-HYPERCUBE = 1           # Hypercube size (steps) for averaging neighbors
+HYPERCUBE = 2           # Hypercube size (steps) for averaging neighbors
 FILE_LOOKBACK = 5       # Number of past files to average for prediction
-TOP_N = 100             # Number of top predicted vectors to evaluate
+TOP_N = 10000             # Number of top predicted vectors to evaluate
 INITIAL_EQUITY = 10000  # Initial account balance for simulation
-SMOOTHING_WINDOW = 10   # Window for smooth average line
-EMA_WEIGHT = 0.3        # Weight for Exponential Moving Average
-PENALTY_FACTOR = 1.0    # Penalty for standard deviation in Hypercube Average
+SMOOTHING_WINDOW = 25   # Window for smooth average line
+EMA_WEIGHT = 0.6        # Weight for Exponential Moving Average
+PENALTY_FACTOR = 0    # Penalty for standard deviation in Hypercube Average
 # ---------------------
 
 def read_csv_robust(filepath):

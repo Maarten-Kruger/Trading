@@ -19,11 +19,11 @@ warnings.filterwarnings("ignore")
 
 # --- Configuration ---
 SMOOTHING_WINDOW = 573  # (Deprecated/Secondary) Controls the smoothness of the moving average line if needed
-BACK_GRAPH = 10         # Number of previous graphs to overlay
+BACK_GRAPH = 5         # Number of previous graphs to overlay
 TSNE_PERPLEXITY = 30    # Perplexity for t-SNE dimensionality reduction
-HYPERCUBE = 1           # Hypercube size (steps) for averaging neighbors
+HYPERCUBE = 2           # Hypercube size (steps) for averaging neighbors
 HYPERCUBE_THRESHOLD = 10 # Only display Hypercube Average if above this threshold
-PENALTY_FACTOR = 1.0    # Penalty for standard deviation in Hypercube Average
+PENALTY_FACTOR = 0    # Penalty for standard deviation in Hypercube Average
 # ---------------------
 
 def read_csv_robust(filepath):
