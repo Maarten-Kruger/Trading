@@ -1026,7 +1026,7 @@ def main():
     </html>
     """
 
-    output_html_path = os.path.join(target_dir, "Vector_Prediction_Distribution.html")
+    output_html_path = os.path.join(target_dir, "Vector_Prediction_Distribution_GBDT.html")
     with open(output_html_path, "w", encoding='utf-8') as f:
         f.write(html_content)
 
