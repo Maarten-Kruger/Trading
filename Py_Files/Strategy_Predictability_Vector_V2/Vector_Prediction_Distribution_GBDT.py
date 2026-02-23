@@ -16,12 +16,12 @@ warnings.filterwarnings("ignore")
 
 # --- Configuration ---
 HYPERCUBE = 2           # Hypercube size (steps) for averaging neighbors
-FILE_LOOKBACK = 5       # Number of past files to average for prediction
-TOP_N = 10000             # Number of top predicted vectors to evaluate
+FEATURE_LOOKBACK = 5    # Number of past files to look back for feature calculation
+TRAIN_WINDOW = 10       # Number of past samples (files) to train on
+TOP_N = 10000           # Number of top predicted vectors to evaluate
 INITIAL_EQUITY = 10000  # Initial account balance for simulation
 SMOOTHING_WINDOW = 25   # Window for smooth average line
 EMA_WEIGHT = 0.6        # Weight for Exponential Moving Average
-PENALTY_FACTOR = 0      # Penalty for standard deviation in Hypercube Average
 # ---------------------
 
 def read_csv_robust(filepath):
@@ -102,13 +102,9 @@ def calculate_drawdowns(equity_curve):
 def generate_final_verdict_pdf(output_path, rank1_data):
     """Generates a PDF report for the Top Rank."""
     with PdfPages(output_path) as pdf:
-        # Page 1: Equity Curve & Stats
         plt.figure(figsize=(11, 8.5))
-
-        # Title
         plt.suptitle("Final Verdict Report: Top Rank Model", fontsize=20, weight='bold')
 
-        # Text Stats
         stats_text = (
             f"Top Rank Model (Rank 1)\n"
             f"--------------------------------\n"
@@ -121,7 +117,6 @@ def generate_final_verdict_pdf(output_path, rank1_data):
         )
         plt.figtext(0.1, 0.75, stats_text, fontsize=12, family='monospace', bbox={'facecolor': 'lightgrey', 'alpha': 0.5, 'pad': 10})
 
-        # Equity Curve
         ax1 = plt.axes([0.1, 0.1, 0.8, 0.5])
         ax1.plot(rank1_data['equity_curve'], color='green', linewidth=2)
         ax1.set_title("Equity Curve ($10,000 Start)")
@@ -131,6 +126,259 @@ def generate_final_verdict_pdf(output_path, rank1_data):
 
         pdf.savefig()
         plt.close()
+
+def generate_diagnostics_report(output_dir, all_predictions, feature_importance_map):
+    """Generates a separate HTML report for model diagnostics."""
+
+    # 1. Prediction Accuracy Scatter
+    # Sample down if too large
+    if len(all_predictions['pred']) > 20000:
+        indices = np.random.choice(len(all_predictions['pred']), 20000, replace=False)
+        preds = np.array(all_predictions['pred'])[indices]
+        actuals = np.array(all_predictions['actual'])[indices]
+    else:
+        preds = np.array(all_predictions['pred'])
+        actuals = np.array(all_predictions['actual'])
+
+    # 2. Residuals
+    residuals = actuals - preds
+
+    # 3. Feature Importance Data
+    feats = list(feature_importance_map.keys())
+    scores = list(feature_importance_map.values())
+
+    # Sort by importance
+    sorted_idx = np.argsort(scores)[::-1]
+    sorted_feats = [feats[i] for i in sorted_idx]
+    sorted_scores = [scores[i] for i in sorted_idx]
+
+    # JS Data
+    diag_data = {
+        'scatter': [{'x': float(p), 'y': float(a)} for p, a in zip(preds, actuals)],
+        'residuals': [float(r) for r in residuals],
+        'feat_names': sorted_feats,
+        'feat_scores': [float(s) for s in sorted_scores]
+    }
+
+    # Feature Descriptions Glossary
+    glossary_html = """
+    <div style="width: 80%; margin: 0 auto 40px auto; background: #f9f9f9; padding: 20px; border: 1px solid #ddd;">
+        <h3>Feature Glossary</h3>
+        <table style="width:100%; text-align:left; border-collapse: collapse;">
+            <tr><th style="padding:8px; border-bottom:1px solid #ccc;">Feature Name</th><th style="padding:8px; border-bottom:1px solid #ccc;">Description</th></tr>
+            <tr><td style="padding:8px;"><strong>Trend_Slope</strong></td><td style="padding:8px;">Linear regression slope of the result history over the lookback period (Direction of performance).</td></tr>
+            <tr><td style="padding:8px;"><strong>Risk_Adjusted_Return</strong></td><td style="padding:8px;">Mean result divided by standard deviation over the lookback period (Sharpe-like metric).</td></tr>
+            <tr><td style="padding:8px;"><strong>Hypercube_Stability_Mean</strong></td><td style="padding:8px;">Average standard deviation of spatial neighbors over time (Spatial stability).</td></tr>
+            <tr><td style="padding:8px;"><strong>Temporal_Stability_Std</strong></td><td style="padding:8px;">Standard deviation of the result history itself (Temporal stability).</td></tr>
+            <tr><td style="padding:8px;"><strong>EMA_Prev</strong></td><td style="padding:8px;">Exponential Moving Average of the Hypercube Average at the previous time step.</td></tr>
+            <tr><td style="padding:8px;"><strong>Param_*</strong></td><td style="padding:8px;">Static parameter value defining the vector (e.g., MA Period).</td></tr>
+            <tr><td style="padding:8px;"><strong>Res_Lag_*</strong></td><td style="padding:8px;">Raw historical result at a specific lag (e.g., Lag 1 = Previous File).</td></tr>
+            <tr><td style="padding:8px;"><strong>HC_Avg_Lag_*</strong></td><td style="padding:8px;">Raw historical hypercube average at a specific lag.</td></tr>
+        </table>
+    </div>
+    """
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Vector Model Diagnostics</title>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <style>
+            body {{ font-family: sans-serif; padding: 20px; }}
+            .chart-box {{ width: 80%; margin: 0 auto 40px auto; height: 400px; border: 1px solid #ccc; padding: 10px; }}
+        </style>
+    </head>
+    <body>
+        <h1 style="text-align:center;">GBDT Model Diagnostics</h1>
+
+        {glossary_html}
+
+        <div class="chart-box">
+            <h3>Feature Importance</h3>
+            <canvas id="featChart"></canvas>
+        </div>
+
+        <div class="chart-box">
+            <h3>Prediction vs Actual</h3>
+            <canvas id="scatterChart"></canvas>
+        </div>
+
+        <div class="chart-box">
+            <h3>Residual Distribution (Actual - Pred)</h3>
+            <canvas id="residChart"></canvas>
+        </div>
+
+        <script>
+            const data = {json.dumps(diag_data)};
+
+            // Feature Importance
+            new Chart(document.getElementById('featChart'), {{
+                type: 'bar',
+                data: {{
+                    labels: data.feat_names,
+                    datasets: [{{
+                        label: 'Gain / Importance',
+                        data: data.feat_scores,
+                        backgroundColor: 'rgba(54, 162, 235, 0.6)'
+                    }}]
+                }},
+                options: {{ responsive: true, maintainAspectRatio: false }}
+            }});
+
+            // Scatter
+            new Chart(document.getElementById('scatterChart'), {{
+                type: 'scatter',
+                data: {{
+                    datasets: [{{
+                        label: 'Pred vs Actual',
+                        data: data.scatter,
+                        backgroundColor: 'rgba(255, 99, 132, 0.5)'
+                    }}]
+                }},
+                options: {{
+                    responsive: true, maintainAspectRatio: false,
+                    scales: {{
+                        x: {{ title: {{ display: true, text: 'Predicted Score' }} }},
+                        y: {{ title: {{ display: true, text: 'Actual Result' }} }}
+                    }}
+                }}
+            }});
+
+            // Residual Histogram (Approximate with Bar)
+            // Binning logic for JS? Let's just pass raw data and use a plugin or simple line
+            // For simplicity, let's just show the residuals as a line chart (series)
+            // Actually, let's just bin it in Python to save space?
+            // Nah, let's just plot the series for now to see stability.
+            new Chart(document.getElementById('residChart'), {{
+                type: 'line',
+                data: {{
+                    labels: data.residuals.map((_, i) => i),
+                    datasets: [{{
+                        label: 'Residuals over time (Sample)',
+                        data: data.residuals,
+                        borderColor: 'purple',
+                        borderWidth: 1,
+                        pointRadius: 0
+                    }}]
+                }},
+                options: {{ responsive: true, maintainAspectRatio: false }}
+            }});
+        </script>
+    </body>
+    </html>
+    """
+
+    with open(os.path.join(output_dir, "Vector_Model_Diagnostics.html"), "w") as f:
+        f.write(html_content)
+    print("Diagnostics report generated.")
+
+def calculate_slope(y):
+    """Calculate slope of linear regression for 1D array y."""
+    n = len(y)
+    if n < 2: return 0.0
+    x = np.arange(n)
+    # Slope formula: (n*Sum(xy) - Sum(x)*Sum(y)) / (n*Sum(x^2) - (Sum(x))^2)
+    # Using numpy covariance for speed? Or polyfit
+    # Vectorized approach for multiple vectors?
+    # This function expects a single 1D array.
+    try:
+        slope, _ = np.polyfit(x, y, 1)
+        return slope
+    except:
+        return 0.0
+
+def build_features(target_idx, all_results, all_hypercube_avgs, all_hypercube_stds, all_emas, vector_static_features, num_vectors):
+    """
+    Builds feature matrix X for a specific time step `target_idx`.
+    Features are derived from history [target_idx - FEATURE_LOOKBACK, target_idx - 1].
+    """
+
+    # 1. Collect History Arrays
+    # We need arrays of shape (FEATURE_LOOKBACK, num_vectors)
+    hist_results = []
+    hist_hc_avgs = []
+    hist_hc_stds = []
+
+    for lag in range(1, FEATURE_LOOKBACK + 1):
+        past_idx = target_idx - lag
+        hist_results.append(all_results[past_idx])
+        hist_hc_avgs.append(all_hypercube_avgs[past_idx])
+        hist_hc_stds.append(all_hypercube_stds[past_idx])
+
+    # Shape: (FEATURE_LOOKBACK, num_vectors)
+    hist_results = np.array(hist_results)
+    hist_hc_avgs = np.array(hist_hc_avgs)
+    hist_hc_stds = np.array(hist_hc_stds)
+
+    # --- Feature Engineering ---
+    features_list = []
+    feature_names = []
+
+    # A. Static Vector Params
+    features_list.append(vector_static_features)
+    feature_names.extend([f"Param_{i}" for i in range(vector_static_features.shape[1])])
+
+    # B. Trend (Slope of Results)
+    # Vectorized Polyfit?
+    # Slope = (Mean(xy) - Mean(x)Mean(y)) / Var(x)
+    # x is 0, 1, 2... Lookback-1
+    # We can precompute x constants.
+    x = np.arange(FEATURE_LOOKBACK)
+    mx = x.mean()
+    vx = x.var()
+    # For each vector (column), calculate covariance with x
+    # Mean(y) per vector
+    my = hist_results.mean(axis=0)
+    # Mean(xy)
+    # We broadcast x across the 0-axis
+    mxy = (hist_results.T * x).T.mean(axis=0)
+
+    slopes = (mxy - mx * my) / vx if vx != 0 else np.zeros(num_vectors)
+    features_list.append(slopes.reshape(-1, 1))
+    feature_names.append("Trend_Slope")
+
+    # C. Risk-Adjusted Return (Mean / Std of Results)
+    stds = hist_results.std(axis=0)
+    # Avoid div by zero
+    safe_stds = np.where(stds == 0, 1.0, stds)
+    risk_adj = my / safe_stds
+    features_list.append(risk_adj.reshape(-1, 1))
+    feature_names.append("Risk_Adjusted_Return")
+
+    # D. Hypercube Stability (Mean of Hypercube Stds)
+    # Represents spatial stability over time
+    hc_stability = hist_hc_stds.mean(axis=0)
+    features_list.append(hc_stability.reshape(-1, 1))
+    feature_names.append("Hypercube_Stability_Mean")
+
+    # E. Temporal Stability (Std of Results)
+    features_list.append(stds.reshape(-1, 1))
+    feature_names.append("Temporal_Stability_Std")
+
+    # F. Recent EMA (at t-1)
+    # all_emas has data up to the latest file.
+    # We need EMA available *before* target_idx, i.e., at target_idx-1
+    ema_prev = all_emas[target_idx - 1]
+    features_list.append(ema_prev.reshape(-1, 1))
+    feature_names.append("EMA_Prev")
+
+    # G. Lags (Raw History)
+    # Add raw results and hypercube avgs from history
+    # Flatten history: Lag1_Res, Lag1_HC, Lag2_Res...
+    for i in range(FEATURE_LOOKBACK):
+        # i=0 is Lag1 (most recent) because we appended in order target-1...target-Lookback
+        # Actually my loop above was: target-1, target-2...
+        # So hist_results[0] is target-1 (Lag 1)
+        features_list.append(hist_results[i].reshape(-1, 1))
+        feature_names.append(f"Res_Lag_{i+1}")
+
+        features_list.append(hist_hc_avgs[i].reshape(-1, 1))
+        feature_names.append(f"HC_Avg_Lag_{i+1}")
+
+    # Combine
+    X = np.hstack(features_list)
+    return X, feature_names
 
 def main():
     # Use Agg backend
@@ -155,10 +403,11 @@ def main():
     csv_files.sort(key=get_date_from_filename)
     print(f"Found {len(csv_files)} files.")
 
-    # Need at least 2 * FILE_LOOKBACK + 1 to ensure enough history for features + target for training
-    min_files_needed = 2 * FILE_LOOKBACK + 1
+    # Need at least FEATURE_LOOKBACK + TRAIN_WINDOW files to start predicting
+    # We predict file K. We need K >= FEATURE_LOOKBACK + TRAIN_WINDOW + 1 (if 0-indexed)
+    min_files_needed = FEATURE_LOOKBACK + TRAIN_WINDOW + 1
     if len(csv_files) < min_files_needed:
-        print(f"Error: Not enough files ({len(csv_files)}). Need at least {min_files_needed} for GBDT training window.")
+        print(f"Error: Not enough files ({len(csv_files)}). Need at least {min_files_needed}.")
         return
 
     # 1. Process Master File
@@ -181,6 +430,13 @@ def main():
     global_params = master_vectors[vector_cols].astype(str).agg(', '.join, axis=1).tolist()
     num_vectors = len(master_vectors)
 
+    # Create Static Features Matrix (Vector Params)
+    # Ensure they are numeric
+    # master_vectors is currently valid types? read_csv_robust might leave them as is if they looked like numbers?
+    # Let's force numeric
+    vector_static_features_df = master_vectors[vector_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
+    vector_static_features = vector_static_features_df.values # (num_vectors, num_params)
+
     # Pre-compute Hypercube Neighbors
     print(f"Pre-computing Hypercube Neighbors (Size={HYPERCUBE})...")
     grid_indices_list = []
@@ -193,8 +449,9 @@ def main():
     master_neighbor_indices = tree.query_radius(grid_coords, r=HYPERCUBE)
 
     # Pre-compute Averages
-    print("Pre-computing Hypercube Averages for all files...")
+    print("Pre-computing Hypercube Stats for all files...")
     all_file_hypercube_avgs = []
+    all_file_hypercube_stds = []
     all_file_results = []
     all_file_profits = []
     all_file_dates = []
@@ -205,9 +462,12 @@ def main():
         current_df = read_csv_robust(filepath)
 
         if current_df.empty or 'Result' not in current_df.columns:
-            all_file_hypercube_avgs.append(np.zeros(num_vectors))
-            all_file_results.append(np.zeros(num_vectors))
-            all_file_profits.append(np.zeros(num_vectors))
+            # Fallback for empty/corrupt
+            zero_arr = np.zeros(num_vectors)
+            all_file_hypercube_avgs.append(zero_arr)
+            all_file_hypercube_stds.append(zero_arr)
+            all_file_results.append(zero_arr)
+            all_file_profits.append(zero_arr)
             continue
 
         merged_df = pd.merge(master_vectors, current_df, on=vector_cols, how='left')
@@ -219,40 +479,37 @@ def main():
         profits = merged_df['Profit'].values
 
         hypercube_avgs = np.zeros_like(results)
+        hypercube_stds = np.zeros_like(results)
+
         for idx, neighbor_idxs in enumerate(master_neighbor_indices):
             neighbors = results[neighbor_idxs]
             mean_val = np.mean(neighbors)
             std_val = np.std(neighbors)
-            hypercube_avgs[idx] = mean_val - (PENALTY_FACTOR * std_val)
+            hypercube_avgs[idx] = mean_val
+            hypercube_stds[idx] = std_val
 
         all_file_hypercube_avgs.append(hypercube_avgs)
+        all_file_hypercube_stds.append(hypercube_stds)
         all_file_results.append(results)
         all_file_profits.append(profits)
         all_file_dates.append(filename)
         valid_files_indices.append(i)
 
     # Calculate EMA History
-    # We need EMA at each time step t (calculated from 0..t)
     print("Calculating EMA History...")
     all_file_emas = []
+    current_ema = np.zeros(num_vectors)
     if len(valid_files_indices) > 0:
-        current_ema = np.zeros(num_vectors)
-        # Initialization
-        if len(valid_files_indices) > 0:
-             current_ema = all_file_hypercube_avgs[valid_files_indices[0]].copy()
+         current_ema = all_file_hypercube_avgs[valid_files_indices[0]].copy()
 
-        # We store the EMA *after* processing file i.
-        # But for prediction at i, we need EMA derived from 0..i-1?
-        # Let's align: EMA[t] is the EMA value available *at time t* (using data up to t).
-
-        for k in range(len(valid_files_indices)):
-            real_idx = valid_files_indices[k]
-            val = all_file_hypercube_avgs[real_idx]
-            if k == 0:
-                current_ema = val
-            else:
-                current_ema = EMA_WEIGHT * val + (1 - EMA_WEIGHT) * current_ema
-            all_file_emas.append(current_ema.copy())
+    for k in range(len(valid_files_indices)):
+        real_idx = valid_files_indices[k]
+        val = all_file_hypercube_avgs[real_idx]
+        if k == 0:
+            current_ema = val
+        else:
+            current_ema = EMA_WEIGHT * val + (1 - EMA_WEIGHT) * current_ema
+        all_file_emas.append(current_ema.copy())
 
     # 3. Prediction Loop
     print("Running GBDT Prediction Logic...")
@@ -260,61 +517,37 @@ def main():
     report_data = {}
     rank_history = {r: {'filenames': [], 'results': [], 'profits': [], 'params': []} for r in range(1, TOP_N + 1)}
 
-    # We start prediction when we have enough history to form at least one training sample without looking into the future (negative indexing).
-    # Training Sample needs:
-    #   Features from [t-Lookback, t-1]
-    #   Target at t
-    # The smallest 't' we can use for training is 'FILE_LOOKBACK'.
-    # Because for t=FILE_LOOKBACK, features are from indices 0 to FILE_LOOKBACK-1 (valid).
-    #
-    # We are at step 'k' (predicting k).
-    # We construct training set from targets t in range [k - FILE_LOOKBACK, k - 1].
-    # The smallest 't' in this range is (k - FILE_LOOKBACK).
-    # We need (k - FILE_LOOKBACK) >= FILE_LOOKBACK to have valid features for that first sample.
-    # So k >= 2 * FILE_LOOKBACK.
+    # Diagnostics Container
+    all_predictions_diag = {'pred': [], 'actual': []}
+    latest_feature_importance = {}
 
-    start_prediction_idx = 2 * FILE_LOOKBACK
+    start_prediction_idx = FEATURE_LOOKBACK + TRAIN_WINDOW + 1
 
     for k in range(start_prediction_idx, len(valid_files_indices)):
         current_real_idx = valid_files_indices[k]
         current_filename = all_file_dates[current_real_idx]
-
         print(f"Predicting for file {k}: {current_filename}")
 
-        # --- Build Training Data ---
-        # Window of files to train on: [k - FILE_LOOKBACK, k - 1]
-        # For each file 't' in this window, we construct a sample (X, y)
-        #   y = Result at t
-        #   X = Features derived from [t - FILE_LOOKBACK, t - 1]
-
+        # --- Train Model ---
+        # Train on window: [k - TRAIN_WINDOW, k - 1]
         X_train_list = []
         y_train_list = []
 
-        training_indices = range(k - FILE_LOOKBACK, k)
+        train_range = range(k - TRAIN_WINDOW, k)
 
-        for t in training_indices:
+        feature_names = [] # Catch names from first iteration
+
+        for t in train_range:
             # Target
             y_t = all_file_results[valid_files_indices[t]]
 
-            # Features
-            # 1. Past Results (Lookback)
-            # 2. Past Hypercube Avgs (Lookback)
-            # 3. EMA at t-1
-
-            feature_vectors = []
-
-            # Add Past Results and Hypercube Avgs
-            for lag in range(1, FILE_LOOKBACK + 1):
-                past_idx = valid_files_indices[t - lag]
-                feature_vectors.append(all_file_results[past_idx])
-                feature_vectors.append(all_file_hypercube_avgs[past_idx])
-
-            # Add EMA at t-1 (Index t-1 in our stored EMAs)
-            # Note: all_file_emas[t-1] corresponds to EMA after file t-1.
-            feature_vectors.append(all_file_emas[t-1])
-
-            # Stack features: (num_vectors, num_features)
-            X_t = np.column_stack(feature_vectors)
+            # Features (built from t-LOOKBACK to t-1)
+            # t is the index of the file we are predicting in training
+            X_t, f_names = build_features(t, all_file_results, all_file_hypercube_avgs,
+                                          all_file_hypercube_stds, all_file_emas,
+                                          vector_static_features, num_vectors)
+            if not feature_names:
+                feature_names = f_names
 
             X_train_list.append(X_t)
             y_train_list.append(y_t)
@@ -322,38 +555,36 @@ def main():
         X_train = np.vstack(X_train_list)
         y_train = np.concatenate(y_train_list)
 
-        # --- Train Model ---
         model = xgb.XGBRegressor(
             n_estimators=100,
             learning_rate=0.1,
             max_depth=5,
             n_jobs=-1,
-            tree_method="hist",  # Faster
+            tree_method="hist",
             random_state=42
         )
         model.fit(X_train, y_train)
 
-        # --- Build Prediction Features ---
-        # Predicting for 'k'. Features from [k - FILE_LOOKBACK, k - 1]
+        # Save feature importance
+        if k == len(valid_files_indices) - 1: # Save last one
+            latest_feature_importance = dict(zip(feature_names, model.feature_importances_))
 
-        pred_features_list = []
-        for lag in range(1, FILE_LOOKBACK + 1):
-            past_idx = valid_files_indices[k - lag]
-            pred_features_list.append(all_file_results[past_idx])
-            pred_features_list.append(all_file_hypercube_avgs[past_idx])
+        # --- Predict Current Step (k) ---
+        X_pred, _ = build_features(k, all_file_results, all_file_hypercube_avgs,
+                                   all_file_hypercube_stds, all_file_emas,
+                                   vector_static_features, num_vectors)
 
-        pred_features_list.append(all_file_emas[k-1])
-
-        X_pred = np.column_stack(pred_features_list)
-
-        # --- Predict ---
         prediction_scores = model.predict(X_pred)
+
+        # Diagnostics: Accumulate
+        current_results = all_file_results[current_real_idx]
+        current_profits = all_file_profits[current_real_idx]
+
+        all_predictions_diag['pred'].extend(prediction_scores.tolist())
+        all_predictions_diag['actual'].extend(current_results.tolist())
 
         # Select Top N Indices based on Prediction Score (Descending)
         top_n_indices = np.argsort(prediction_scores)[-TOP_N:][::-1]
-
-        current_results = all_file_results[current_real_idx]
-        current_profits = all_file_profits[current_real_idx]
 
         # Rank-based history (Rank 1 is index 0 of top_n_indices)
         for i, vec_idx in enumerate(top_n_indices):
@@ -502,6 +733,10 @@ def main():
     generate_final_verdict_pdf(pdf_path, rank_history[1])
     print(f"PDF Saved: {pdf_path}")
 
+    # Generate Diagnostics Report
+    print("Generating Diagnostics Report...")
+    generate_diagnostics_report(target_dir, all_predictions_diag, latest_feature_importance)
+
     # Serialize JSON for JS
     json_report_data = json.dumps(report_data)
     json_summary_data = json.dumps(summary_data)
@@ -531,8 +766,11 @@ def main():
     <body>
         <div class="container">
             <h1>Vector Prediction Distribution Report (GBDT)</h1>
-            <p><strong>Config:</strong> Lookback={FILE_LOOKBACK} | Hypercube={HYPERCUBE} | Top N={TOP_N} | Model=XGBoost</p>
-            <p><a href="Final_Verdict.pdf" target="_blank" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px;">Download Final Verdict PDF</a></p>
+            <p><strong>Config:</strong> Lookback={FEATURE_LOOKBACK} | Hypercube={HYPERCUBE} | Top N={TOP_N} | Model=XGBoost</p>
+            <p>
+                <a href="Final_Verdict.pdf" target="_blank" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px;">Download Final Verdict PDF</a>
+                <a href="Vector_Model_Diagnostics.html" target="_blank" style="padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; margin-left:10px;">View Model Diagnostics</a>
+            </p>
 
             <details open style="margin-bottom: 40px; border: 2px solid #aaa;">
                 <summary style="background-color: #cce5ff;">Global Summary: Risk & Reward Distributions</summary>
