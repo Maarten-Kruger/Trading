@@ -316,8 +316,8 @@ def build_features(target_idx, all_results, all_hypercube_avgs, all_hypercube_st
     feature_names = []
 
     # A. Static Vector Params
-    features_list.append(vector_static_features)
-    feature_names.extend([f"Param_{i}" for i in range(vector_static_features.shape[1])])
+    # features_list.append(vector_static_features)
+    # feature_names.extend([f"Param_{i}" for i in range(vector_static_features.shape[1])])
 
     # B. Trend (Slope of Results)
     # Vectorized Polyfit?
@@ -335,33 +335,33 @@ def build_features(target_idx, all_results, all_hypercube_avgs, all_hypercube_st
     mxy = (hist_results.T * x).T.mean(axis=0)
 
     slopes = (mxy - mx * my) / vx if vx != 0 else np.zeros(num_vectors)
-    features_list.append(slopes.reshape(-1, 1))
-    feature_names.append("Trend_Slope")
+    # features_list.append(slopes.reshape(-1, 1))
+    # feature_names.append("Trend_Slope")
 
     # C. Risk-Adjusted Return (Mean / Std of Results)
     stds = hist_results.std(axis=0)
     # Avoid div by zero
     safe_stds = np.where(stds == 0, 1.0, stds)
     risk_adj = my / safe_stds
-    features_list.append(risk_adj.reshape(-1, 1))
-    feature_names.append("Risk_Adjusted_Return")
+    # features_list.append(risk_adj.reshape(-1, 1))
+    # feature_names.append("Risk_Adjusted_Return")
 
     # D. Hypercube Stability (Mean of Hypercube Stds)
     # Represents spatial stability over time
-    hc_stability = hist_hc_stds.mean(axis=0)
-    features_list.append(hc_stability.reshape(-1, 1))
-    feature_names.append("Hypercube_Stability_Mean")
+    # hc_stability = hist_hc_stds.mean(axis=0)
+    # features_list.append(hc_stability.reshape(-1, 1))
+    # feature_names.append("Hypercube_Stability_Mean")
 
     # E. Temporal Stability (Std of Results)
-    features_list.append(stds.reshape(-1, 1))
-    feature_names.append("Temporal_Stability_Std")
+    # features_list.append(stds.reshape(-1, 1))
+    # feature_names.append("Temporal_Stability_Std")
 
     # F. Recent EMA (at t-1)
     # all_emas has data up to the latest file.
     # We need EMA available *before* target_idx, i.e., at target_idx-1
     ema_prev = all_emas[target_idx - 1]
-    features_list.append(ema_prev.reshape(-1, 1))
-    feature_names.append("EMA_Prev")
+    # features_list.append(ema_prev.reshape(-1, 1))
+    # feature_names.append("EMA_Prev")
 
     # G. Lags (Raw History)
     # Add raw results and hypercube avgs from history
@@ -370,8 +370,8 @@ def build_features(target_idx, all_results, all_hypercube_avgs, all_hypercube_st
         # i=0 is Lag1 (most recent) because we appended in order target-1...target-Lookback
         # Actually my loop above was: target-1, target-2...
         # So hist_results[0] is target-1 (Lag 1)
-        features_list.append(hist_results[i].reshape(-1, 1))
-        feature_names.append(f"Res_Lag_{i+1}")
+        # features_list.append(hist_results[i].reshape(-1, 1))
+        # feature_names.append(f"Res_Lag_{i+1}")
 
         features_list.append(hist_hc_avgs[i].reshape(-1, 1))
         feature_names.append(f"HC_Avg_Lag_{i+1}")
