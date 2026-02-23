@@ -160,6 +160,24 @@ def generate_diagnostics_report(output_dir, all_predictions, feature_importance_
         'feat_scores': [float(s) for s in sorted_scores]
     }
 
+    # Feature Descriptions Glossary
+    glossary_html = """
+    <div style="width: 80%; margin: 0 auto 40px auto; background: #f9f9f9; padding: 20px; border: 1px solid #ddd;">
+        <h3>Feature Glossary</h3>
+        <table style="width:100%; text-align:left; border-collapse: collapse;">
+            <tr><th style="padding:8px; border-bottom:1px solid #ccc;">Feature Name</th><th style="padding:8px; border-bottom:1px solid #ccc;">Description</th></tr>
+            <tr><td style="padding:8px;"><strong>Trend_Slope</strong></td><td style="padding:8px;">Linear regression slope of the result history over the lookback period (Direction of performance).</td></tr>
+            <tr><td style="padding:8px;"><strong>Risk_Adjusted_Return</strong></td><td style="padding:8px;">Mean result divided by standard deviation over the lookback period (Sharpe-like metric).</td></tr>
+            <tr><td style="padding:8px;"><strong>Hypercube_Stability_Mean</strong></td><td style="padding:8px;">Average standard deviation of spatial neighbors over time (Spatial stability).</td></tr>
+            <tr><td style="padding:8px;"><strong>Temporal_Stability_Std</strong></td><td style="padding:8px;">Standard deviation of the result history itself (Temporal stability).</td></tr>
+            <tr><td style="padding:8px;"><strong>EMA_Prev</strong></td><td style="padding:8px;">Exponential Moving Average of the Hypercube Average at the previous time step.</td></tr>
+            <tr><td style="padding:8px;"><strong>Param_*</strong></td><td style="padding:8px;">Static parameter value defining the vector (e.g., MA Period).</td></tr>
+            <tr><td style="padding:8px;"><strong>Res_Lag_*</strong></td><td style="padding:8px;">Raw historical result at a specific lag (e.g., Lag 1 = Previous File).</td></tr>
+            <tr><td style="padding:8px;"><strong>HC_Avg_Lag_*</strong></td><td style="padding:8px;">Raw historical hypercube average at a specific lag.</td></tr>
+        </table>
+    </div>
+    """
+
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -173,6 +191,8 @@ def generate_diagnostics_report(output_dir, all_predictions, feature_importance_
     </head>
     <body>
         <h1 style="text-align:center;">GBDT Model Diagnostics</h1>
+
+        {glossary_html}
 
         <div class="chart-box">
             <h3>Feature Importance</h3>
