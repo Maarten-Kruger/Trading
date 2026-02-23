@@ -1,1 +1,4 @@
-
+Data_Files/Test_Data/
+__pycache__/
+*.pdf
+*.html
