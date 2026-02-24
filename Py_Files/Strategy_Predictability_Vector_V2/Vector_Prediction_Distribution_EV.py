@@ -15,6 +15,7 @@ from scipy.stats import spearmanr
 import pygad
 import concurrent.futures
 import multiprocessing
+import torch
 
 # --- Configuration ---
 HYPERCUBE = 2           # Hypercube size (steps) for averaging neighbors
@@ -23,28 +24,27 @@ TRAIN_WINDOW = 10       # Number of past samples (files) to train on (Walk-Forwa
 TOP_N = 10000           # Number of top predicted vectors to evaluate
 INITIAL_EQUITY = 10000  # Initial account balance for simulation
 SMOOTHING_WINDOW = 25   # Window for smooth average line
-MAX_WORKERS = 4         # Default parallel workers
+
+# Parallel Processing Config
+MAX_WORKERS_OVERRIDE = None  # Set to an integer to override auto-detection (e.g., 8)
+if MAX_WORKERS_OVERRIDE is not None:
+    MAX_WORKERS = int(MAX_WORKERS_OVERRIDE)
+else:
+    try:
+        cpu_count = os.cpu_count()
+        if cpu_count is None:
+            cpu_count = 4
+        # Cap workers to 16 by default to prevent OOM on high-core machines with GPU
+        # If user wants more, they can use MAX_WORKERS_OVERRIDE
+        MAX_WORKERS = min(cpu_count, 16)
+    except:
+        MAX_WORKERS = 4
 
 # Genetic Algorithm Config
 GA_NUM_GENERATIONS = 50
 GA_SOL_PER_POP = 20
 GA_NUM_PARENTS_MATING = 10
 GA_MUTATION_PERCENT_GENES = 10
-
-# GPU Configuration
-try:
-    import cupy as cp
-    # Check if GPU is actually accessible
-    try:
-        cp.cuda.Device(0).compute_capability
-        HAS_GPU = True
-        print("GPU Detected (CuPy). Enabling GPU Acceleration.")
-    except Exception as e:
-        print(f"CuPy installed but GPU not accessible (Driver Error?): {e}")
-        HAS_GPU = False
-except ImportError:
-    HAS_GPU = False
-    print("GPU Not Detected (CuPy). Using CPU.")
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -128,6 +128,32 @@ def calculate_drawdowns(equity_curve):
     avg_dd = np.mean(drawdowns) if drawdowns else 0
     return max_dd * 100, avg_dd * 100
 
+def torch_spearman_rank(x, y):
+    """
+    Calculates Spearman Rank Correlation using PyTorch.
+    Assumes x and y are 1D tensors on the same device.
+    Uses rank formulation: Pearson correlation of ranks.
+    """
+    # 1. Rank data
+    # argsort gives indices that sort the array.
+    # argsort of argsort gives the rank (0-based).
+    rank_x = torch.argsort(torch.argsort(x)).float()
+    rank_y = torch.argsort(torch.argsort(y)).float()
+
+    # 2. Normalize (subtract mean)
+    rank_x = rank_x - torch.mean(rank_x)
+    rank_y = rank_y - torch.mean(rank_y)
+
+    # 3. Pearson Correlation numerator and denominator
+    numerator = torch.sum(rank_x * rank_y)
+    denominator = torch.sqrt(torch.sum(rank_x ** 2) * torch.sum(rank_y ** 2))
+
+    # Avoid division by zero
+    if denominator == 0:
+        return torch.tensor(0.0, device=x.device)
+
+    return numerator / denominator
+
 class VectorOptimizer:
     def __init__(self, data_df, feature_cols, target_col='Result_Next'):
         """
@@ -136,8 +162,8 @@ class VectorOptimizer:
         target_col: Column name of the target variable (Next Result).
         """
         self.data_pd = data_df.to_pandas() # PyGAD works best with numpy/pandas
-        self.features = self.data_pd[feature_cols].values
-        self.targets = self.data_pd[target_col].values
+        self.features_np = self.data_pd[feature_cols].values
+        self.targets_np = self.data_pd[target_col].values
         self.feature_names = feature_cols
         self.num_features = len(feature_cols)
 
@@ -145,12 +171,26 @@ class VectorOptimizer:
         self.genes_per_feature = 3
         self.total_genes = self.num_features * self.genes_per_feature
         self.feature_ranks = None
+        self.feature_ranks_torch = None
 
-        # GPU Transfer
-        if HAS_GPU:
-            self.targets_gpu = cp.asarray(self.targets)
+        # Determine GPU usage dynamically inside the worker process
+        self.use_gpu = False
+        self.device = "cpu"
+
+        if torch.cuda.is_available():
+            try:
+                self.device = "cuda"
+                self.use_gpu = True
+                self.targets_torch = torch.tensor(self.targets_np, dtype=torch.float32, device=self.device)
+                self.features_torch = torch.tensor(self.features_np, dtype=torch.float32, device=self.device)
+            except Exception as e:
+                # print(f"Failed to initialize GPU tensors: {e}. Using CPU.")
+                self.use_gpu = False
+                self.device = "cpu"
+                self.targets_torch = torch.tensor(self.targets_np, dtype=torch.float32, device="cpu")
         else:
-            self.targets_gpu = None
+            self.targets_torch = torch.tensor(self.targets_np, dtype=torch.float32, device="cpu")
+
 
     def fitness_func(self, ga_instance, solution, solution_idx):
         """
@@ -159,74 +199,70 @@ class VectorOptimizer:
         scores = self.calculate_scores(solution)
 
         # Calculate Correlation
-        if HAS_GPU:
-            # CuPy Spearman? Not direct. Use Pearson on ranks.
-            # Convert scores to ranks
-            # This overhead might be high if solution isn't on GPU?
-            # Actually PyGAD passes numpy array `solution`.
-            # Let's keep fitness check on CPU for stability unless huge data.
-            # CPU is fast for 28k * 10 files = 280k points.
-
-            # If we calculated scores on GPU, transfer back for spearmanr (CPU Scipy)
-            # Or implement rank correlation on GPU.
-            # Simple approach: Transfer back.
-            scores_cpu = cp.asnumpy(scores)
-            corr, _ = spearmanr(scores_cpu, self.targets)
+        if self.use_gpu and isinstance(scores, torch.Tensor):
+            corr = torch_spearman_rank(scores, self.targets_torch)
+            return corr.item()
         else:
-            corr, _ = spearmanr(scores, self.targets)
+            # CPU Fallback using Scipy
+            if isinstance(scores, torch.Tensor):
+                scores = scores.detach().cpu().numpy()
 
-        if np.isnan(corr):
-            return -1.0
-
-        return corr
+            corr, _ = spearmanr(scores, self.targets_np)
+            if np.isnan(corr):
+                return -1.0
+            return corr
 
     def calculate_scores(self, solution):
         """
         Decodes the solution (genome) and calculates scores for all rows.
         solution: 1D array of weights/params.
         """
-        # If GPU enabled, try scoring on GPU
-        if HAS_GPU and self.use_gpu:
-            try:
-                # Transfer solution to GPU if not already (it comes from PyGAD as numpy)
-                sol_gpu = cp.asarray(solution)
-
-                # Initialize scores
-                total_scores = cp.zeros(len(self.features), dtype=cp.float64)
-
-                for i in range(self.num_features):
-                    base_idx = i * self.genes_per_feature
-
-                    rank_weight = sol_gpu[base_idx]
-                    threshold_pct = sol_gpu[base_idx + 1]
-                    threshold_weight = sol_gpu[base_idx + 2]
-
-                    norm_threshold = (threshold_pct + 1) / 2
-
-                    # Term 1: Weighted Rank
-                    total_scores += self.feature_ranks_gpu[:, i] * rank_weight
-
-                    # Term 2: Threshold Boost
-                    mask = self.feature_ranks_gpu[:, i] > norm_threshold
-                    total_scores[mask] += threshold_weight
-
-                return total_scores
-            except Exception:
-                # Fallback to CPU if runtime error (e.g. driver issue)
-                self.use_gpu = False
-                return self.calculate_scores_cpu(solution)
+        if self.use_gpu:
+            return self.calculate_scores_torch(solution)
         else:
+            return self.calculate_scores_cpu(solution)
+
+    def calculate_scores_torch(self, solution):
+        try:
+            if not isinstance(solution, torch.Tensor):
+                 sol_torch = torch.tensor(solution, dtype=torch.float32, device=self.device)
+            else:
+                 sol_torch = solution
+
+            # Initialize scores
+            total_scores = torch.zeros(self.features_torch.shape[0], dtype=torch.float32, device=self.device)
+
+            # Vectorized scoring
+            # Reshape solution to (num_features, 3) -> [Weight, Threshold_Pct, Threshold_Val]
+            sol_matrix = sol_torch.reshape(self.num_features, 3)
+
+            rank_weights = sol_matrix[:, 0]
+            threshold_pcts = sol_matrix[:, 1]
+            threshold_vals = sol_matrix[:, 2]
+
+            # Normalize threshold percentages (-1..1 -> 0..1)
+            norm_thresholds = (threshold_pcts + 1) / 2
+
+            # Term 1: Weighted Rank
+            weighted_ranks = self.feature_ranks_torch * rank_weights
+            total_scores += torch.sum(weighted_ranks, dim=1)
+
+            # Term 2: Threshold Boost
+            mask = self.feature_ranks_torch > norm_thresholds
+            boosts = mask.float() * threshold_vals
+            total_scores += torch.sum(boosts, dim=1)
+
+            return total_scores
+
+        except Exception as e:
+            # Fallback
+            # print(f"Torch Error: {e}")
+            self.use_gpu = False
             return self.calculate_scores_cpu(solution)
 
     def calculate_scores_cpu(self, solution):
         # CPU Version
-        total_scores = np.zeros(len(self.features))
-
-        # Ensure ranks are available on CPU
-        if self.feature_ranks is None and hasattr(self, 'feature_ranks_gpu'):
-             # If we only computed GPU ranks but failed back to CPU, we need CPU ranks.
-             # Ideally we shouldn't fail mid-process often, but let's be safe.
-             self.feature_ranks = cp.asnumpy(self.feature_ranks_gpu)
+        total_scores = np.zeros(len(self.features_np))
 
         if self.feature_ranks is None:
              self._precalculate_ranks_cpu()
@@ -250,34 +286,35 @@ class VectorOptimizer:
         """
         Pre-calculates normalized ranks (0.0 to 1.0) for all features.
         """
-        self.use_gpu = False
-        if HAS_GPU:
+        if self.use_gpu:
             try:
-                # Move features to GPU
-                features_gpu = cp.asarray(self.features)
-                self.feature_ranks_gpu = cp.zeros_like(features_gpu)
+                # Features are already on GPU as self.features_torch
+                # We need to compute ranks for each column
 
-                for i in range(self.num_features):
-                    col_vals = features_gpu[:, i]
-                    # argsort().argsort() on GPU
-                    if len(col_vals) > 1:
-                        ranks = cp.argsort(cp.argsort(col_vals))
-                        self.feature_ranks_gpu[:, i] = ranks / (len(col_vals) - 1)
-                    else:
-                        self.feature_ranks_gpu[:, i] = 0.5
-                self.use_gpu = True
-                self.feature_ranks = None # Clear CPU ranks to save RAM if not needed
+                # argsort twice gives ranks
+                # We do this column-wise
+
+                # Using torch.argsort(dim=0)
+                ranks_struct = torch.argsort(torch.argsort(self.features_torch, dim=0), dim=0).float()
+
+                # Normalize to 0..1
+                n_samples = self.features_torch.shape[0]
+                if n_samples > 1:
+                    self.feature_ranks_torch = ranks_struct / (n_samples - 1)
+                else:
+                    self.feature_ranks_torch = torch.zeros_like(self.features_torch) + 0.5
+
             except Exception as e:
-                print(f"GPU Init Failed (Fallback to CPU): {e}")
+                # print(f"GPU Rank Calc Failed: {e}. Fallback to CPU.")
                 self.use_gpu = False
-
-        if not self.use_gpu:
+                self._precalculate_ranks_cpu()
+        else:
             self._precalculate_ranks_cpu()
 
     def _precalculate_ranks_cpu(self):
-        self.feature_ranks = np.zeros_like(self.features)
+        self.feature_ranks = np.zeros_like(self.features_np)
         for i in range(self.num_features):
-            col_vals = self.features[:, i]
+            col_vals = self.features_np[:, i]
             if len(col_vals) > 1:
                 ranks = np.argsort(np.argsort(col_vals))
                 self.feature_ranks[:, i] = ranks / (len(col_vals) - 1)
@@ -525,7 +562,7 @@ def generate_html_report(target_dir, report_data, rank_history):
     <body>
         <div class="container">
             <h1 style="text-align: center;">Sequential Distribution Optimizer Report</h1>
-            <p style="text-align: center;"><strong>Engine:</strong> Polars + PyGAD + {"CuPy (GPU)" if HAS_GPU else "CPU Parallel"} | <strong>Fitness:</strong> Spearman Correlation | <strong>Lookback:</strong> {FEATURE_LOOKBACK}</p>
+            <p style="text-align: center;"><strong>Engine:</strong> Polars + PyGAD + Torch (Parallel) | <strong>Fitness:</strong> Spearman Correlation | <strong>Lookback:</strong> {FEATURE_LOOKBACK}</p>
 
             <div style="text-align: center; margin-bottom: 30px;">
                  <a href="Final_Verdict.pdf" target="_blank" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px;">Download Final Verdict PDF</a>
@@ -704,10 +741,11 @@ def worker_process_file(task_args):
         predicted_scores = predictor.calculate_scores(best_solution)
 
         # If GPU used, convert back to CPU/Numpy for pickling
-        if HAS_GPU:
-            predicted_scores = cp.asnumpy(predicted_scores)
+        if optimizer.use_gpu:
+            if isinstance(predicted_scores, torch.Tensor):
+                 predicted_scores = predicted_scores.detach().cpu().numpy()
 
-        actual_results = predictor.targets
+        actual_results = predictor.targets_np
         actual_profits = pred_data_pd['Profit_Next'].values
 
         return {
@@ -727,6 +765,7 @@ def worker_process_file(task_args):
 # --- Main ---
 def main():
     print("--- Sequential Distribution Optimizer (Polars + PyGAD + Parallel) ---")
+    print(f"Parallel Workers: {MAX_WORKERS}")
 
     if len(sys.argv) > 1:
         target_dir = sys.argv[1]
