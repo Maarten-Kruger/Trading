@@ -13,9 +13,8 @@ from matplotlib.backends.backend_pdf import PdfPages
 from sklearn.neighbors import KDTree
 from scipy.stats import spearmanr
 import pygad
-
-# Suppress warnings
-warnings.filterwarnings("ignore")
+import concurrent.futures
+import multiprocessing
 
 # --- Configuration ---
 HYPERCUBE = 2           # Hypercube size (steps) for averaging neighbors
@@ -24,12 +23,31 @@ TRAIN_WINDOW = 10       # Number of past samples (files) to train on (Walk-Forwa
 TOP_N = 10000           # Number of top predicted vectors to evaluate
 INITIAL_EQUITY = 10000  # Initial account balance for simulation
 SMOOTHING_WINDOW = 25   # Window for smooth average line
+MAX_WORKERS = 4         # Default parallel workers
 
 # Genetic Algorithm Config
 GA_NUM_GENERATIONS = 50
 GA_SOL_PER_POP = 20
 GA_NUM_PARENTS_MATING = 10
 GA_MUTATION_PERCENT_GENES = 10
+
+# GPU Configuration
+try:
+    import cupy as cp
+    # Check if GPU is actually accessible
+    try:
+        cp.cuda.Device(0).compute_capability
+        HAS_GPU = True
+        print("GPU Detected (CuPy). Enabling GPU Acceleration.")
+    except Exception as e:
+        print(f"CuPy installed but GPU not accessible (Driver Error?): {e}")
+        HAS_GPU = False
+except ImportError:
+    HAS_GPU = False
+    print("GPU Not Detected (CuPy). Using CPU.")
+
+# Suppress warnings
+warnings.filterwarnings("ignore")
 
 # ---------------------
 
@@ -128,6 +146,12 @@ class VectorOptimizer:
         self.total_genes = self.num_features * self.genes_per_feature
         self.feature_ranks = None
 
+        # GPU Transfer
+        if HAS_GPU:
+            self.targets_gpu = cp.asarray(self.targets)
+        else:
+            self.targets_gpu = None
+
     def fitness_func(self, ga_instance, solution, solution_idx):
         """
         Calculates Spearman Correlation between predicted scores and actual targets.
@@ -135,10 +159,22 @@ class VectorOptimizer:
         scores = self.calculate_scores(solution)
 
         # Calculate Correlation
-        # We want high correlation with the Target (Result_Next)
-        corr, _ = spearmanr(scores, self.targets)
+        if HAS_GPU:
+            # CuPy Spearman? Not direct. Use Pearson on ranks.
+            # Convert scores to ranks
+            # This overhead might be high if solution isn't on GPU?
+            # Actually PyGAD passes numpy array `solution`.
+            # Let's keep fitness check on CPU for stability unless huge data.
+            # CPU is fast for 28k * 10 files = 280k points.
 
-        # Handle NaN
+            # If we calculated scores on GPU, transfer back for spearmanr (CPU Scipy)
+            # Or implement rank correlation on GPU.
+            # Simple approach: Transfer back.
+            scores_cpu = cp.asnumpy(scores)
+            corr, _ = spearmanr(scores_cpu, self.targets)
+        else:
+            corr, _ = spearmanr(scores, self.targets)
+
         if np.isnan(corr):
             return -1.0
 
@@ -149,24 +185,62 @@ class VectorOptimizer:
         Decodes the solution (genome) and calculates scores for all rows.
         solution: 1D array of weights/params.
         """
-        # Initialize scores
+        # If GPU enabled, try scoring on GPU
+        if HAS_GPU and self.use_gpu:
+            try:
+                # Transfer solution to GPU if not already (it comes from PyGAD as numpy)
+                sol_gpu = cp.asarray(solution)
+
+                # Initialize scores
+                total_scores = cp.zeros(len(self.features), dtype=cp.float64)
+
+                for i in range(self.num_features):
+                    base_idx = i * self.genes_per_feature
+
+                    rank_weight = sol_gpu[base_idx]
+                    threshold_pct = sol_gpu[base_idx + 1]
+                    threshold_weight = sol_gpu[base_idx + 2]
+
+                    norm_threshold = (threshold_pct + 1) / 2
+
+                    # Term 1: Weighted Rank
+                    total_scores += self.feature_ranks_gpu[:, i] * rank_weight
+
+                    # Term 2: Threshold Boost
+                    mask = self.feature_ranks_gpu[:, i] > norm_threshold
+                    total_scores[mask] += threshold_weight
+
+                return total_scores
+            except Exception:
+                # Fallback to CPU if runtime error (e.g. driver issue)
+                self.use_gpu = False
+                return self.calculate_scores_cpu(solution)
+        else:
+            return self.calculate_scores_cpu(solution)
+
+    def calculate_scores_cpu(self, solution):
+        # CPU Version
         total_scores = np.zeros(len(self.features))
+
+        # Ensure ranks are available on CPU
+        if self.feature_ranks is None and hasattr(self, 'feature_ranks_gpu'):
+             # If we only computed GPU ranks but failed back to CPU, we need CPU ranks.
+             # Ideally we shouldn't fail mid-process often, but let's be safe.
+             self.feature_ranks = cp.asnumpy(self.feature_ranks_gpu)
+
+        if self.feature_ranks is None:
+             self._precalculate_ranks_cpu()
 
         for i in range(self.num_features):
             base_idx = i * self.genes_per_feature
 
             rank_weight = solution[base_idx]
-            threshold_pct = solution[base_idx + 1] # -1.0 to 1.0 range from PyGAD, need to map to 0-1
+            threshold_pct = solution[base_idx + 1]
             threshold_weight = solution[base_idx + 2]
 
-            # Normalize threshold_pct from [-1, 1] to [0, 1]
-            # Actually PyGAD range is configurable, I set -1 to 1.
             norm_threshold = (threshold_pct + 1) / 2
 
-            # Term 1: Weighted Rank
             total_scores += self.feature_ranks[:, i] * rank_weight
-
-            # Term 2: Threshold Boost
             mask = self.feature_ranks[:, i] > norm_threshold
             total_scores[mask] += threshold_weight
 
@@ -176,11 +250,34 @@ class VectorOptimizer:
         """
         Pre-calculates normalized ranks (0.0 to 1.0) for all features.
         """
+        self.use_gpu = False
+        if HAS_GPU:
+            try:
+                # Move features to GPU
+                features_gpu = cp.asarray(self.features)
+                self.feature_ranks_gpu = cp.zeros_like(features_gpu)
+
+                for i in range(self.num_features):
+                    col_vals = features_gpu[:, i]
+                    # argsort().argsort() on GPU
+                    if len(col_vals) > 1:
+                        ranks = cp.argsort(cp.argsort(col_vals))
+                        self.feature_ranks_gpu[:, i] = ranks / (len(col_vals) - 1)
+                    else:
+                        self.feature_ranks_gpu[:, i] = 0.5
+                self.use_gpu = True
+                self.feature_ranks = None # Clear CPU ranks to save RAM if not needed
+            except Exception as e:
+                print(f"GPU Init Failed (Fallback to CPU): {e}")
+                self.use_gpu = False
+
+        if not self.use_gpu:
+            self._precalculate_ranks_cpu()
+
+    def _precalculate_ranks_cpu(self):
         self.feature_ranks = np.zeros_like(self.features)
         for i in range(self.num_features):
             col_vals = self.features[:, i]
-            # argsort().argsort() gives rank (0 to N-1)
-            # Divide by N-1 to normalize to 0-1
             if len(col_vals) > 1:
                 ranks = np.argsort(np.argsort(col_vals))
                 self.feature_ranks[:, i] = ranks / (len(col_vals) - 1)
@@ -202,8 +299,6 @@ class VectorOptimizer:
 
             fname = self.feature_names[i]
 
-            # Format:
-            # Feature X: Rank Weight = 0.5, Boost if > 80% (+0.2)
             rule_str = f"<b>{fname}</b>:<br>"
             rule_str += f"&nbsp;&nbsp;Rank Weight: {rank_weight:.3f}<br>"
             if abs(threshold_weight) > 0.01:
@@ -225,9 +320,6 @@ def build_features_polars(df_list, master_vectors, hypercube_neighbor_indices):
     processed_files = []
     print("Computing Hypercube Statistics...")
 
-    # Pre-convert master vectors to numpy for join key check?
-    # No, Polars join is fine.
-
     for file_idx, df in enumerate(df_list):
         vector_cols = [c for c in master_vectors.columns if c != 'Master_Index']
         merged = master_vectors.join(df, on=vector_cols, how='left').fill_null(0.0)
@@ -236,12 +328,6 @@ def build_features_polars(df_list, master_vectors, hypercube_neighbor_indices):
         profits = merged['Profit'].to_numpy()
 
         hc_means = np.zeros_like(results)
-        # hc_stds = np.zeros_like(results) # Unused in features currently, but good to have
-
-        # Calculate HC Mean
-        # Vectorized if possible, but list comprehension is robust
-        # Optimization: neighbor_indices is a jagged array (list of arrays)
-        # We can just loop.
 
         for v_idx, neighbors in enumerate(hypercube_neighbor_indices):
             if len(neighbors) > 0:
@@ -343,15 +429,14 @@ def generate_html_report(target_dir, report_data, rank_history):
         avg_dds_y.append(stats['avg_dd'])
         profits_y.append(stats['total_pl'])
 
-        # Only add HTML for top 100 to save DOM size? Or all?
-        # User wants access to all? Lazy load handles it.
-        rank_safe_id = f"rank-{r}"
-
         # Save chart data to big object
         rank_charts_data[r] = {
             'filenames': data['filenames'],
             'equity_curve': data['equity_curve']
         }
+
+        # Add HTML rows
+        rank_safe_id = f"rank-{r}"
 
         html_rank_rows += f"""
         <div class="plot-container">
@@ -440,7 +525,7 @@ def generate_html_report(target_dir, report_data, rank_history):
     <body>
         <div class="container">
             <h1 style="text-align: center;">Sequential Distribution Optimizer Report</h1>
-            <p style="text-align: center;"><strong>Engine:</strong> Polars + PyGAD | <strong>Fitness:</strong> Spearman Correlation | <strong>Lookback:</strong> {FEATURE_LOOKBACK}</p>
+            <p style="text-align: center;"><strong>Engine:</strong> Polars + PyGAD + {"CuPy (GPU)" if HAS_GPU else "CPU Parallel"} | <strong>Fitness:</strong> Spearman Correlation | <strong>Lookback:</strong> {FEATURE_LOOKBACK}</p>
 
             <div style="text-align: center; margin-bottom: 30px;">
                  <a href="Final_Verdict.pdf" target="_blank" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px;">Download Final Verdict PDF</a>
@@ -564,99 +649,25 @@ def generate_html_report(target_dir, report_data, rank_history):
     with open(os.path.join(target_dir, "Vector_Prediction_Distribution_EV.html"), "w", encoding='utf-8') as f:
         f.write(html_content)
 
-def main():
-    print("--- Sequential Distribution Optimizer (Polars + PyGAD) ---")
 
-    if len(sys.argv) > 1:
-        target_dir = sys.argv[1]
-    else:
-        # Default for testing? Or prompt?
-        # Let's prompt.
-        target_dir = input("Enter the path to the folder containing CSVs: ").strip()
-
-    if not target_dir or not os.path.exists(target_dir):
-        print(f"Error: Directory '{target_dir}' does not exist.")
-        return
-
-    csv_files = glob.glob(os.path.join(target_dir, "*.csv"))
-    if not csv_files:
-        print("No CSV files found in the directory.")
-        return
-
-    csv_files.sort(key=get_date_from_filename)
-    print(f"Found {len(csv_files)} files.")
-
-    # Need minimum files
-    min_files = FEATURE_LOOKBACK + TRAIN_WINDOW
-    if len(csv_files) < min_files:
-        print(f"Error: Not enough files. Need at least {min_files}.")
-        return
-
-    # --- 1. Load Master Vector Definitions ---
-    print("Loading Master Vector Definitions...")
-    first_file = csv_files[0]
-    df_temp = read_csv_polars(first_file)
-    cols = df_temp.columns
+# --- Worker Function ---
+def worker_process_file(task_args):
+    """
+    Independent worker function for parallel processing.
+    """
     try:
-        trades_idx = cols.index('Trades')
-        vector_cols = cols[trades_idx+1:]
-    except ValueError:
-        print("Error: 'Trades' column not found in first file.")
-        return
+        target_file_idx = task_args['target_file_idx']
+        target_filename = task_args['target_filename']
+        train_data_pd = task_args['train_data'] # This is a Pandas DataFrame (subset)
+        pred_data_pd = task_args['pred_data']   # Pandas DF subset
+        feature_cols = task_args['feature_cols']
 
-    master_vectors = df_temp.select(vector_cols)
-    master_vectors = master_vectors.with_columns(pl.lit(np.arange(len(master_vectors))).alias("Master_Index"))
-
-    # KDTree Prep
-    master_numpy = master_vectors.select(vector_cols).to_pandas().apply(pd.to_numeric, errors='coerce').fillna(0).values
-
-    # --- 2. Build KDTree ---
-    print(f"Building KDTree (Hypercube={HYPERCUBE})...")
-    tree = KDTree(master_numpy, metric='chebyshev')
-    neighbor_indices = tree.query_radius(master_numpy, r=HYPERCUBE)
-
-    # --- 3. Load All Data and Build Features ---
-    print("Loading all files...")
-    df_list = []
-    file_dates = []
-    for f in csv_files:
-        df_list.append(read_csv_polars(f))
-        file_dates.append(os.path.basename(f))
-
-    full_dataset = build_features_polars(df_list, master_vectors, neighbor_indices)
-    full_dataset = full_dataset.fill_null(0.0)
-
-    # --- 4. Walk-Forward Optimization Loop ---
-    print("Starting Walk-Forward Optimization...")
-
-    feature_cols = [
-        "Result_Mean", "Result_Std", "Result_Momentum",
-        "HC_Mean_Mean", "HC_Momentum", "HC_Temporal_Std"
-    ]
-
-    rank_history = {r: {'filenames': [], 'results': [], 'profits': [], 'params': []} for r in range(1, TOP_N + 1)}
-    report_data = {}
-    best_rules_log = {}
-
-    start_pred_idx = FEATURE_LOOKBACK + TRAIN_WINDOW
-
-    for target_file_idx in range(start_pred_idx, len(csv_files)):
-        target_filename = file_dates[target_file_idx]
-        print(f"\nProcessing Target: {target_filename} (File {target_file_idx+1}/{len(csv_files)})")
-
-        train_start = target_file_idx - TRAIN_WINDOW - 1
-        train_end = target_file_idx - 2
-
-        print(f"  Training on Files: {train_start} to {train_end}")
-
-        train_data = full_dataset.filter(
-            (pl.col("File_Index") >= train_start) &
-            (pl.col("File_Index") <= train_end)
-        )
-
-        optimizer = VectorOptimizer(train_data, feature_cols, target_col='Result_Next')
+        # We need to recreate the optimizer here
+        # Note: train_data is pandas, VectorOptimizer handles pandas.
+        optimizer = VectorOptimizer(pl.from_pandas(train_data_pd), feature_cols, target_col='Result_Next')
         optimizer.precalculate_ranks()
 
+        # Wrap fitness func
         def fitness_wrapper(ga_instance, solution, solution_idx):
             return optimizer.fitness_func(ga_instance, solution, solution_idx)
 
@@ -673,57 +684,195 @@ def main():
             suppress_warnings=True
         )
 
-        if target_file_idx == start_pred_idx:
-             print("  Running Genetic Algorithm...")
-
         ga_instance.run()
-
-        best_solution, best_solution_fitness, _ = ga_instance.best_solution()
-        print(f"  Best Fitness (Spearman): {best_solution_fitness:.4f}")
+        best_solution, best_fitness, _ = ga_instance.best_solution()
 
         rules = optimizer.decode_rules(best_solution)
-        best_rules_log[target_filename] = rules
 
-        # Predict for Target
-        pred_input_file_idx = target_file_idx - 1
-        pred_data = full_dataset.filter(pl.col("File_Index") == pred_input_file_idx)
-
-        predictor = VectorOptimizer(pred_data, feature_cols, target_col='Result_Next')
+        # Predict
+        predictor = VectorOptimizer(pl.from_pandas(pred_data_pd), feature_cols, target_col='Result_Next')
         predictor.precalculate_ranks()
-
         predicted_scores = predictor.calculate_scores(best_solution)
 
-        # Target Result is 'Result_Next' of the pred_data
+        # If GPU used, convert back to CPU/Numpy for pickling
+        if HAS_GPU:
+            predicted_scores = cp.asnumpy(predicted_scores)
+
         actual_results = predictor.targets
-        actual_profits = pred_data['Profit_Next'].to_numpy()
+        actual_profits = pred_data_pd['Profit_Next'].values
 
-        sorted_indices = np.argsort(predicted_scores)[::-1]
-
-        global_params = master_vectors.select(vector_cols).to_pandas().astype(str).agg(', '.join, axis=1).tolist()
-
-        for i, idx in enumerate(sorted_indices[:TOP_N]):
-            rank = i + 1
-            rank_history[rank]['filenames'].append(target_filename)
-            rank_history[rank]['results'].append(float(actual_results[idx]))
-            rank_history[rank]['profits'].append(float(actual_profits[idx]))
-            rank_history[rank]['params'].append(global_params[idx])
-
-        display_indices = sorted_indices[:2000]
-        smooth_series = pd.Series(actual_results[display_indices]).rolling(window=SMOOTHING_WINDOW, min_periods=1, center=True).mean()
-
-        report_data[target_filename] = {
-            'pred_scores': np.round(predicted_scores[display_indices], 4).tolist(),
-            'act_results': np.round(actual_results[display_indices], 4).tolist(),
-            'act_profits': np.round(actual_profits[display_indices], 2).tolist(),
-            'pred_ranks': list(range(1, len(display_indices) + 1)),
-            'smooth': np.round(smooth_series.fillna(0).tolist(), 4).tolist(),
-            'avg': round(np.mean(actual_results[display_indices]), 4),
-            'rules': best_rules_log[target_filename]
+        return {
+            'target_file_idx': target_file_idx,
+            'target_filename': target_filename,
+            'predicted_scores': predicted_scores,
+            'actual_results': actual_results,
+            'actual_profits': actual_profits,
+            'best_fitness': best_fitness,
+            'rules': rules
         }
+
+    except Exception as e:
+        import traceback
+        return {'error': str(e), 'traceback': traceback.format_exc(), 'target_file_idx': task_args['target_file_idx']}
+
+# --- Main ---
+def main():
+    print("--- Sequential Distribution Optimizer (Polars + PyGAD + Parallel) ---")
+
+    if len(sys.argv) > 1:
+        target_dir = sys.argv[1]
+    else:
+        target_dir = input("Enter the path to the folder containing CSVs: ").strip()
+
+    if not target_dir or not os.path.exists(target_dir):
+        print(f"Error: Directory '{target_dir}' does not exist.")
+        return
+
+    csv_files = glob.glob(os.path.join(target_dir, "*.csv"))
+    if not csv_files:
+        print("No CSV files found in the directory.")
+        return
+
+    csv_files.sort(key=get_date_from_filename)
+    print(f"Found {len(csv_files)} files.")
+
+    min_files = FEATURE_LOOKBACK + TRAIN_WINDOW
+    if len(csv_files) < min_files:
+        print(f"Error: Not enough files. Need at least {min_files}.")
+        return
+
+    # 1. Load Master Vector Definitions
+    print("Loading Master Vector Definitions...")
+    first_file = csv_files[0]
+    df_temp = read_csv_polars(first_file)
+    cols = df_temp.columns
+    try:
+        trades_idx = cols.index('Trades')
+        vector_cols = cols[trades_idx+1:]
+    except ValueError:
+        print("Error: 'Trades' column not found in first file.")
+        return
+
+    master_vectors = df_temp.select(vector_cols)
+    master_vectors = master_vectors.with_columns(pl.lit(np.arange(len(master_vectors))).alias("Master_Index"))
+    master_numpy = master_vectors.select(vector_cols).to_pandas().apply(pd.to_numeric, errors='coerce').fillna(0).values
+
+    # 2. Build KDTree
+    print(f"Building KDTree (Hypercube={HYPERCUBE})...")
+    tree = KDTree(master_numpy, metric='chebyshev')
+    neighbor_indices = tree.query_radius(master_numpy, r=HYPERCUBE)
+
+    # 3. Load All Data and Build Features
+    print("Loading all files...")
+    df_list = []
+    file_dates = []
+    for f in csv_files:
+        df_list.append(read_csv_polars(f))
+        file_dates.append(os.path.basename(f))
+
+    full_dataset = build_features_polars(df_list, master_vectors, neighbor_indices)
+    full_dataset = full_dataset.fill_null(0.0)
+
+    # Convert entire dataset to Pandas ONCE to allow easy slicing and pickling for workers
+    # Polars objects might have issues pickling depending on version, pandas is safer for multiprocessing
+    print("Converting Global Dataset to Pandas for Parallel Sharing...")
+    full_dataset_pd = full_dataset.to_pandas()
+
+    # 4. Prepare Parallel Tasks
+    print("Preparing Tasks for Parallel Execution...")
+
+    feature_cols = [
+        "Result_Mean", "Result_Std", "Result_Momentum",
+        "HC_Mean_Mean", "HC_Momentum", "HC_Temporal_Std"
+    ]
+
+    start_pred_idx = FEATURE_LOOKBACK + TRAIN_WINDOW
+    tasks = []
+
+    for target_file_idx in range(start_pred_idx, len(csv_files)):
+        target_filename = file_dates[target_file_idx]
+
+        # Training Window: Ends at K-2 to predict K (using data from K-1)
+        # Train: [K - Window - 1] to [K - 2]
+        # Predict Input: K - 1
+
+        train_start = target_file_idx - TRAIN_WINDOW - 1
+        train_end = target_file_idx - 2
+
+        # Slice Data
+        train_data = full_dataset_pd[
+            (full_dataset_pd['File_Index'] >= train_start) &
+            (full_dataset_pd['File_Index'] <= train_end)
+        ]
+
+        pred_data = full_dataset_pd[full_dataset_pd['File_Index'] == (target_file_idx - 1)]
+
+        tasks.append({
+            'target_file_idx': target_file_idx,
+            'target_filename': target_filename,
+            'train_data': train_data,
+            'pred_data': pred_data,
+            'feature_cols': feature_cols
+        })
+
+    # 5. Execute Parallel
+    print(f"Submitting {len(tasks)} tasks to ProcessPoolExecutor (Workers={MAX_WORKERS})...")
+
+    rank_history = {r: {'filenames': [], 'results': [], 'profits': [], 'params': []} for r in range(1, TOP_N + 1)}
+    report_data = {}
+
+    global_params = master_vectors.select(vector_cols).to_pandas().astype(str).agg(', '.join, axis=1).tolist()
+
+    # Use spawn context for CUDA safety if GPU enabled
+    ctx = multiprocessing.get_context('spawn')
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, mp_context=ctx) as executor:
+        futures = {executor.submit(worker_process_file, task): task['target_file_idx'] for task in tasks}
+
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+
+            if 'error' in res:
+                print(f"Task Failed (Idx {res['target_file_idx']}): {res['error']}")
+                continue
+
+            idx = res['target_file_idx']
+            fname = res['target_filename']
+            print(f"  Finished: {fname} (Fit: {res['best_fitness']:.4f})")
+
+            # Process Result
+            scores = res['predicted_scores']
+            act_res = res['actual_results']
+            act_prof = res['actual_profits']
+
+            # Sort
+            sorted_indices = np.argsort(scores)[::-1]
+
+            # Store History
+            for i, vec_idx in enumerate(sorted_indices[:TOP_N]):
+                rank = i + 1
+                rank_history[rank]['filenames'].append(fname)
+                rank_history[rank]['results'].append(float(act_res[vec_idx]))
+                rank_history[rank]['profits'].append(float(act_prof[vec_idx]))
+                rank_history[rank]['params'].append(global_params[vec_idx])
+
+            # Report Data
+            display_indices = sorted_indices[:2000]
+            smooth_series = pd.Series(act_res[display_indices]).rolling(window=SMOOTHING_WINDOW, min_periods=1, center=True).mean()
+
+            report_data[fname] = {
+                'pred_scores': np.round(scores[display_indices], 4).tolist(),
+                'act_results': np.round(act_res[display_indices], 4).tolist(),
+                'act_profits': np.round(act_prof[display_indices], 2).tolist(),
+                'pred_ranks': list(range(1, len(display_indices) + 1)),
+                'smooth': np.round(smooth_series.fillna(0).tolist(), 4).tolist(),
+                'avg': round(np.mean(act_res[display_indices]), 4),
+                'rules': res['rules']
+            }
 
     print("\nGenerating Reports...")
 
-    # Calculate stats for all ranks before generating reports
+    # Calculate stats
     for r in rank_history:
         data = rank_history[r]
         profits = data['profits']
