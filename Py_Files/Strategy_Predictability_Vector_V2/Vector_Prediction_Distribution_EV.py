@@ -638,7 +638,16 @@ def generate_html_report(target_dir, report_data, rank_history):
                             backgroundColor: 'rgba(0, 128, 0, 0.1)'
                         }}]
                     }},
-                    options: {{ responsive: true, maintainAspectRatio: false, elements: {{ point: {{ radius: 0, hitRadius: 10 }} }} }}
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        elements: {{ point: {{ radius: 0, hitRadius: 10 }} }},
+                        scales: {{
+                            x: {{
+                                ticks: {{ display: false }} // Hide labels to maximize space
+                            }}
+                        }}
+                    }}
                 }});
             }}
         </script>
