@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from sklearn.neighbors import KDTree
 from scipy.stats import spearmanr, linregress
-import pygad
+import itertools
 import concurrent.futures
 import multiprocessing
 import torch
@@ -25,6 +25,13 @@ TOP_N = 100             # Number of top predicted vectors to evaluate
 INITIAL_EQUITY = 10000  # Initial account balance for simulation
 SMOOTHING_WINDOW = 25   # Window for smooth average line
 SLOPE_WEIGHT = 50.0     # Weight for the slope of the Top N results in fitness function
+
+# Grid Search Configuration [Start, Step, Stop] (Inclusive of Stop if step matches)
+# Python range is [Start, Stop), so we will adjust in code or just interpret as such.
+# User said: "Results_std_range = [2, 1, 20], where the left is the start, middle = step, last = stop."
+RESULT_STD_RANGE = [2, 1, 20]
+HC_MEAN_MEAN_RANGE = [2, 1, 20]
+HC_MOMENTUM_RANGE = [2, 1, 20]
 
 # Parallel Processing Config
 MAX_WORKERS_OVERRIDE = None  # Set to an integer to override auto-detection (e.g., 8)
@@ -40,12 +47,6 @@ else:
         MAX_WORKERS = min(cpu_count, 16)
     except:
         MAX_WORKERS = 4
-
-# Genetic Algorithm Config
-GA_NUM_GENERATIONS = 50
-GA_SOL_PER_POP = 20
-GA_NUM_PARENTS_MATING = 10
-GA_MUTATION_PERCENT_GENES = 10
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -151,26 +152,36 @@ def calculate_slope_torch(y):
 
     return numerator / denominator
 
-class VectorOptimizer:
+class GridSearchOptimizer:
     def __init__(self, data_df, feature_cols, target_col='Result_Next'):
         """
         data_df: Polars DataFrame containing training data.
         feature_cols: List of column names to use as features.
         target_col: Column name of the target variable (Next Result).
         """
-        self.data_pd = data_df.to_pandas() # PyGAD works best with numpy/pandas
+        self.data_pd = data_df.to_pandas()
+
+        # Ensure features are in specific order for formula:
+        # Score = (W_mean * HC_Mean_Mean) + (W_mom * HC_Momentum) - (W_std * Result_Std)
+        # Expected cols: ['Result_Std', 'HC_Mean_Mean', 'HC_Momentum']
+
+        # We map specific columns to indices for clearer math later
+        self.col_map = {
+            'Result_Std': -1,
+            'HC_Mean_Mean': -1,
+            'HC_Momentum': -1
+        }
+
+        for i, f in enumerate(feature_cols):
+            if f in self.col_map:
+                self.col_map[f] = i
+
         self.features_np = self.data_pd[feature_cols].values
         self.targets_np = self.data_pd[target_col].values
         self.feature_names = feature_cols
         self.num_features = len(feature_cols)
 
-        # Genes per feature: [Rank_Weight, Threshold_Pct, Threshold_Weight]
-        self.genes_per_feature = 3
-        self.total_genes = self.num_features * self.genes_per_feature
-        self.feature_ranks = None
-        self.feature_ranks_torch = None
-
-        # Determine GPU usage dynamically inside the worker process
+        # Determine GPU usage
         self.use_gpu = False
         self.device = "cpu"
 
@@ -181,202 +192,165 @@ class VectorOptimizer:
                 self.targets_torch = torch.tensor(self.targets_np, dtype=torch.float32, device=self.device)
                 self.features_torch = torch.tensor(self.features_np, dtype=torch.float32, device=self.device)
             except Exception as e:
-                # print(f"Failed to initialize GPU tensors: {e}. Using CPU.")
                 self.use_gpu = False
                 self.device = "cpu"
                 self.targets_torch = torch.tensor(self.targets_np, dtype=torch.float32, device="cpu")
         else:
             self.targets_torch = torch.tensor(self.targets_np, dtype=torch.float32, device="cpu")
 
-
-    def fitness_func(self, ga_instance, solution, solution_idx):
+    def generate_grid(self):
         """
-        Calculates Fitness based on Average of Top N Results - (Slope * Weight).
-        We desire a high average and a negative slope (increasing rank index -> decreasing result).
-        Fitness = Avg - (Slope * Weight).
+        Generates the grid of weights.
         """
-        scores = self.calculate_scores(solution)
+        # Range: [start, step, stop] -> np.arange(start, stop + step, step) to include stop
+        def get_range(cfg):
+            start, step, stop = cfg
+            # Add epsilon to ensure stop is included
+            return np.arange(start, stop + step/1000.0, step)
 
-        if self.use_gpu and isinstance(scores, torch.Tensor):
-            # Sort scores descending
-            sorted_indices = torch.argsort(scores, descending=True)
-            top_n_indices = sorted_indices[:TOP_N]
+        r_std = get_range(RESULT_STD_RANGE)
+        r_mean = get_range(HC_MEAN_MEAN_RANGE)
+        r_mom = get_range(HC_MOMENTUM_RANGE)
 
-            # Select targets for top N
-            top_n_targets = self.targets_torch[top_n_indices]
+        # Cartesian product
+        grid = np.array(list(itertools.product(r_std, r_mean, r_mom)))
 
-            # Average Result
-            avg_result = torch.mean(top_n_targets)
+        # Columns in grid correspond to: W_std, W_mean, W_mom
+        return grid
 
-            # Slope of Rank (0..N-1) vs Result
-            # If Rank 0 is High and Rank N is Low -> Slope is Negative.
-            slope = calculate_slope_torch(top_n_targets)
-
-            # Combine: We want Max Fitness.
-            # If slope is negative (e.g. -0.5), -(-0.5) is +0.5. Adds to fitness.
-            fitness = avg_result - (slope * SLOPE_WEIGHT)
-            return fitness.item()
+    def evaluate_grid(self, grid_weights):
+        """
+        Evaluates the entire grid of weights against the current dataset.
+        grid_weights: (N_combinations, 3) matrix.
+        Returns: fitness_scores (N_combinations,)
+        """
+        if self.use_gpu:
+            return self.evaluate_grid_torch(grid_weights)
         else:
-            # CPU Fallback
-            if isinstance(scores, torch.Tensor):
-                scores = scores.detach().cpu().numpy()
+            return self.evaluate_grid_cpu(grid_weights)
 
-            # Sort
-            sorted_indices = np.argsort(scores)[::-1]
-            top_n_indices = sorted_indices[:TOP_N]
+    def evaluate_grid_torch(self, grid_weights):
+        # Convert weights to tensor
+        # Shape: (3, N_combs) for matmul
+        weights_t = torch.tensor(grid_weights.T, dtype=torch.float32, device=self.device)
 
-            top_n_targets = self.targets_np[top_n_indices]
+        # Features: (N_samples, 3)
+        # We need to map features correctly to formula:
+        # Score = (W_mean * HC_Mean_Mean) + (W_mom * HC_Momentum) - (W_std * Result_Std)
 
-            if len(top_n_targets) == 0:
-                return 0.0
+        # Extract individual feature columns
+        # self.features_torch columns are in order of FEATURE_COLS list passed in init
+        # defined in main as: ["Result_Std", "HC_Mean_Mean", "HC_Momentum"]
+        # So col 0 = Std, col 1 = Mean, col 2 = Mom
 
-            avg_result = np.mean(top_n_targets)
+        f_std = self.features_torch[:, 0].unsqueeze(1) # (N_samples, 1)
+        f_mean = self.features_torch[:, 1].unsqueeze(1)
+        f_mom = self.features_torch[:, 2].unsqueeze(1)
 
-            # Calculate slope
-            if len(top_n_targets) > 1:
-                x = np.arange(len(top_n_targets))
-                res = linregress(x, top_n_targets)
+        # Weights: row 0 = W_std, row 1 = W_mean, row 2 = W_mom
+        w_std = weights_t[0, :] # (N_combs,)
+        w_mean = weights_t[1, :]
+        w_mom = weights_t[2, :]
+
+        # Compute Scores Matrix: (N_samples, N_combs)
+        # Score = Mean*Wmean + Mom*Wmom - Std*Wstd
+        scores = (f_mean @ w_mean.unsqueeze(0)) + (f_mom @ w_mom.unsqueeze(0)) - (f_std @ w_std.unsqueeze(0))
+
+        # Now find Top N for each column (each weight set)
+        # scores shape: (N_samples, N_combs)
+        # torch.topk returns values and indices
+        top_k = torch.topk(scores, k=TOP_N, dim=0) # dim=0 means along samples
+        top_indices = top_k.indices # (TOP_N, N_combs)
+
+        # Gather targets for these indices
+        # targets_torch is (N_samples,)
+        # Expand targets to gather: (N_samples, N_combs) -> gather along dim 0
+        # Actually, simpler:
+        # top_indices is (TOP_N, N_combs)
+        # We want to lookup targets.
+        # targets[top_indices] works if we treat targets as 1D and indices as shape
+        selected_targets = self.targets_torch[top_indices] # Shape: (TOP_N, N_combs)
+
+        # Calculate Fitness per comb
+        # Fitness = Avg - (Slope * Weight)
+
+        # 1. Average Result
+        avg_results = torch.mean(selected_targets, dim=0) # (N_combs,)
+
+        # 2. Slope calculation (vectorized)
+        # X is 0..TOP_N-1
+        n = TOP_N
+        x = torch.arange(n, dtype=torch.float32, device=self.device)
+        x_mean = torch.mean(x)
+        x_dev = x - x_mean
+        denom = torch.sum(x_dev ** 2)
+
+        y_mean = torch.mean(selected_targets, dim=0)
+        y_dev = selected_targets - y_mean.unsqueeze(0)
+
+        # sum((x-x_mean)*(y-y_mean))
+        # Broadcast x_dev to (TOP_N, 1)
+        numer = torch.sum(x_dev.unsqueeze(1) * y_dev, dim=0)
+
+        slopes = numer / denom
+
+        fitness = avg_results - (slopes * SLOPE_WEIGHT)
+
+        return fitness # (N_combs,)
+
+    def evaluate_grid_cpu(self, grid_weights):
+        # CPU Version (slower, fallback)
+        n_combs = grid_weights.shape[0]
+        fitness_scores = np.zeros(n_combs)
+
+        # Features
+        f_std = self.features_np[:, 0]
+        f_mean = self.features_np[:, 1]
+        f_mom = self.features_np[:, 2]
+
+        for i in range(n_combs):
+            w = grid_weights[i]
+            w_std, w_mean, w_mom = w[0], w[1], w[2]
+
+            scores = (f_mean * w_mean) + (f_mom * w_mom) - (f_std * w_std)
+
+            # Top N
+            top_indices = np.argsort(scores)[::-1][:TOP_N]
+            top_targets = self.targets_np[top_indices]
+
+            avg_res = np.mean(top_targets)
+
+            if len(top_targets) > 1:
+                res = linregress(np.arange(len(top_targets)), top_targets)
                 slope = res.slope
             else:
                 slope = 0.0
 
-            fitness = avg_result - (slope * SLOPE_WEIGHT)
-            return fitness
+            fitness_scores[i] = avg_res - (slope * SLOPE_WEIGHT)
 
-    def calculate_scores(self, solution):
+        return fitness_scores
+
+    def predict_top_n(self, best_weights):
         """
-        Decodes the solution (genome) and calculates scores for all rows.
-        solution: 1D array of weights/params.
+        Uses best weights to predict Top N on this dataset.
+        Returns: scores, indices
         """
+        w_std, w_mean, w_mom = best_weights
+
         if self.use_gpu:
-            return self.calculate_scores_torch(solution)
+             f_std = self.features_torch[:, 0]
+             f_mean = self.features_torch[:, 1]
+             f_mom = self.features_torch[:, 2]
+             scores = (f_mean * w_mean) + (f_mom * w_mom) - (f_std * w_std)
+             scores = scores.cpu().numpy()
         else:
-            return self.calculate_scores_cpu(solution)
+             f_std = self.features_np[:, 0]
+             f_mean = self.features_np[:, 1]
+             f_mom = self.features_np[:, 2]
+             scores = (f_mean * w_mean) + (f_mom * w_mom) - (f_std * w_std)
 
-    def calculate_scores_torch(self, solution):
-        try:
-            if not isinstance(solution, torch.Tensor):
-                 sol_torch = torch.tensor(solution, dtype=torch.float32, device=self.device)
-            else:
-                 sol_torch = solution
+        return scores
 
-            # Initialize scores
-            total_scores = torch.zeros(self.features_torch.shape[0], dtype=torch.float32, device=self.device)
-
-            # Vectorized scoring
-            # Reshape solution to (num_features, 3) -> [Weight, Threshold_Pct, Threshold_Val]
-            sol_matrix = sol_torch.reshape(self.num_features, 3)
-
-            rank_weights = sol_matrix[:, 0]
-            threshold_pcts = sol_matrix[:, 1]
-            threshold_vals = sol_matrix[:, 2]
-
-            # Normalize threshold percentages (-1..1 -> 0..1)
-            norm_thresholds = (threshold_pcts + 1) / 2
-
-            # Term 1: Weighted Rank
-            weighted_ranks = self.feature_ranks_torch * rank_weights
-            total_scores += torch.sum(weighted_ranks, dim=1)
-
-            # Term 2: Threshold Boost
-            mask = self.feature_ranks_torch > norm_thresholds
-            boosts = mask.float() * threshold_vals
-            total_scores += torch.sum(boosts, dim=1)
-
-            return total_scores
-
-        except Exception as e:
-            # Fallback
-            # print(f"Torch Error: {e}")
-            self.use_gpu = False
-            return self.calculate_scores_cpu(solution)
-
-    def calculate_scores_cpu(self, solution):
-        # CPU Version
-        total_scores = np.zeros(len(self.features_np))
-
-        if self.feature_ranks is None:
-             self._precalculate_ranks_cpu()
-
-        for i in range(self.num_features):
-            base_idx = i * self.genes_per_feature
-
-            rank_weight = solution[base_idx]
-            threshold_pct = solution[base_idx + 1]
-            threshold_weight = solution[base_idx + 2]
-
-            norm_threshold = (threshold_pct + 1) / 2
-
-            total_scores += self.feature_ranks[:, i] * rank_weight
-            mask = self.feature_ranks[:, i] > norm_threshold
-            total_scores[mask] += threshold_weight
-
-        return total_scores
-
-    def precalculate_ranks(self):
-        """
-        Pre-calculates normalized ranks (0.0 to 1.0) for all features.
-        """
-        if self.use_gpu:
-            try:
-                # Features are already on GPU as self.features_torch
-                # We need to compute ranks for each column
-
-                # argsort twice gives ranks
-                # We do this column-wise
-
-                # Using torch.argsort(dim=0)
-                ranks_struct = torch.argsort(torch.argsort(self.features_torch, dim=0), dim=0).float()
-
-                # Normalize to 0..1
-                n_samples = self.features_torch.shape[0]
-                if n_samples > 1:
-                    self.feature_ranks_torch = ranks_struct / (n_samples - 1)
-                else:
-                    self.feature_ranks_torch = torch.zeros_like(self.features_torch) + 0.5
-
-            except Exception as e:
-                # print(f"GPU Rank Calc Failed: {e}. Fallback to CPU.")
-                self.use_gpu = False
-                self._precalculate_ranks_cpu()
-        else:
-            self._precalculate_ranks_cpu()
-
-    def _precalculate_ranks_cpu(self):
-        self.feature_ranks = np.zeros_like(self.features_np)
-        for i in range(self.num_features):
-            col_vals = self.features_np[:, i]
-            if len(col_vals) > 1:
-                ranks = np.argsort(np.argsort(col_vals))
-                self.feature_ranks[:, i] = ranks / (len(col_vals) - 1)
-            else:
-                self.feature_ranks[:, i] = 0.5
-
-    def decode_rules(self, solution):
-        """
-        Returns a human-readable list of rules from the solution.
-        """
-        rules = []
-        for i in range(self.num_features):
-            base_idx = i * self.genes_per_feature
-            rank_weight = solution[base_idx]
-            threshold_pct_raw = solution[base_idx + 1]
-            threshold_weight = solution[base_idx + 2]
-
-            threshold_pct = (threshold_pct_raw + 1) / 2
-
-            fname = self.feature_names[i]
-
-            rule_str = f"<b>{fname}</b>:<br>"
-            rule_str += f"&nbsp;&nbsp;Rank Weight: {rank_weight:.3f}<br>"
-            if abs(threshold_weight) > 0.01:
-                direction = "Score +=" if threshold_weight > 0 else "Score -="
-                rule_str += f"&nbsp;&nbsp;IF Rank > {threshold_pct*100:.1f}% THEN {direction} {abs(threshold_weight):.3f}"
-            else:
-                rule_str += f"&nbsp;&nbsp;(Threshold Boost Negligible)"
-
-            rules.append(rule_str)
-        return rules
 
 def build_features_polars(df_list, master_vectors, hypercube_neighbor_indices):
     """
@@ -531,9 +505,8 @@ def generate_html_report(target_dir, report_data, rank_history):
     for filename in report_data.keys():
         safe_fname = filename.replace('.', '_').replace(' ', '_')
 
-        # Rules HTML
-        rules_list = report_data[filename]['rules']
-        rules_html = "<div style='margin-bottom:8px; border-bottom:1px solid #eee;'>" + "</div><div style='margin-bottom:8px; border-bottom:1px solid #eee;'>".join(rules_list) + "</div>"
+        # Rules HTML (now best weights)
+        weights_str = report_data[filename]['weights_info']
 
         html_file_rows += f"""
         <div class="plot-container">
@@ -548,9 +521,9 @@ def generate_html_report(target_dir, report_data, rank_history):
                             <canvas id="chart-{safe_fname}"></canvas>
                         </div>
                         <div style="flex: 1; padding: 15px; background: #f0f8ff; border: 1px solid #cce5ff; border-radius: 8px; overflow-y: auto; max-height: 500px;">
-                            <h4 style="margin-top:0;">Optimized Rules (Genome)</h4>
-                            <div style="font-family: monospace; font-size: 0.85em;">
-                                {rules_html}
+                            <h4 style="margin-top:0;">Best Weight Set</h4>
+                            <div style="font-family: monospace; font-size: 1.1em; color: #333;">
+                                {weights_str}
                             </div>
                         </div>
                     </div>
@@ -567,7 +540,7 @@ def generate_html_report(target_dir, report_data, rank_history):
         'profit': profits_y
     })
 
-    # Clean report data for JSON (remove rules to save space if needed, but they are text)
+    # Clean report data for JSON
     json_report = json.dumps(report_data)
     json_rank_hist = json.dumps(rank_charts_data)
 
@@ -593,7 +566,8 @@ def generate_html_report(target_dir, report_data, rank_history):
     <body>
         <div class="container">
             <h1 style="text-align: center;">Sequential Distribution Optimizer Report</h1>
-            <p style="text-align: center;"><strong>Engine:</strong> Polars + PyGAD + Torch (Parallel) | <strong>Fitness:</strong> Avg Top {TOP_N} - (Slope * {SLOPE_WEIGHT}) | <strong>Lookback:</strong> {FEATURE_LOOKBACK}</p>
+            <p style="text-align: center;"><strong>Engine:</strong> Polars + Torch Grid Search | <strong>Fitness:</strong> Avg Top {TOP_N} - (Slope * {SLOPE_WEIGHT}) | <strong>Lookback:</strong> {FEATURE_LOOKBACK}</p>
+            <p style="text-align: center;"><strong>Score Formula:</strong> (W_mean * HC_Mean_Mean) + (W_mom * HC_Momentum) - (W_std * Result_Std)</p>
 
             <div style="text-align: center; margin-bottom: 30px;">
                  <a href="Final_Verdict.pdf" target="_blank" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px;">Download Final Verdict PDF</a>
@@ -739,42 +713,65 @@ def worker_process_file(task_args):
         pred_data_pd = task_args['pred_data']   # Pandas DF subset
         feature_cols = task_args['feature_cols']
 
-        # We need to recreate the optimizer here
-        # Note: train_data is pandas, VectorOptimizer handles pandas.
-        optimizer = VectorOptimizer(pl.from_pandas(train_data_pd), feature_cols, target_col='Result_Next')
-        optimizer.precalculate_ranks()
+        # 1. Create Optimizer to generate grid
+        # We pass a dummy df first just to access generate_grid, or static method?
+        # Better to instantiate with first training file to get device info etc.
+        # However, we have a list of training files in `train_data_pd`.
+        # We need to split train_data_pd by File_Index to loop through training window
 
-        # Wrap fitness func
-        def fitness_wrapper(ga_instance, solution, solution_idx):
-            return optimizer.fitness_func(ga_instance, solution, solution_idx)
+        train_file_indices = sorted(train_data_pd['File_Index'].unique())
 
-        ga_instance = pygad.GA(
-            num_generations=GA_NUM_GENERATIONS,
-            num_parents_mating=GA_NUM_PARENTS_MATING,
-            fitness_func=fitness_wrapper,
-            sol_per_pop=GA_SOL_PER_POP,
-            num_genes=optimizer.total_genes,
-            init_range_low=-1.0,
-            init_range_high=1.0,
-            mutation_percent_genes=GA_MUTATION_PERCENT_GENES,
-            keep_parents=2,
-            suppress_warnings=True
-        )
+        # Instantiate one optimizer to generate the grid (and reuse device logic)
+        # We can use the whole training set for init, but we will call evaluate file by file.
+        # Actually, evaluate_grid takes features/targets.
 
-        ga_instance.run()
-        best_solution, best_fitness, _ = ga_instance.best_solution()
+        # Split data by file
+        train_files_data = []
+        for fidx in train_file_indices:
+             train_files_data.append(train_data_pd[train_data_pd['File_Index'] == fidx])
 
-        rules = optimizer.decode_rules(best_solution)
+        # Initialize helper (using first file to setup grid/gpu)
+        helper = GridSearchOptimizer(pl.from_pandas(train_files_data[0]), feature_cols, target_col='Result_Next')
+        grid = helper.generate_grid() # (N_combs, 3)
 
-        # Predict
-        predictor = VectorOptimizer(pl.from_pandas(pred_data_pd), feature_cols, target_col='Result_Next')
-        predictor.precalculate_ranks()
-        predicted_scores = predictor.calculate_scores(best_solution)
+        # Accumulate fitness scores
+        total_fitness = None
 
-        # If GPU used, convert back to CPU/Numpy for pickling
-        if optimizer.use_gpu:
-            if isinstance(predicted_scores, torch.Tensor):
-                 predicted_scores = predicted_scores.detach().cpu().numpy()
+        for i, df_chunk in enumerate(train_files_data):
+            # Create optimizer for this file
+            # Optimization: reuse helper if we just swap data?
+            # Creating new object is cleaner for now.
+            opt = GridSearchOptimizer(pl.from_pandas(df_chunk), feature_cols, target_col='Result_Next')
+
+            scores = opt.evaluate_grid(grid) # (N_combs,)
+
+            if self_is_gpu := opt.use_gpu: # Capture if we used GPU
+                 if not isinstance(scores, torch.Tensor):
+                      scores = torch.tensor(scores, device=opt.device)
+
+            if total_fitness is None:
+                total_fitness = scores
+            else:
+                total_fitness += scores
+
+        # Average Fitness
+        avg_fitness = total_fitness / len(train_files_data)
+
+        # Find Best Index
+        if isinstance(avg_fitness, torch.Tensor):
+            best_idx = torch.argmax(avg_fitness).item()
+            best_fit_val = avg_fitness[best_idx].item()
+            avg_fitness_cpu = avg_fitness.cpu().numpy()
+        else:
+            best_idx = np.argmax(avg_fitness)
+            best_fit_val = avg_fitness[best_idx]
+            avg_fitness_cpu = avg_fitness
+
+        best_weights = grid[best_idx] # [W_std, W_mean, W_mom]
+
+        # Predict on Current File (Target)
+        predictor = GridSearchOptimizer(pl.from_pandas(pred_data_pd), feature_cols, target_col='Result_Next')
+        predicted_scores = predictor.predict_top_n(best_weights)
 
         actual_results = predictor.targets_np
         actual_profits = pred_data_pd['Profit_Next'].values
@@ -795,16 +792,25 @@ def worker_process_file(task_args):
             res = linregress(x_range, top_n_actual)
             test_slope = res.slope
 
+        # Format weights for report
+        weights_info = (
+            f"<b>Weights Found:</b><br>"
+            f"W_mean (HC_Mean): {best_weights[1]:.1f}<br>"
+            f"W_mom  (HC_Mom) : {best_weights[2]:.1f}<br>"
+            f"W_std  (Res_Std): {best_weights[0]:.1f}<br>"
+            f"<i>(Score = W_mean*Mean + W_mom*Mom - W_std*Std)</i>"
+        )
+
         return {
             'target_file_idx': target_file_idx,
             'target_filename': target_filename,
             'predicted_scores': predicted_scores,
             'actual_results': actual_results,
             'actual_profits': actual_profits,
-            'best_fitness': best_fitness,
+            'best_fitness': best_fit_val,
             'test_avg_res': test_avg_res,
             'test_slope': test_slope,
-            'rules': rules
+            'weights_info': weights_info
         }
 
     except Exception as e:
@@ -813,8 +819,9 @@ def worker_process_file(task_args):
 
 # --- Main ---
 def main():
-    print("--- Sequential Distribution Optimizer (Polars + PyGAD + Parallel) ---")
+    print("--- Sequential Distribution Optimizer (Polars + Grid Search + Parallel) ---")
     print(f"Parallel Workers: {MAX_WORKERS}")
+    print(f"Grid Config: STD={RESULT_STD_RANGE}, MEAN={HC_MEAN_MEAN_RANGE}, MOM={HC_MOMENTUM_RANGE}")
 
     if len(sys.argv) > 1:
         target_dir = sys.argv[1]
@@ -871,18 +878,13 @@ def main():
     full_dataset = full_dataset.fill_null(0.0)
 
     # Convert entire dataset to Pandas ONCE to allow easy slicing and pickling for workers
-    # Polars objects might have issues pickling depending on version, pandas is safer for multiprocessing
     print("Converting Global Dataset to Pandas for Parallel Sharing...")
     full_dataset_pd = full_dataset.to_pandas()
 
     # 4. Prepare Parallel Tasks
     print("Preparing Tasks for Parallel Execution...")
 
-    # feature_cols = [
-    #     "Result_Mean", "Result_Std", "Result_Momentum",
-    #     "HC_Mean_Mean", "HC_Momentum", "HC_Temporal_Std"
-    # ]
-    # Reduced Feature Set as requested
+    # Strict Feature Columns for Grid Search Formula
     feature_cols = ["Result_Std", "HC_Mean_Mean", "HC_Momentum"]
 
     start_pred_idx = FEATURE_LOOKBACK + TRAIN_WINDOW
@@ -933,12 +935,12 @@ def main():
 
             if 'error' in res:
                 print(f"Task Failed (Idx {res['target_file_idx']}): {res['error']}")
+                # print(res['traceback'])
                 continue
 
             idx = res['target_file_idx']
             fname = res['target_filename']
-            # print(f"  Finished: {fname} (Fit: {res['best_fitness']:.4f})")
-            print(f"  Finished: {fname} (TrainFit: {res['best_fitness']:.2f}, Test Avg100: {res.get('test_avg_res', 0):.2f}, Test Slope: {res.get('test_slope', 0):.4f})")
+            print(f"  Finished: {fname} (TrainFit: {res['best_fitness']:.2f}, Test Avg100: {res.get('test_avg_res', 0):.2f})")
 
             # Process Result
             scores = res['predicted_scores']
@@ -967,7 +969,7 @@ def main():
                 'pred_ranks': list(range(1, len(display_indices) + 1)),
                 'smooth': np.round(smooth_series.fillna(0).tolist(), 4).tolist(),
                 'avg': round(np.mean(act_res[display_indices]), 4),
-                'rules': res['rules']
+                'weights_info': res['weights_info']
             }
 
     print("\nGenerating Reports...")
