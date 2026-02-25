@@ -18,35 +18,22 @@ import multiprocessing
 import torch
 
 # --- Configuration ---
-HYPERCUBE = 2           # Hypercube size (steps) for averaging neighbors
+HYPERCUBE = 1          # Hypercube size (steps) for averaging neighbors
 FEATURE_LOOKBACK = 5    # Number of past files to look back for feature calculation
 TRAIN_WINDOW = 10       # Number of past samples (files) to train on (Walk-Forward Window)
 TOP_N = 100             # Number of top predicted vectors to evaluate
 INITIAL_EQUITY = 10000  # Initial account balance for simulation
 SMOOTHING_WINDOW = 25   # Window for smooth average line
 SLOPE_WEIGHT = 50.0     # Weight for the slope of the Top N results in fitness function
+MAX_WORKERS = 4
 
 # Grid Search Configuration [Start, Step, Stop] (Inclusive of Stop if step matches)
 # Python range is [Start, Stop), so we will adjust in code or just interpret as such.
 # User said: "Results_std_range = [2, 1, 20], where the left is the start, middle = step, last = stop."
-RESULT_STD_RANGE = [2, 1, 20]
-HC_MEAN_MEAN_RANGE = [2, 1, 20]
-HC_MOMENTUM_RANGE = [2, 1, 20]
+RESULT_STD_RANGE = [2, 2, 10]
+HC_MEAN_MEAN_RANGE = [2, 2, 10]
+HC_MOMENTUM_RANGE = [2, 2, 10]
 
-# Parallel Processing Config
-MAX_WORKERS_OVERRIDE = None  # Set to an integer to override auto-detection (e.g., 8)
-if MAX_WORKERS_OVERRIDE is not None:
-    MAX_WORKERS = int(MAX_WORKERS_OVERRIDE)
-else:
-    try:
-        cpu_count = os.cpu_count()
-        if cpu_count is None:
-            cpu_count = 4
-        # Cap workers to 16 by default to prevent OOM on high-core machines with GPU
-        # If user wants more, they can use MAX_WORKERS_OVERRIDE
-        MAX_WORKERS = min(cpu_count, 16)
-    except:
-        MAX_WORKERS = 4
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
