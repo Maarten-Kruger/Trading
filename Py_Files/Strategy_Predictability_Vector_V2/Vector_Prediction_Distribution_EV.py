@@ -21,9 +21,10 @@ import torch
 HYPERCUBE = 2           # Hypercube size (steps) for averaging neighbors
 FEATURE_LOOKBACK = 5    # Number of past files to look back for feature calculation
 TRAIN_WINDOW = 10       # Number of past samples (files) to train on (Walk-Forward Window)
-TOP_N = 10000           # Number of top predicted vectors to evaluate
+TOP_N = 100             # Number of top predicted vectors to evaluate
 INITIAL_EQUITY = 10000  # Initial account balance for simulation
 SMOOTHING_WINDOW = 25   # Window for smooth average line
+CORRELATION_WEIGHT = 20.0 # Weight for correlation in fitness function
 
 # Parallel Processing Config
 MAX_WORKERS_OVERRIDE = None  # Set to an integer to override auto-detection (e.g., 8)
@@ -194,23 +195,46 @@ class VectorOptimizer:
 
     def fitness_func(self, ga_instance, solution, solution_idx):
         """
-        Calculates Spearman Correlation between predicted scores and actual targets.
+        Calculates Fitness based on Average of Top N Results + Correlation * Weight.
         """
         scores = self.calculate_scores(solution)
 
-        # Calculate Correlation
         if self.use_gpu and isinstance(scores, torch.Tensor):
+            # Sort scores descending
+            # torch.argsort(descending=True)
+            sorted_indices = torch.argsort(scores, descending=True)
+            top_n_indices = sorted_indices[:TOP_N]
+
+            # Select targets for top N
+            top_n_targets = self.targets_torch[top_n_indices]
+
+            # Average Result
+            avg_result = torch.mean(top_n_targets)
+
+            # Correlation (on all data)
             corr = torch_spearman_rank(scores, self.targets_torch)
-            return corr.item()
+
+            # Combine
+            fitness = avg_result + (corr * CORRELATION_WEIGHT)
+            return fitness.item()
         else:
-            # CPU Fallback using Scipy
+            # CPU Fallback
             if isinstance(scores, torch.Tensor):
                 scores = scores.detach().cpu().numpy()
 
+            # Sort
+            sorted_indices = np.argsort(scores)[::-1]
+            top_n_indices = sorted_indices[:TOP_N]
+
+            top_n_targets = self.targets_np[top_n_indices]
+            avg_result = np.mean(top_n_targets)
+
             corr, _ = spearmanr(scores, self.targets_np)
             if np.isnan(corr):
-                return -1.0
-            return corr
+                corr = 0.0
+
+            fitness = avg_result + (corr * CORRELATION_WEIGHT)
+            return fitness
 
     def calculate_scores(self, solution):
         """
@@ -562,7 +586,7 @@ def generate_html_report(target_dir, report_data, rank_history):
     <body>
         <div class="container">
             <h1 style="text-align: center;">Sequential Distribution Optimizer Report</h1>
-            <p style="text-align: center;"><strong>Engine:</strong> Polars + PyGAD + Torch (Parallel) | <strong>Fitness:</strong> Spearman Correlation | <strong>Lookback:</strong> {FEATURE_LOOKBACK}</p>
+            <p style="text-align: center;"><strong>Engine:</strong> Polars + PyGAD + Torch (Parallel) | <strong>Fitness:</strong> Avg Top {TOP_N} + Corr * {CORRELATION_WEIGHT} | <strong>Lookback:</strong> {FEATURE_LOOKBACK}</p>
 
             <div style="text-align: center; margin-bottom: 30px;">
                  <a href="Final_Verdict.pdf" target="_blank" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px;">Download Final Verdict PDF</a>
@@ -748,6 +772,18 @@ def worker_process_file(task_args):
         actual_results = predictor.targets_np
         actual_profits = pred_data_pd['Profit_Next'].values
 
+        # Calculate Stats for the Prediction (Test) Set
+        # Sort scores descending
+        sorted_indices = np.argsort(predicted_scores)[::-1]
+        top_n_indices = sorted_indices[:TOP_N]
+        top_n_actual = actual_results[top_n_indices]
+
+        test_avg_res = np.mean(top_n_actual) if len(top_n_actual) > 0 else 0.0
+
+        test_corr, _ = spearmanr(predicted_scores, actual_results)
+        if np.isnan(test_corr):
+            test_corr = 0.0
+
         return {
             'target_file_idx': target_file_idx,
             'target_filename': target_filename,
@@ -755,6 +791,8 @@ def worker_process_file(task_args):
             'actual_results': actual_results,
             'actual_profits': actual_profits,
             'best_fitness': best_fitness,
+            'test_avg_res': test_avg_res,
+            'test_corr': test_corr,
             'rules': rules
         }
 
@@ -886,7 +924,8 @@ def main():
 
             idx = res['target_file_idx']
             fname = res['target_filename']
-            print(f"  Finished: {fname} (Fit: {res['best_fitness']:.4f})")
+            # print(f"  Finished: {fname} (Fit: {res['best_fitness']:.4f})")
+            print(f"  Finished: {fname} (TrainFit: {res['best_fitness']:.2f}, Test Avg100: {res.get('test_avg_res', 0):.2f}, Test Corr: {res.get('test_corr', 0):.4f})")
 
             # Process Result
             scores = res['predicted_scores']
