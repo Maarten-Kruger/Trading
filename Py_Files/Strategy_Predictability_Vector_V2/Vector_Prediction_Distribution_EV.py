@@ -521,8 +521,8 @@ def generate_html_report(target_dir, report_data, rank_history):
                             <canvas id="chart-{safe_fname}"></canvas>
                         </div>
                         <div style="flex: 1; padding: 15px; background: #f0f8ff; border: 1px solid #cce5ff; border-radius: 8px; overflow-y: auto; max-height: 500px;">
-                            <h4 style="margin-top:0;">Best Weight Set</h4>
-                            <div style="font-family: monospace; font-size: 1.1em; color: #333;">
+                            <h4 style="margin-top:0;">Best Weight Set & Top {TOP_N} Stats</h4>
+                            <div style="font-family: monospace; font-size: 1.0em; color: #333;">
                                 {weights_str}
                             </div>
                         </div>
@@ -561,12 +561,30 @@ def generate_html_report(target_dir, report_data, rank_history):
             table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
             th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
             th {{ background-color: #f8f9fa; }}
+            .config-box {{ background: #fff3cd; border: 1px solid #ffeeba; padding: 15px; border-radius: 5px; margin-bottom: 20px; font-size: 0.9em; }}
         </style>
     </head>
     <body>
         <div class="container">
             <h1 style="text-align: center;">Sequential Distribution Optimizer Report</h1>
-            <p style="text-align: center;"><strong>Engine:</strong> Polars + Torch Grid Search | <strong>Fitness:</strong> Avg Top {TOP_N} - (Slope * {SLOPE_WEIGHT}) | <strong>Lookback:</strong> {FEATURE_LOOKBACK}</p>
+
+            <div class="config-box">
+                <h3 style="margin-top:0;">Configuration & Parameters</h3>
+                <ul style="column-count: 3; list-style-type: none; padding: 0; margin: 0;">
+                    <li><strong>Engine:</strong> Polars + Torch Grid Search</li>
+                    <li><strong>Hypercube Size:</strong> {HYPERCUBE}</li>
+                    <li><strong>Lookback:</strong> {FEATURE_LOOKBACK}</li>
+                    <li><strong>Train Window:</strong> {TRAIN_WINDOW}</li>
+                    <li><strong>Top N:</strong> {TOP_N}</li>
+                    <li><strong>Smooth Window:</strong> {SMOOTHING_WINDOW}</li>
+                    <li><strong>Slope Weight:</strong> {SLOPE_WEIGHT}</li>
+                    <li><strong>Workers:</strong> {MAX_WORKERS}</li>
+                    <li><strong>Result Std Range:</strong> {RESULT_STD_RANGE}</li>
+                    <li><strong>HC Mean Range:</strong> {HC_MEAN_MEAN_RANGE}</li>
+                    <li><strong>HC Mom Range:</strong> {HC_MOMENTUM_RANGE}</li>
+                </ul>
+            </div>
+
             <p style="text-align: center;"><strong>Score Formula:</strong> (W_mean * HC_Mean_Mean) + (W_mom * HC_Momentum) - (W_std * Result_Std)</p>
 
             <div style="text-align: center; margin-bottom: 30px;">
@@ -792,13 +810,26 @@ def worker_process_file(task_args):
             res = linregress(x_range, top_n_actual)
             test_slope = res.slope
 
+        # Calculate Average Features for Top N
+        # We need the feature values corresponding to the top_n_indices
+        top_n_features = predictor.features_np[top_n_indices] # Shape (TOP_N, 3)
+        # Columns: [Result_Std, HC_Mean_Mean, HC_Momentum]
+
+        avg_std_val = np.mean(top_n_features[:, 0])
+        avg_mean_val = np.mean(top_n_features[:, 1])
+        avg_mom_val = np.mean(top_n_features[:, 2])
+
         # Format weights for report
         weights_info = (
             f"<b>Weights Found:</b><br>"
             f"W_mean (HC_Mean): {best_weights[1]:.1f}<br>"
             f"W_mom  (HC_Mom) : {best_weights[2]:.1f}<br>"
-            f"W_std  (Res_Std): {best_weights[0]:.1f}<br>"
-            f"<i>(Score = W_mean*Mean + W_mom*Mom - W_std*Std)</i>"
+            f"W_std  (Res_Std): {best_weights[0]:.1f}<br><br>"
+            f"<b>Average Stats of Top {TOP_N} Vectors:</b><br>"
+            f"Avg HC_Mean : {avg_mean_val:.4f}<br>"
+            f"Avg HC_Mom  : {avg_mom_val:.4f}<br>"
+            f"Avg Res_Std : {avg_std_val:.4f}<br>"
+            f"<br><i>(Score = W_mean*Mean + W_mom*Mom - W_std*Std)</i>"
         )
 
         return {
