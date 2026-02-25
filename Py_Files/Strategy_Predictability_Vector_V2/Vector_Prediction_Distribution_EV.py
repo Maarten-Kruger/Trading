@@ -466,7 +466,7 @@ def generate_final_verdict_pdf(output_path, rank1_data):
         pdf.savefig()
         plt.close()
 
-def generate_html_report(target_dir, report_data, rank_history):
+def generate_html_report(target_dir, report_data, rank_history, config_vars):
     # Process Rank Summary Stats
     ranks_x = []
     max_dds_y = []
@@ -552,6 +552,13 @@ def generate_html_report(target_dir, report_data, rank_history):
         </div>
         """
 
+    # Build Configuration Table
+    config_html = "<table style='width: 100%; font-size: 0.9em; border-collapse: collapse; margin-bottom: 20px;'>"
+    config_html += "<tr style='background-color: #f2f2f2;'><th colspan='2' style='padding: 8px; border: 1px solid #ddd; text-align: left;'>Run Configuration</th></tr>"
+    for key, value in config_vars.items():
+        config_html += f"<tr><td style='padding: 8px; border: 1px solid #ddd; font-weight: bold;'>{key}</td><td style='padding: 8px; border: 1px solid #ddd;'>{value}</td></tr>"
+    config_html += "</table>"
+
     # JSON Dumps
     json_summary = json.dumps({
         'ranks': ranks_x,
@@ -587,6 +594,13 @@ def generate_html_report(target_dir, report_data, rank_history):
         <div class="container">
             <h1 style="text-align: center;">Sequential Distribution Optimizer Report</h1>
             <p style="text-align: center;"><strong>Engine:</strong> Polars + PyGAD + Torch (Parallel) | <strong>Fitness:</strong> Avg Top {TOP_N} + Corr * {CORRELATION_WEIGHT} | <strong>Lookback:</strong> {FEATURE_LOOKBACK}</p>
+
+            <details style="margin-bottom: 20px; border: 1px solid #ccc; border-radius: 8px;">
+                <summary>Configuration & Parameters</summary>
+                <div class="section-content">
+                    {config_html}
+                </div>
+            </details>
 
             <div style="text-align: center; margin-bottom: 30px;">
                  <a href="Final_Verdict.pdf" target="_blank" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px;">Download Final Verdict PDF</a>
@@ -959,6 +973,21 @@ def main():
 
     print("\nGenerating Reports...")
 
+    # Capture config for report
+    config_vars = {
+        "HYPERCUBE": HYPERCUBE,
+        "FEATURE_LOOKBACK": FEATURE_LOOKBACK,
+        "TRAIN_WINDOW": TRAIN_WINDOW,
+        "TOP_N": TOP_N,
+        "INITIAL_EQUITY": INITIAL_EQUITY,
+        "SMOOTHING_WINDOW": SMOOTHING_WINDOW,
+        "MAX_WORKERS": MAX_WORKERS,
+        "GA_NUM_GENERATIONS": GA_NUM_GENERATIONS,
+        "GA_SOL_PER_POP": GA_SOL_PER_POP,
+        "GA_NUM_PARENTS_MATING": GA_NUM_PARENTS_MATING,
+        "GA_MUTATION_PERCENT_GENES": GA_MUTATION_PERCENT_GENES
+    }
+
     # Calculate stats
     for r in rank_history:
         data = rank_history[r]
@@ -986,7 +1015,7 @@ def main():
     generate_final_verdict_pdf(pdf_path, rank_history[1])
     print(f"PDF Saved: {pdf_path}")
 
-    generate_html_report(target_dir, report_data, rank_history)
+    generate_html_report(target_dir, report_data, rank_history, config_vars)
     print("HTML Report Generated.")
 
 if __name__ == "__main__":
