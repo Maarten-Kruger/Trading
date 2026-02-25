@@ -11,7 +11,7 @@ import polars as pl
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from sklearn.neighbors import KDTree
-from scipy.stats import spearmanr
+from scipy.stats import spearmanr, linregress
 import pygad
 import concurrent.futures
 import multiprocessing
@@ -24,7 +24,7 @@ TRAIN_WINDOW = 10       # Number of past samples (files) to train on (Walk-Forwa
 TOP_N = 100             # Number of top predicted vectors to evaluate
 INITIAL_EQUITY = 10000  # Initial account balance for simulation
 SMOOTHING_WINDOW = 25   # Window for smooth average line
-CORRELATION_WEIGHT = 20.0 # Weight for correlation in fitness function
+SLOPE_WEIGHT = 50.0     # Weight for the slope of the Top N results in fitness function
 
 # Parallel Processing Config
 MAX_WORKERS_OVERRIDE = None  # Set to an integer to override auto-detection (e.g., 8)
@@ -129,29 +129,25 @@ def calculate_drawdowns(equity_curve):
     avg_dd = np.mean(drawdowns) if drawdowns else 0
     return max_dd * 100, avg_dd * 100
 
-def torch_spearman_rank(x, y):
+def calculate_slope_torch(y):
     """
-    Calculates Spearman Rank Correlation using PyTorch.
-    Assumes x and y are 1D tensors on the same device.
-    Uses rank formulation: Pearson correlation of ranks.
+    Calculates the slope of y using least squares (Rank vs Value).
+    X is assumed to be 0, 1, 2, ..., len(y)-1.
     """
-    # 1. Rank data
-    # argsort gives indices that sort the array.
-    # argsort of argsort gives the rank (0-based).
-    rank_x = torch.argsort(torch.argsort(x)).float()
-    rank_y = torch.argsort(torch.argsort(y)).float()
+    n = y.shape[0]
+    if n < 2:
+        return torch.tensor(0.0, device=y.device)
 
-    # 2. Normalize (subtract mean)
-    rank_x = rank_x - torch.mean(rank_x)
-    rank_y = rank_y - torch.mean(rank_y)
+    x = torch.arange(n, dtype=torch.float32, device=y.device)
 
-    # 3. Pearson Correlation numerator and denominator
-    numerator = torch.sum(rank_x * rank_y)
-    denominator = torch.sqrt(torch.sum(rank_x ** 2) * torch.sum(rank_y ** 2))
+    x_mean = torch.mean(x)
+    y_mean = torch.mean(y)
 
-    # Avoid division by zero
+    numerator = torch.sum((x - x_mean) * (y - y_mean))
+    denominator = torch.sum((x - x_mean) ** 2)
+
     if denominator == 0:
-        return torch.tensor(0.0, device=x.device)
+        return torch.tensor(0.0, device=y.device)
 
     return numerator / denominator
 
@@ -195,13 +191,14 @@ class VectorOptimizer:
 
     def fitness_func(self, ga_instance, solution, solution_idx):
         """
-        Calculates Fitness based on Average of Top N Results + Correlation * Weight.
+        Calculates Fitness based on Average of Top N Results - (Slope * Weight).
+        We desire a high average and a negative slope (increasing rank index -> decreasing result).
+        Fitness = Avg - (Slope * Weight).
         """
         scores = self.calculate_scores(solution)
 
         if self.use_gpu and isinstance(scores, torch.Tensor):
             # Sort scores descending
-            # torch.argsort(descending=True)
             sorted_indices = torch.argsort(scores, descending=True)
             top_n_indices = sorted_indices[:TOP_N]
 
@@ -211,11 +208,13 @@ class VectorOptimizer:
             # Average Result
             avg_result = torch.mean(top_n_targets)
 
-            # Correlation (on all data)
-            corr = torch_spearman_rank(scores, self.targets_torch)
+            # Slope of Rank (0..N-1) vs Result
+            # If Rank 0 is High and Rank N is Low -> Slope is Negative.
+            slope = calculate_slope_torch(top_n_targets)
 
-            # Combine
-            fitness = avg_result + (corr * CORRELATION_WEIGHT)
+            # Combine: We want Max Fitness.
+            # If slope is negative (e.g. -0.5), -(-0.5) is +0.5. Adds to fitness.
+            fitness = avg_result - (slope * SLOPE_WEIGHT)
             return fitness.item()
         else:
             # CPU Fallback
@@ -227,13 +226,21 @@ class VectorOptimizer:
             top_n_indices = sorted_indices[:TOP_N]
 
             top_n_targets = self.targets_np[top_n_indices]
+
+            if len(top_n_targets) == 0:
+                return 0.0
+
             avg_result = np.mean(top_n_targets)
 
-            corr, _ = spearmanr(scores, self.targets_np)
-            if np.isnan(corr):
-                corr = 0.0
+            # Calculate slope
+            if len(top_n_targets) > 1:
+                x = np.arange(len(top_n_targets))
+                res = linregress(x, top_n_targets)
+                slope = res.slope
+            else:
+                slope = 0.0
 
-            fitness = avg_result + (corr * CORRELATION_WEIGHT)
+            fitness = avg_result - (slope * SLOPE_WEIGHT)
             return fitness
 
     def calculate_scores(self, solution):
@@ -466,7 +473,7 @@ def generate_final_verdict_pdf(output_path, rank1_data):
         pdf.savefig()
         plt.close()
 
-def generate_html_report(target_dir, report_data, rank_history, config_vars):
+def generate_html_report(target_dir, report_data, rank_history):
     # Process Rank Summary Stats
     ranks_x = []
     max_dds_y = []
@@ -552,13 +559,6 @@ def generate_html_report(target_dir, report_data, rank_history, config_vars):
         </div>
         """
 
-    # Build Configuration Table
-    config_html = "<table style='width: 100%; font-size: 0.9em; border-collapse: collapse; margin-bottom: 20px;'>"
-    config_html += "<tr style='background-color: #f2f2f2;'><th colspan='2' style='padding: 8px; border: 1px solid #ddd; text-align: left;'>Run Configuration</th></tr>"
-    for key, value in config_vars.items():
-        config_html += f"<tr><td style='padding: 8px; border: 1px solid #ddd; font-weight: bold;'>{key}</td><td style='padding: 8px; border: 1px solid #ddd;'>{value}</td></tr>"
-    config_html += "</table>"
-
     # JSON Dumps
     json_summary = json.dumps({
         'ranks': ranks_x,
@@ -593,14 +593,7 @@ def generate_html_report(target_dir, report_data, rank_history, config_vars):
     <body>
         <div class="container">
             <h1 style="text-align: center;">Sequential Distribution Optimizer Report</h1>
-            <p style="text-align: center;"><strong>Engine:</strong> Polars + PyGAD + Torch (Parallel) | <strong>Fitness:</strong> Avg Top {TOP_N} + Corr * {CORRELATION_WEIGHT} | <strong>Lookback:</strong> {FEATURE_LOOKBACK}</p>
-
-            <details style="margin-bottom: 20px; border: 1px solid #ccc; border-radius: 8px;">
-                <summary>Configuration & Parameters</summary>
-                <div class="section-content">
-                    {config_html}
-                </div>
-            </details>
+            <p style="text-align: center;"><strong>Engine:</strong> Polars + PyGAD + Torch (Parallel) | <strong>Fitness:</strong> Avg Top {TOP_N} - (Slope * {SLOPE_WEIGHT}) | <strong>Lookback:</strong> {FEATURE_LOOKBACK}</p>
 
             <div style="text-align: center; margin-bottom: 30px;">
                  <a href="Final_Verdict.pdf" target="_blank" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px;">Download Final Verdict PDF</a>
@@ -794,9 +787,13 @@ def worker_process_file(task_args):
 
         test_avg_res = np.mean(top_n_actual) if len(top_n_actual) > 0 else 0.0
 
-        test_corr, _ = spearmanr(predicted_scores, actual_results)
-        if np.isnan(test_corr):
-            test_corr = 0.0
+        # Calculate Slope for Top N on prediction
+        test_slope = 0.0
+        if len(top_n_actual) > 1:
+            x_range = np.arange(len(top_n_actual))
+            # Linear Regression
+            res = linregress(x_range, top_n_actual)
+            test_slope = res.slope
 
         return {
             'target_file_idx': target_file_idx,
@@ -806,7 +803,7 @@ def worker_process_file(task_args):
             'actual_profits': actual_profits,
             'best_fitness': best_fitness,
             'test_avg_res': test_avg_res,
-            'test_corr': test_corr,
+            'test_slope': test_slope,
             'rules': rules
         }
 
@@ -881,10 +878,12 @@ def main():
     # 4. Prepare Parallel Tasks
     print("Preparing Tasks for Parallel Execution...")
 
-    feature_cols = [
-        "Result_Mean", "Result_Std", "Result_Momentum",
-        "HC_Mean_Mean", "HC_Momentum", "HC_Temporal_Std"
-    ]
+    # feature_cols = [
+    #     "Result_Mean", "Result_Std", "Result_Momentum",
+    #     "HC_Mean_Mean", "HC_Momentum", "HC_Temporal_Std"
+    # ]
+    # Reduced Feature Set as requested
+    feature_cols = ["Result_Std", "HC_Mean_Mean", "HC_Momentum"]
 
     start_pred_idx = FEATURE_LOOKBACK + TRAIN_WINDOW
     tasks = []
@@ -939,7 +938,7 @@ def main():
             idx = res['target_file_idx']
             fname = res['target_filename']
             # print(f"  Finished: {fname} (Fit: {res['best_fitness']:.4f})")
-            print(f"  Finished: {fname} (TrainFit: {res['best_fitness']:.2f}, Test Avg100: {res.get('test_avg_res', 0):.2f}, Test Corr: {res.get('test_corr', 0):.4f})")
+            print(f"  Finished: {fname} (TrainFit: {res['best_fitness']:.2f}, Test Avg100: {res.get('test_avg_res', 0):.2f}, Test Slope: {res.get('test_slope', 0):.4f})")
 
             # Process Result
             scores = res['predicted_scores']
@@ -973,21 +972,6 @@ def main():
 
     print("\nGenerating Reports...")
 
-    # Capture config for report
-    config_vars = {
-        "HYPERCUBE": HYPERCUBE,
-        "FEATURE_LOOKBACK": FEATURE_LOOKBACK,
-        "TRAIN_WINDOW": TRAIN_WINDOW,
-        "TOP_N": TOP_N,
-        "INITIAL_EQUITY": INITIAL_EQUITY,
-        "SMOOTHING_WINDOW": SMOOTHING_WINDOW,
-        "MAX_WORKERS": MAX_WORKERS,
-        "GA_NUM_GENERATIONS": GA_NUM_GENERATIONS,
-        "GA_SOL_PER_POP": GA_SOL_PER_POP,
-        "GA_NUM_PARENTS_MATING": GA_NUM_PARENTS_MATING,
-        "GA_MUTATION_PERCENT_GENES": GA_MUTATION_PERCENT_GENES
-    }
-
     # Calculate stats
     for r in rank_history:
         data = rank_history[r]
@@ -1015,7 +999,7 @@ def main():
     generate_final_verdict_pdf(pdf_path, rank_history[1])
     print(f"PDF Saved: {pdf_path}")
 
-    generate_html_report(target_dir, report_data, rank_history, config_vars)
+    generate_html_report(target_dir, report_data, rank_history)
     print("HTML Report Generated.")
 
 if __name__ == "__main__":
