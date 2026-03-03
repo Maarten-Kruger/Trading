@@ -316,12 +316,16 @@ def generate_html_report(target_dir, report_data, rank_history):
                     {filename} (Click to Load Analysis)
                 </summary>
                 <div class="section-content">
-                    <div style="display: flex; gap: 20px;">
-                        <div style="flex: 2; height: 500px;">
+                    <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                        <div style="flex: 1 1 50%; min-width: 400px; height: 400px;">
                             <h4>Prediction Distribution (Sorted by Rank)</h4>
                             <canvas id="chart-{safe_fname}"></canvas>
                         </div>
-                        <div style="flex: 1; padding: 15px; background: #f0f8ff; border: 1px solid #cce5ff; border-radius: 8px; overflow-y: auto; max-height: 500px;">
+                        <div style="flex: 1 1 30%; min-width: 300px; height: 400px;">
+                            <h4>Confidence (\u03c3) vs Predicted Result (\u03bc) - Top {len(top_preds)}</h4>
+                            <canvas id="scatter-{safe_fname}"></canvas>
+                        </div>
+                        <div style="flex: 1 1 100%; padding: 15px; background: #f0f8ff; border: 1px solid #cce5ff; border-radius: 8px; margin-top: 10px;">
                             <h4 style="margin-top:0;">SGP Model Info</h4>
                             <div style="font-family: monospace; font-size: 1.0em; color: #333;">
                                 {weights_str}
@@ -451,6 +455,7 @@ def generate_html_report(target_dir, report_data, rank_history):
                 if (charts[safeFname]) return;
                 const data = reportData[filename];
                 const ctx = document.getElementById('chart-' + safeFname).getContext('2d');
+                const scatterCtx = document.getElementById('scatter-' + safeFname).getContext('2d');
 
                 charts[safeFname] = new Chart(ctx, {{
                     type: 'scatter',
@@ -479,6 +484,36 @@ def generate_html_report(target_dir, report_data, rank_history):
                         scales: {{
                             x: {{ type: 'linear', title: {{ display: true, text: 'Prediction Rank' }} }},
                             y: {{ title: {{ display: true, text: 'Actual Result' }} }}
+                        }}
+                    }}
+                }});
+
+                charts['scatter-' + safeFname] = new Chart(scatterCtx, {{
+                    type: 'scatter',
+                    data: {{
+                        datasets: [{{
+                            label: '\u03c3 vs \u03bc',
+                            data: data.top_preds_table.map(row => ({{x: row.predicted_mean, y: row.uncertainty_std}})),
+                            backgroundColor: 'rgba(153, 102, 255, 0.6)',
+                            pointRadius: 4
+                        }}]
+                    }},
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {{
+                            x: {{ type: 'linear', title: {{ display: true, text: 'Predicted Mean (\u03bc)' }} }},
+                            y: {{ type: 'linear', title: {{ display: true, text: 'Uncertainty (\u03c3)' }} }}
+                        }},
+                        plugins: {{
+                            tooltip: {{
+                                callbacks: {{
+                                    label: function(context) {{
+                                        let pt = data.top_preds_table[context.dataIndex];
+                                        return `Idx: ${{pt.vector_idx}} | \u03bc: ${{pt.predicted_mean.toFixed(4)}} | \u03c3: ${{pt.uncertainty_std.toFixed(4)}}`;
+                                    }}
+                                }}
+                            }}
                         }}
                     }}
                 }});
@@ -805,7 +840,13 @@ def main():
 
         idx = res['target_file_idx']
         fname = res['target_filename']
-        print(f"  Finished: {fname} (TrainFit: {res['best_fitness']:.2f}, Test Avg100: {res.get('test_avg_res', 0):.2f})")
+
+        # Calculate Average Pred Mean and Std
+        top_preds = res.get('top_preds_table', [])
+        avg_pred_mean = np.mean([row['predicted_mean'] for row in top_preds]) if top_preds else 0.0
+        avg_pred_std = np.mean([row['uncertainty_std'] for row in top_preds]) if top_preds else 0.0
+
+        print(f"  Finished: {fname} | ELBO Loss: {res['best_fitness']:.2f} | Avg \u03bc(Top{TOP_N}): {avg_pred_mean:.4f} | Avg \u03c3(Top{TOP_N}): {avg_pred_std:.4f}")
 
         # Process Result
         scores = res['predicted_scores']
@@ -827,15 +868,24 @@ def main():
         display_indices = sorted_indices[:2000]
         smooth_series = pd.Series(act_res[display_indices]).rolling(window=SMOOTHING_WINDOW, min_periods=1, center=True).mean()
 
+        # Convert top_preds_table values to native Python floats to avoid JSON serialization errors
+        top_preds = res.get('top_preds_table', [])
+        for row in top_preds:
+            row['vector_idx'] = int(row['vector_idx'])
+            row['predicted_mean'] = float(row['predicted_mean'])
+            row['uncertainty_std'] = float(row['uncertainty_std'])
+            row['alpha_score'] = float(row['alpha_score'])
+            row['actual_result'] = float(row['actual_result'])
+
         report_data[fname] = {
-            'pred_scores': np.round(scores[display_indices], 4).tolist(),
-            'act_results': np.round(act_res[display_indices], 4).tolist(),
-            'act_profits': np.round(act_prof[display_indices], 2).tolist(),
+            'pred_scores': [float(x) for x in np.round(scores[display_indices], 4)],
+            'act_results': [float(x) for x in np.round(act_res[display_indices], 4)],
+            'act_profits': [float(x) for x in np.round(act_prof[display_indices], 2)],
             'pred_ranks': list(range(1, len(display_indices) + 1)),
-            'smooth': np.round(smooth_series.fillna(0).tolist(), 4).tolist(),
-            'avg': round(np.mean(act_res[display_indices]), 4),
+            'smooth': [float(x) for x in np.round(smooth_series.fillna(0).tolist(), 4)],
+            'avg': float(np.round(np.mean(act_res[display_indices]), 4)),
             'weights_info': res['weights_info'],
-            'top_preds_table': res.get('top_preds_table', [])
+            'top_preds_table': top_preds
         }
 
     # For simplicity and to avoid multiprocessing OOM entirely, run sequentially if max_workers=1
