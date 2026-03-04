@@ -17,15 +17,15 @@ import gpytorch
 from sklearn.preprocessing import StandardScaler
 
 # --- Configuration ---
-TRAIN_WINDOW = 30       # Number of past samples (files) to train on (Walk-Forward Window)
-TOP_N = 100             # Number of top predicted vectors to evaluate
+TRAIN_WINDOW = 20       # Number of past samples (files) to train on (Walk-Forward Window)
+TOP_N = 200             # Number of top predicted vectors to evaluate
 INITIAL_EQUITY = 10000  # Initial account balance for simulation
 SMOOTHING_WINDOW = 25   # Window for smooth average line
 MAX_WORKERS = 1
 
 # SGP Configuration
-INDUCING_POINTS = 500   # Number of inducing points for Sparse Gaussian Process
-TRAINING_ITERATIONS = 100 # Number of iterations for GP optimization
+INDUCING_POINTS = 2000   # Number of inducing points for Sparse Gaussian Process
+TRAINING_ITERATIONS = 200 # Number of iterations for GP optimization
 STABILITY_WEIGHT = 1.0  # Kappa (κ). Higher values prioritize stability (lower variance), lower values prioritize expected return.
 
 
@@ -554,7 +554,7 @@ def generate_html_report(target_dir, report_data, rank_history):
     </html>
     """
 
-    with open(os.path.join(target_dir, "Vector_Prediction_Distribution_EV.html"), "w", encoding='utf-8') as f:
+    with open(os.path.join(target_dir, "Map_Prediction_STK_GP.html"), "w", encoding='utf-8') as f:
         f.write(html_content)
 
 
