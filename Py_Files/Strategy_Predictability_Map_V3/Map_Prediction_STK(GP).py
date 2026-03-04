@@ -10,29 +10,23 @@ import pandas as pd
 import polars as pl
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-from sklearn.neighbors import KDTree
-from scipy.stats import spearmanr, linregress
-import itertools
 import concurrent.futures
 import multiprocessing
 import torch
+import gpytorch
+from sklearn.preprocessing import StandardScaler
 
 # --- Configuration ---
-HYPERCUBE = 1          # Hypercube size (steps) for averaging neighbors
-FEATURE_LOOKBACK = 5    # Number of past files to look back for feature calculation
-TRAIN_WINDOW = 10       # Number of past samples (files) to train on (Walk-Forward Window)
+TRAIN_WINDOW = 30       # Number of past samples (files) to train on (Walk-Forward Window)
 TOP_N = 100             # Number of top predicted vectors to evaluate
 INITIAL_EQUITY = 10000  # Initial account balance for simulation
 SMOOTHING_WINDOW = 25   # Window for smooth average line
-SLOPE_WEIGHT = 50.0     # Weight for the slope of the Top N results in fitness function
-MAX_WORKERS = 4
+MAX_WORKERS = 1
 
-# Grid Search Configuration [Start, Step, Stop] (Inclusive of Stop if step matches)
-# Python range is [Start, Stop), so we will adjust in code or just interpret as such.
-# User said: "Results_std_range = [2, 1, 20], where the left is the start, middle = step, last = stop."
-RESULT_STD_RANGE = [2, 2, 10]
-HC_MEAN_MEAN_RANGE = [2, 2, 10]
-HC_MOMENTUM_RANGE = [2, 2, 10]
+# SGP Configuration
+INDUCING_POINTS = 500   # Number of inducing points for Sparse Gaussian Process
+TRAINING_ITERATIONS = 100 # Number of iterations for GP optimization
+STABILITY_WEIGHT = 1.0  # Kappa (κ). Higher values prioritize stability (lower variance), lower values prioritize expected return.
 
 
 # Suppress warnings
@@ -117,289 +111,84 @@ def calculate_drawdowns(equity_curve):
     avg_dd = np.mean(drawdowns) if drawdowns else 0
     return max_dd * 100, avg_dd * 100
 
-def calculate_slope_torch(y):
+class SpatioTemporalSGP(gpytorch.models.ApproximateGP):
+    def __init__(self, inducing_points, num_spatial_dims):
+        # We use a Cholesky variational distribution for the inducing points
+        variational_distribution = gpytorch.variational.CholeskyVariationalDistribution(inducing_points.size(0))
+
+        # We use the standard VariationalStrategy
+        variational_strategy = gpytorch.variational.VariationalStrategy(
+            self, inducing_points, variational_distribution, learn_inducing_locations=True
+        )
+        super(SpatioTemporalSGP, self).__init__(variational_strategy)
+
+        # The mean module
+        self.mean_module = gpytorch.means.ConstantMean()
+
+        # Spatial Kernel (Matern 5/2 usually works well for parameter spaces)
+        self.covar_module_spatial = gpytorch.kernels.ScaleKernel(
+            gpytorch.kernels.MaternKernel(nu=2.5, active_dims=tuple(range(num_spatial_dims)))
+        )
+
+        # Temporal Kernel (Matern 1/2 or RBF for time)
+        self.covar_module_temporal = gpytorch.kernels.ScaleKernel(
+            gpytorch.kernels.RBFKernel(active_dims=(num_spatial_dims,))
+        )
+
+        # Composite Kernel (Multiply Spatial and Temporal to capture space-time interactions)
+        self.covar_module = self.covar_module_spatial * self.covar_module_temporal
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+
+
+def build_raw_features_polars(df_list, master_vectors):
     """
-    Calculates the slope of y using least squares (Rank vs Value).
-    X is assumed to be 0, 1, 2, ..., len(y)-1.
-    """
-    n = y.shape[0]
-    if n < 2:
-        return torch.tensor(0.0, device=y.device)
-
-    x = torch.arange(n, dtype=torch.float32, device=y.device)
-
-    x_mean = torch.mean(x)
-    y_mean = torch.mean(y)
-
-    numerator = torch.sum((x - x_mean) * (y - y_mean))
-    denominator = torch.sum((x - x_mean) ** 2)
-
-    if denominator == 0:
-        return torch.tensor(0.0, device=y.device)
-
-    return numerator / denominator
-
-class GridSearchOptimizer:
-    def __init__(self, data_df, feature_cols, target_col='Result_Next'):
-        """
-        data_df: Polars DataFrame containing training data.
-        feature_cols: List of column names to use as features.
-        target_col: Column name of the target variable (Next Result).
-        """
-        self.data_pd = data_df.to_pandas()
-
-        # Ensure features are in specific order for formula:
-        # Score = (W_mean * HC_Mean_Mean) + (W_mom * HC_Momentum) - (W_std * Result_Std)
-        # Expected cols: ['Result_Std', 'HC_Mean_Mean', 'HC_Momentum']
-
-        # We map specific columns to indices for clearer math later
-        self.col_map = {
-            'Result_Std': -1,
-            'HC_Mean_Mean': -1,
-            'HC_Momentum': -1
-        }
-
-        for i, f in enumerate(feature_cols):
-            if f in self.col_map:
-                self.col_map[f] = i
-
-        self.features_np = self.data_pd[feature_cols].values
-        self.targets_np = self.data_pd[target_col].values
-        self.feature_names = feature_cols
-        self.num_features = len(feature_cols)
-
-        # Determine GPU usage
-        self.use_gpu = False
-        self.device = "cpu"
-
-        if torch.cuda.is_available():
-            try:
-                self.device = "cuda"
-                self.use_gpu = True
-                self.targets_torch = torch.tensor(self.targets_np, dtype=torch.float32, device=self.device)
-                self.features_torch = torch.tensor(self.features_np, dtype=torch.float32, device=self.device)
-            except Exception as e:
-                self.use_gpu = False
-                self.device = "cpu"
-                self.targets_torch = torch.tensor(self.targets_np, dtype=torch.float32, device="cpu")
-        else:
-            self.targets_torch = torch.tensor(self.targets_np, dtype=torch.float32, device="cpu")
-
-    def generate_grid(self):
-        """
-        Generates the grid of weights.
-        """
-        # Range: [start, step, stop] -> np.arange(start, stop + step, step) to include stop
-        def get_range(cfg):
-            start, step, stop = cfg
-            # Add epsilon to ensure stop is included
-            return np.arange(start, stop + step/1000.0, step)
-
-        r_std = get_range(RESULT_STD_RANGE)
-        r_mean = get_range(HC_MEAN_MEAN_RANGE)
-        r_mom = get_range(HC_MOMENTUM_RANGE)
-
-        # Cartesian product
-        grid = np.array(list(itertools.product(r_std, r_mean, r_mom)))
-
-        # Columns in grid correspond to: W_std, W_mean, W_mom
-        return grid
-
-    def evaluate_grid(self, grid_weights):
-        """
-        Evaluates the entire grid of weights against the current dataset.
-        grid_weights: (N_combinations, 3) matrix.
-        Returns: fitness_scores (N_combinations,)
-        """
-        if self.use_gpu:
-            return self.evaluate_grid_torch(grid_weights)
-        else:
-            return self.evaluate_grid_cpu(grid_weights)
-
-    def evaluate_grid_torch(self, grid_weights):
-        # Convert weights to tensor
-        # Shape: (3, N_combs) for matmul
-        weights_t = torch.tensor(grid_weights.T, dtype=torch.float32, device=self.device)
-
-        # Features: (N_samples, 3)
-        # We need to map features correctly to formula:
-        # Score = (W_mean * HC_Mean_Mean) + (W_mom * HC_Momentum) - (W_std * Result_Std)
-
-        # Extract individual feature columns
-        # self.features_torch columns are in order of FEATURE_COLS list passed in init
-        # defined in main as: ["Result_Std", "HC_Mean_Mean", "HC_Momentum"]
-        # So col 0 = Std, col 1 = Mean, col 2 = Mom
-
-        f_std = self.features_torch[:, 0].unsqueeze(1) # (N_samples, 1)
-        f_mean = self.features_torch[:, 1].unsqueeze(1)
-        f_mom = self.features_torch[:, 2].unsqueeze(1)
-
-        # Weights: row 0 = W_std, row 1 = W_mean, row 2 = W_mom
-        w_std = weights_t[0, :] # (N_combs,)
-        w_mean = weights_t[1, :]
-        w_mom = weights_t[2, :]
-
-        # Compute Scores Matrix: (N_samples, N_combs)
-        # Score = Mean*Wmean + Mom*Wmom - Std*Wstd
-        scores = (f_mean @ w_mean.unsqueeze(0)) + (f_mom @ w_mom.unsqueeze(0)) - (f_std @ w_std.unsqueeze(0))
-
-        # Now find Top N for each column (each weight set)
-        # scores shape: (N_samples, N_combs)
-        # torch.topk returns values and indices
-        top_k = torch.topk(scores, k=TOP_N, dim=0) # dim=0 means along samples
-        top_indices = top_k.indices # (TOP_N, N_combs)
-
-        # Gather targets for these indices
-        # targets_torch is (N_samples,)
-        # Expand targets to gather: (N_samples, N_combs) -> gather along dim 0
-        # Actually, simpler:
-        # top_indices is (TOP_N, N_combs)
-        # We want to lookup targets.
-        # targets[top_indices] works if we treat targets as 1D and indices as shape
-        selected_targets = self.targets_torch[top_indices] # Shape: (TOP_N, N_combs)
-
-        # Calculate Fitness per comb
-        # Fitness = Avg - (Slope * Weight)
-
-        # 1. Average Result
-        avg_results = torch.mean(selected_targets, dim=0) # (N_combs,)
-
-        # 2. Slope calculation (vectorized)
-        # X is 0..TOP_N-1
-        n = TOP_N
-        x = torch.arange(n, dtype=torch.float32, device=self.device)
-        x_mean = torch.mean(x)
-        x_dev = x - x_mean
-        denom = torch.sum(x_dev ** 2)
-
-        y_mean = torch.mean(selected_targets, dim=0)
-        y_dev = selected_targets - y_mean.unsqueeze(0)
-
-        # sum((x-x_mean)*(y-y_mean))
-        # Broadcast x_dev to (TOP_N, 1)
-        numer = torch.sum(x_dev.unsqueeze(1) * y_dev, dim=0)
-
-        slopes = numer / denom
-
-        fitness = avg_results - (slopes * SLOPE_WEIGHT)
-
-        return fitness # (N_combs,)
-
-    def evaluate_grid_cpu(self, grid_weights):
-        # CPU Version (slower, fallback)
-        n_combs = grid_weights.shape[0]
-        fitness_scores = np.zeros(n_combs)
-
-        # Features
-        f_std = self.features_np[:, 0]
-        f_mean = self.features_np[:, 1]
-        f_mom = self.features_np[:, 2]
-
-        for i in range(n_combs):
-            w = grid_weights[i]
-            w_std, w_mean, w_mom = w[0], w[1], w[2]
-
-            scores = (f_mean * w_mean) + (f_mom * w_mom) - (f_std * w_std)
-
-            # Top N
-            top_indices = np.argsort(scores)[::-1][:TOP_N]
-            top_targets = self.targets_np[top_indices]
-
-            avg_res = np.mean(top_targets)
-
-            if len(top_targets) > 1:
-                res = linregress(np.arange(len(top_targets)), top_targets)
-                slope = res.slope
-            else:
-                slope = 0.0
-
-            fitness_scores[i] = avg_res - (slope * SLOPE_WEIGHT)
-
-        return fitness_scores
-
-    def predict_top_n(self, best_weights):
-        """
-        Uses best weights to predict Top N on this dataset.
-        Returns: scores, indices
-        """
-        w_std, w_mean, w_mom = best_weights
-
-        if self.use_gpu:
-             f_std = self.features_torch[:, 0]
-             f_mean = self.features_torch[:, 1]
-             f_mom = self.features_torch[:, 2]
-             scores = (f_mean * w_mean) + (f_mom * w_mom) - (f_std * w_std)
-             scores = scores.cpu().numpy()
-        else:
-             f_std = self.features_np[:, 0]
-             f_mean = self.features_np[:, 1]
-             f_mom = self.features_np[:, 2]
-             scores = (f_mean * w_mean) + (f_mom * w_mom) - (f_std * w_std)
-
-        return scores
-
-
-def build_features_polars(df_list, master_vectors, hypercube_neighbor_indices):
-    """
+    Builds the dataset of (Spatial_Params, Time_Index, Result, Profit) for each file.
+    Does not compute rolling windows or hypercubes.
     df_list: List of Polars DataFrames (one per file, sorted chronologically).
     master_vectors: Polars DataFrame of vector parameters.
-    hypercube_neighbor_indices: List of neighbor indices for each vector (from KDTree).
     """
-
     processed_files = []
-    print("Computing Hypercube Statistics...")
+    print("Compiling raw spatial-temporal data...")
+
+    vector_cols = [c for c in master_vectors.columns if c != 'Master_Index']
 
     for file_idx, df in enumerate(df_list):
-        vector_cols = [c for c in master_vectors.columns if c != 'Master_Index']
         merged = master_vectors.join(df, on=vector_cols, how='left').fill_null(0.0)
 
+        # We keep the spatial parameters for each row, plus add the file_idx (time)
         results = merged['Result'].to_numpy()
         profits = merged['Profit'].to_numpy()
 
-        hc_means = np.zeros_like(results)
+        # We also need the actual parameter columns flattened out into this dataframe
+        # However, to save memory and avoid redundant strings, we will rely on vector_idx
+        # But we do need the raw parameters for the SGP features.
 
-        for v_idx, neighbors in enumerate(hypercube_neighbor_indices):
-            if len(neighbors) > 0:
-                hc_means[v_idx] = np.mean(results[neighbors])
-            else:
-                hc_means[v_idx] = results[v_idx]
+        # Determine the length safely based on the array lengths
+        n_vectors = len(results)
 
+        # Make a smaller dataframe to save memory
         file_df = pl.DataFrame({
-            'File_Index': file_idx,
-            'Vector_Index': np.arange(len(results)),
-            'Result': results,
-            'Profit': profits,
-            'Hypercube_Mean': hc_means
+            'File_Index': np.full(n_vectors, file_idx, dtype=np.int16),
+            'Vector_Index': np.arange(n_vectors, dtype=np.int32),
+            'Result': results.astype(np.float32),
+            'Profit': profits.astype(np.float32)
         })
 
         processed_files.append(file_df)
 
     full_df = pl.concat(processed_files)
 
-    print("Computing Temporal Features (Rolling Windows)...")
-
+    # We want to predict Result of NEXT file (Target)
     full_df = full_df.sort(['Vector_Index', 'File_Index'])
 
-    # Feature Expressions
-    res_mean_expr = pl.col("Result").rolling_mean(window_size=FEATURE_LOOKBACK).alias("Result_Mean")
-    res_std_expr = pl.col("Result").rolling_std(window_size=FEATURE_LOOKBACK).alias("Result_Std")
-    res_mom_expr = (pl.col("Result") - pl.col("Result").shift(1)).alias("Result_Momentum")
-
-    hc_mean_expr = pl.col("Hypercube_Mean").rolling_mean(window_size=FEATURE_LOOKBACK).alias("HC_Mean_Mean")
-    hc_mom_expr = (pl.col("Hypercube_Mean") - pl.col("Hypercube_Mean").shift(1)).alias("HC_Momentum")
-    hc_std_temp_expr = pl.col("Hypercube_Mean").rolling_std(window_size=FEATURE_LOOKBACK).alias("HC_Temporal_Std")
-
-    # Target: Result of NEXT file
     target_expr = pl.col("Result").shift(-1).alias("Result_Next")
     profit_next_expr = pl.col("Profit").shift(-1).alias("Profit_Next")
 
     full_df = full_df.with_columns([
-        res_mean_expr.over("Vector_Index"),
-        res_std_expr.over("Vector_Index"),
-        res_mom_expr.over("Vector_Index"),
-        hc_mean_expr.over("Vector_Index"),
-        hc_mom_expr.over("Vector_Index"),
-        hc_std_temp_expr.over("Vector_Index"),
         target_expr.over("Vector_Index"),
         profit_next_expr.over("Vector_Index")
     ])
@@ -494,6 +283,31 @@ def generate_html_report(target_dir, report_data, rank_history):
 
         # Rules HTML (now best weights)
         weights_str = report_data[filename]['weights_info']
+        top_preds = report_data[filename].get('top_preds_table', [])
+
+        table_html = """
+        <table style="width: 100%; margin-top: 15px; font-size: 0.85em;">
+            <tr>
+                <th>Rank</th>
+                <th>Vector Index</th>
+                <th>Predicted Mean (\u03bc)</th>
+                <th>Uncertainty Std (\u03c3)</th>
+                <th>Alpha Score (\u03b1)</th>
+                <th>Actual Result</th>
+            </tr>
+        """
+        for i, row in enumerate(top_preds):
+            table_html += f"""
+            <tr>
+                <td>{i + 1}</td>
+                <td>{row['vector_idx']}</td>
+                <td>{row['predicted_mean']:.4f}</td>
+                <td>{row['uncertainty_std']:.4f}</td>
+                <td>{row['alpha_score']:.4f}</td>
+                <td>{row['actual_result']:.4f}</td>
+            </tr>
+            """
+        table_html += "</table>"
 
         html_file_rows += f"""
         <div class="plot-container">
@@ -502,18 +316,29 @@ def generate_html_report(target_dir, report_data, rank_history):
                     {filename} (Click to Load Analysis)
                 </summary>
                 <div class="section-content">
-                    <div style="display: flex; gap: 20px;">
-                        <div style="flex: 2; height: 500px;">
+                    <div style="display: flex; gap: 20px; flex-wrap: wrap;">
+                        <div style="flex: 1 1 50%; min-width: 400px; height: 400px;">
                             <h4>Prediction Distribution (Sorted by Rank)</h4>
                             <canvas id="chart-{safe_fname}"></canvas>
                         </div>
-                        <div style="flex: 1; padding: 15px; background: #f0f8ff; border: 1px solid #cce5ff; border-radius: 8px; overflow-y: auto; max-height: 500px;">
-                            <h4 style="margin-top:0;">Best Weight Set & Top {TOP_N} Stats</h4>
+                        <div style="flex: 1 1 30%; min-width: 300px; height: 400px;">
+                            <h4>Confidence (\u03c3) vs Predicted Result (\u03bc) - Top {len(top_preds)}</h4>
+                            <canvas id="scatter-{safe_fname}"></canvas>
+                        </div>
+                        <div style="flex: 1 1 100%; padding: 15px; background: #f0f8ff; border: 1px solid #cce5ff; border-radius: 8px; margin-top: 10px;">
+                            <h4 style="margin-top:0;">SGP Model Info</h4>
                             <div style="font-family: monospace; font-size: 1.0em; color: #333;">
                                 {weights_str}
                             </div>
                         </div>
                     </div>
+
+                    <details style="margin-top: 15px;">
+                        <summary style="background-color: #f1f3f5; font-size: 0.95em;">Top {len(top_preds)} Predictions Table</summary>
+                        <div style="max-height: 300px; overflow-y: auto;">
+                            {table_html}
+                        </div>
+                    </details>
                 </div>
             </details>
         </div>
@@ -553,26 +378,22 @@ def generate_html_report(target_dir, report_data, rank_history):
     </head>
     <body>
         <div class="container">
-            <h1 style="text-align: center;">Sequential Distribution Optimizer Report</h1>
+            <h1 style="text-align: center;">Spatio-Temporal Kriging SGP Report</h1>
 
             <div class="config-box">
                 <h3 style="margin-top:0;">Configuration & Parameters</h3>
                 <ul style="column-count: 3; list-style-type: none; padding: 0; margin: 0;">
-                    <li><strong>Engine:</strong> Polars + Torch Grid Search</li>
-                    <li><strong>Hypercube Size:</strong> {HYPERCUBE}</li>
-                    <li><strong>Lookback:</strong> {FEATURE_LOOKBACK}</li>
-                    <li><strong>Train Window:</strong> {TRAIN_WINDOW}</li>
-                    <li><strong>Top N:</strong> {TOP_N}</li>
-                    <li><strong>Smooth Window:</strong> {SMOOTHING_WINDOW}</li>
-                    <li><strong>Slope Weight:</strong> {SLOPE_WEIGHT}</li>
+                    <li><strong>Engine:</strong> GPyTorch + CUDA</li>
+                    <li><strong>Train Window (Time):</strong> {TRAIN_WINDOW} files</li>
+                    <li><strong>Top N Predictions:</strong> {TOP_N}</li>
+                    <li><strong>Inducing Points:</strong> {INDUCING_POINTS}</li>
+                    <li><strong>Training Iterations:</strong> {TRAINING_ITERATIONS}</li>
+                    <li><strong>Stability Weight (\u03ba):</strong> {STABILITY_WEIGHT}</li>
                     <li><strong>Workers:</strong> {MAX_WORKERS}</li>
-                    <li><strong>Result Std Range:</strong> {RESULT_STD_RANGE}</li>
-                    <li><strong>HC Mean Range:</strong> {HC_MEAN_MEAN_RANGE}</li>
-                    <li><strong>HC Mom Range:</strong> {HC_MOMENTUM_RANGE}</li>
                 </ul>
             </div>
 
-            <p style="text-align: center;"><strong>Score Formula:</strong> (W_mean * HC_Mean_Mean) + (W_mom * HC_Momentum) - (W_std * Result_Std)</p>
+            <p style="text-align: center;"><strong>Score Formula:</strong> \u03b1(V) = \u03bc(V) - \u03ba \u00b7 \u03c3(V)</p>
 
             <div style="text-align: center; margin-bottom: 30px;">
                  <a href="Final_Verdict.pdf" target="_blank" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px;">Download Final Verdict PDF</a>
@@ -634,6 +455,7 @@ def generate_html_report(target_dir, report_data, rank_history):
                 if (charts[safeFname]) return;
                 const data = reportData[filename];
                 const ctx = document.getElementById('chart-' + safeFname).getContext('2d');
+                const scatterCtx = document.getElementById('scatter-' + safeFname).getContext('2d');
 
                 charts[safeFname] = new Chart(ctx, {{
                     type: 'scatter',
@@ -662,6 +484,36 @@ def generate_html_report(target_dir, report_data, rank_history):
                         scales: {{
                             x: {{ type: 'linear', title: {{ display: true, text: 'Prediction Rank' }} }},
                             y: {{ title: {{ display: true, text: 'Actual Result' }} }}
+                        }}
+                    }}
+                }});
+
+                charts['scatter-' + safeFname] = new Chart(scatterCtx, {{
+                    type: 'scatter',
+                    data: {{
+                        datasets: [{{
+                            label: '\u03c3 vs \u03bc',
+                            data: data.top_preds_table.map(row => ({{x: row.predicted_mean, y: row.uncertainty_std}})),
+                            backgroundColor: 'rgba(153, 102, 255, 0.6)',
+                            pointRadius: 4
+                        }}]
+                    }},
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {{
+                            x: {{ type: 'linear', title: {{ display: true, text: 'Predicted Mean (\u03bc)' }} }},
+                            y: {{ type: 'linear', title: {{ display: true, text: 'Uncertainty (\u03c3)' }} }}
+                        }},
+                        plugins: {{
+                            tooltip: {{
+                                callbacks: {{
+                                    label: function(context) {{
+                                        let pt = data.top_preds_table[context.dataIndex];
+                                        return `Idx: ${{pt.vector_idx}} | \u03bc: ${{pt.predicted_mean.toFixed(4)}} | \u03c3: ${{pt.uncertainty_std.toFixed(4)}}`;
+                                    }}
+                                }}
+                            }}
                         }}
                     }}
                 }});
@@ -714,121 +566,152 @@ def worker_process_file(task_args):
     try:
         target_file_idx = task_args['target_file_idx']
         target_filename = task_args['target_filename']
-        train_data_pd = task_args['train_data'] # This is a Pandas DataFrame (subset)
-        pred_data_pd = task_args['pred_data']   # Pandas DF subset
-        feature_cols = task_args['feature_cols']
+        train_data_pd = task_args['train_data']
+        pred_data_pd = task_args['pred_data']
+        master_numpy = task_args['master_numpy'] # Used to look up spatial parameters
 
-        # 1. Create Optimizer to generate grid
-        # We pass a dummy df first just to access generate_grid, or static method?
-        # Better to instantiate with first training file to get device info etc.
-        # However, we have a list of training files in `train_data_pd`.
-        # We need to split train_data_pd by File_Index to loop through training window
+        # Set up Device
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        train_file_indices = sorted(train_data_pd['File_Index'].unique())
+        # Prepare Training Data
+        # Drop rows where target is NA/null
+        train_data_pd = train_data_pd.dropna(subset=['Result_Next'])
 
-        # Instantiate one optimizer to generate the grid (and reuse device logic)
-        # We can use the whole training set for init, but we will call evaluate file by file.
-        # Actually, evaluate_grid takes features/targets.
+        # Features: Spatial Parameters + Temporal Index
+        # Extract Vector Indices to get spatial params
+        train_v_indices = train_data_pd['Vector_Index'].values.astype(int)
+        train_spatial = master_numpy[train_v_indices]
+        train_temporal = train_data_pd['File_Index'].values.reshape(-1, 1)
 
-        # Split data by file
-        train_files_data = []
-        for fidx in train_file_indices:
-             train_files_data.append(train_data_pd[train_data_pd['File_Index'] == fidx])
+        train_X_np = np.hstack([train_spatial, train_temporal])
+        train_Y_np = train_data_pd['Result_Next'].values
 
-        # Initialize helper (using first file to setup grid/gpu)
-        helper = GridSearchOptimizer(pl.from_pandas(train_files_data[0]), feature_cols, target_col='Result_Next')
-        grid = helper.generate_grid() # (N_combs, 3)
+        # Prepare Prediction Data (Input for target_file_idx)
+        # We use the previous step's data to predict the target file.
+        # But wait! For SGP predicting step K, the input is Spatial Params + Time K
+        # The target file index IS time K. So we construct the test inputs using target_file_idx.
+        test_v_indices = pred_data_pd['Vector_Index'].values.astype(int)
+        test_spatial = master_numpy[test_v_indices]
+        test_temporal = np.full((len(test_spatial), 1), target_file_idx) # Predict for Time K
 
-        # Accumulate fitness scores
-        total_fitness = None
-
-        for i, df_chunk in enumerate(train_files_data):
-            # Create optimizer for this file
-            # Optimization: reuse helper if we just swap data?
-            # Creating new object is cleaner for now.
-            opt = GridSearchOptimizer(pl.from_pandas(df_chunk), feature_cols, target_col='Result_Next')
-
-            scores = opt.evaluate_grid(grid) # (N_combs,)
-
-            if self_is_gpu := opt.use_gpu: # Capture if we used GPU
-                 if not isinstance(scores, torch.Tensor):
-                      scores = torch.tensor(scores, device=opt.device)
-
-            if total_fitness is None:
-                total_fitness = scores
-            else:
-                total_fitness += scores
-
-        # Average Fitness
-        avg_fitness = total_fitness / len(train_files_data)
-
-        # Find Best Index
-        if isinstance(avg_fitness, torch.Tensor):
-            best_idx = torch.argmax(avg_fitness).item()
-            best_fit_val = avg_fitness[best_idx].item()
-            avg_fitness_cpu = avg_fitness.cpu().numpy()
-        else:
-            best_idx = np.argmax(avg_fitness)
-            best_fit_val = avg_fitness[best_idx]
-            avg_fitness_cpu = avg_fitness
-
-        best_weights = grid[best_idx] # [W_std, W_mean, W_mom]
-
-        # Predict on Current File (Target)
-        predictor = GridSearchOptimizer(pl.from_pandas(pred_data_pd), feature_cols, target_col='Result_Next')
-        predicted_scores = predictor.predict_top_n(best_weights)
-
-        actual_results = predictor.targets_np
+        test_X_np = np.hstack([test_spatial, test_temporal])
+        actual_results = pred_data_pd['Result_Next'].values # The actual results we are trying to predict
         actual_profits = pred_data_pd['Profit_Next'].values
 
-        # Calculate Stats for the Prediction (Test) Set
-        # Sort scores descending
-        sorted_indices = np.argsort(predicted_scores)[::-1]
-        top_n_indices = sorted_indices[:TOP_N]
-        top_n_actual = actual_results[top_n_indices]
+        # Scale Data
+        scaler_X = StandardScaler()
+        train_X_scaled = scaler_X.fit_transform(train_X_np)
+        test_X_scaled = scaler_X.transform(test_X_np)
 
-        test_avg_res = np.mean(top_n_actual) if len(top_n_actual) > 0 else 0.0
+        scaler_Y = StandardScaler()
+        train_Y_scaled = scaler_Y.fit_transform(train_Y_np.reshape(-1, 1)).flatten()
 
-        # Calculate Slope for Top N on prediction
-        test_slope = 0.0
-        if len(top_n_actual) > 1:
-            x_range = np.arange(len(top_n_actual))
-            # Linear Regression
-            res = linregress(x_range, top_n_actual)
-            test_slope = res.slope
+        # Convert to PyTorch tensors
+        train_X_tensor = torch.tensor(train_X_scaled, dtype=torch.float32, device=device)
+        train_Y_tensor = torch.tensor(train_Y_scaled, dtype=torch.float32, device=device)
+        test_X_tensor = torch.tensor(test_X_scaled, dtype=torch.float32, device=device)
 
-        # Calculate Average Features for Top N
-        # We need the feature values corresponding to the top_n_indices
-        top_n_features = predictor.features_np[top_n_indices] # Shape (TOP_N, 3)
-        # Columns: [Result_Std, HC_Mean_Mean, HC_Momentum]
+        # Free some memory if possible
+        del train_data_pd
+        del pred_data_pd
+        del train_X_np
+        del train_Y_np
+        del test_X_np
+        del train_X_scaled
+        del train_Y_scaled
+        del test_X_scaled
 
-        avg_std_val = np.mean(top_n_features[:, 0])
-        avg_mean_val = np.mean(top_n_features[:, 1])
-        avg_mom_val = np.mean(top_n_features[:, 2])
+        # Initialize SGP Model
+        num_dims = train_X_tensor.shape[1]
 
-        # Format weights for report
+        # Select inducing points randomly from training set
+        num_inducing = min(INDUCING_POINTS, train_X_tensor.shape[0])
+        inducing_indices = torch.randperm(train_X_tensor.shape[0])[:num_inducing]
+        inducing_points = train_X_tensor[inducing_indices]
+
+        model = SpatioTemporalSGP(inducing_points=inducing_points, num_spatial_dims=num_dims-1).to(device)
+        likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
+
+        # Train GP
+        model.train()
+        likelihood.train()
+
+        optimizer = torch.optim.Adam([
+            {'params': model.parameters()},
+            {'params': likelihood.parameters()},
+        ], lr=0.1)
+
+        # Loss for GP (Variational ELBO)
+        mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=train_Y_tensor.size(0))
+
+        final_loss = 0.0
+        for i in range(TRAINING_ITERATIONS):
+            optimizer.zero_grad()
+            output = model(train_X_tensor)
+            loss = -mll(output, train_Y_tensor)
+            loss.backward()
+            optimizer.step()
+            final_loss = loss.item()
+
+        # Prediction
+        model.eval()
+        likelihood.eval()
+
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():
+            # Process in chunks to avoid OOM
+            chunk_size = 5000
+            pred_mean_scaled_list = []
+            pred_var_scaled_list = []
+            for i in range(0, len(test_X_tensor), chunk_size):
+                preds = likelihood(model(test_X_tensor[i:i+chunk_size]))
+                pred_mean_scaled_list.append(preds.mean.cpu().numpy())
+                pred_var_scaled_list.append(preds.variance.cpu().numpy())
+            pred_mean_scaled = np.concatenate(pred_mean_scaled_list)
+            pred_var_scaled = np.concatenate(pred_var_scaled_list)
+
+        # Inverse transform mean and variance
+        # Var(aX) = a^2 Var(X) => std(aX) = a * std(X)
+        pred_mean = scaler_Y.inverse_transform(pred_mean_scaled.reshape(-1, 1)).flatten()
+        pred_std = np.sqrt(pred_var_scaled) * scaler_Y.scale_[0]
+
+        # Calculate Alpha (Ranking Score)
+        # alpha(V) = mu(V) - kappa * sigma(V)
+        alpha_scores = pred_mean - (STABILITY_WEIGHT * pred_std)
+
+        # Format weights info to show ELBO Loss and info
         weights_info = (
-            f"<b>Weights Found:</b><br>"
-            f"W_mean (HC_Mean): {best_weights[1]:.1f}<br>"
-            f"W_mom  (HC_Mom) : {best_weights[2]:.1f}<br>"
-            f"W_std  (Res_Std): {best_weights[0]:.1f}<br><br>"
-            f"<b>Average Stats of Top {TOP_N} Vectors:</b><br>"
-            f"Avg HC_Mean : {avg_mean_val:.4f}<br>"
-            f"Avg HC_Mom  : {avg_mom_val:.4f}<br>"
-            f"Avg Res_Std : {avg_std_val:.4f}<br>"
-            f"<br><i>(Score = W_mean*Mean + W_mom*Mom - W_std*Std)</i>"
+            f"<b>Spatio-Temporal SGP Trained:</b><br>"
+            f"Inducing Points: {num_inducing}<br>"
+            f"Training Iterations: {TRAINING_ITERATIONS}<br>"
+            f"Final ELBO Loss: {final_loss:.4f}<br>"
+            f"Stability Weight (\u03ba): {STABILITY_WEIGHT}<br>"
         )
+
+        # Generate Top N Output Table Data
+        sorted_indices = np.argsort(alpha_scores)[::-1]
+        top_n_indices = sorted_indices[:TOP_N]
+
+        top_preds = []
+        for idx in top_n_indices:
+            top_preds.append({
+                'vector_idx': int(idx),
+                'predicted_mean': float(pred_mean[idx]),
+                'uncertainty_std': float(pred_std[idx]),
+                'alpha_score': float(alpha_scores[idx]),
+                'actual_result': float(actual_results[idx])
+            })
 
         return {
             'target_file_idx': target_file_idx,
             'target_filename': target_filename,
-            'predicted_scores': predicted_scores,
+            'predicted_scores': alpha_scores,
             'actual_results': actual_results,
             'actual_profits': actual_profits,
-            'best_fitness': best_fit_val,
-            'test_avg_res': test_avg_res,
-            'test_slope': test_slope,
-            'weights_info': weights_info
+            'best_fitness': -final_loss, # Using negative loss as proxy for fitness tracking
+            'test_avg_res': 0.0, # Removed slope calc for simplicity, can add back if needed
+            'test_slope': 0.0,
+            'weights_info': weights_info,
+            'top_preds_table': top_preds
         }
 
     except Exception as e:
@@ -837,9 +720,9 @@ def worker_process_file(task_args):
 
 # --- Main ---
 def main():
-    print("--- Sequential Distribution Optimizer (Polars + Grid Search + Parallel) ---")
+    print("--- Spatio-Temporal Kriging (Sparse Gaussian Processes) Optimizer ---")
     print(f"Parallel Workers: {MAX_WORKERS}")
-    print(f"Grid Config: STD={RESULT_STD_RANGE}, MEAN={HC_MEAN_MEAN_RANGE}, MOM={HC_MOMENTUM_RANGE}")
+    print(f"SGP Config: INDUCING={INDUCING_POINTS}, ITER={TRAINING_ITERATIONS}, STABILITY_WEIGHT={STABILITY_WEIGHT}")
 
     if len(sys.argv) > 1:
         target_dir = sys.argv[1]
@@ -858,7 +741,7 @@ def main():
     csv_files.sort(key=get_date_from_filename)
     print(f"Found {len(csv_files)} files.")
 
-    min_files = FEATURE_LOOKBACK + TRAIN_WINDOW
+    min_files = TRAIN_WINDOW + 2
     if len(csv_files) < min_files:
         print(f"Error: Not enough files. Need at least {min_files}.")
         return
@@ -877,14 +760,10 @@ def main():
 
     master_vectors = df_temp.select(vector_cols)
     master_vectors = master_vectors.with_columns(pl.lit(np.arange(len(master_vectors))).alias("Master_Index"))
+    # Save raw numpy spatial parameters
     master_numpy = master_vectors.select(vector_cols).to_pandas().apply(pd.to_numeric, errors='coerce').fillna(0).values
 
-    # 2. Build KDTree
-    print(f"Building KDTree (Hypercube={HYPERCUBE})...")
-    tree = KDTree(master_numpy, metric='chebyshev')
-    neighbor_indices = tree.query_radius(master_numpy, r=HYPERCUBE)
-
-    # 3. Load All Data and Build Features
+    # 2. Load All Data and Build Features
     print("Loading all files...")
     df_list = []
     file_dates = []
@@ -892,20 +771,17 @@ def main():
         df_list.append(read_csv_polars(f))
         file_dates.append(os.path.basename(f))
 
-    full_dataset = build_features_polars(df_list, master_vectors, neighbor_indices)
+    full_dataset = build_raw_features_polars(df_list, master_vectors)
     full_dataset = full_dataset.fill_null(0.0)
 
     # Convert entire dataset to Pandas ONCE to allow easy slicing and pickling for workers
     print("Converting Global Dataset to Pandas for Parallel Sharing...")
     full_dataset_pd = full_dataset.to_pandas()
 
-    # 4. Prepare Parallel Tasks
+    # 3. Prepare Parallel Tasks
     print("Preparing Tasks for Parallel Execution...")
 
-    # Strict Feature Columns for Grid Search Formula
-    feature_cols = ["Result_Std", "HC_Mean_Mean", "HC_Momentum"]
-
-    start_pred_idx = FEATURE_LOOKBACK + TRAIN_WINDOW
+    start_pred_idx = TRAIN_WINDOW + 1
     tasks = []
 
     for target_file_idx in range(start_pred_idx, len(csv_files)):
@@ -913,26 +789,37 @@ def main():
 
         # Training Window: Ends at K-2 to predict K (using data from K-1)
         # Train: [K - Window - 1] to [K - 2]
-        # Predict Input: K - 1
+        # Predict Input (to get spatial vector mapping): K - 1
 
         train_start = target_file_idx - TRAIN_WINDOW - 1
         train_end = target_file_idx - 2
 
-        # Slice Data
+        # For training data, downsample if too large, say 10,000 max samples uniformly
+        # To avoid Out Of Memory errors on `multiprocessing` pass
+        cols_to_keep = ['File_Index', 'Vector_Index', 'Result_Next', 'Profit_Next']
         train_data = full_dataset_pd[
             (full_dataset_pd['File_Index'] >= train_start) &
             (full_dataset_pd['File_Index'] <= train_end)
-        ]
+        ][cols_to_keep]
 
-        pred_data = full_dataset_pd[full_dataset_pd['File_Index'] == (target_file_idx - 1)]
+        # Sample training data if we're hitting memory issues
+        if len(train_data) > 20000:
+            train_data = train_data.sample(n=20000, random_state=42)
+
+        pred_data = full_dataset_pd[full_dataset_pd['File_Index'] == (target_file_idx - 1)][cols_to_keep]
 
         tasks.append({
             'target_file_idx': target_file_idx,
             'target_filename': target_filename,
             'train_data': train_data,
             'pred_data': pred_data,
-            'feature_cols': feature_cols
+            'master_numpy': master_numpy
         })
+
+    # Free the massive full_dataset
+    del full_dataset_pd
+    import gc
+    gc.collect()
 
     # 5. Execute Parallel
     print(f"Submitting {len(tasks)} tasks to ProcessPoolExecutor (Workers={MAX_WORKERS})...")
@@ -945,50 +832,74 @@ def main():
     # Use spawn context for CUDA safety if GPU enabled
     ctx = multiprocessing.get_context('spawn')
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, mp_context=ctx) as executor:
-        futures = {executor.submit(worker_process_file, task): task['target_file_idx'] for task in tasks}
+    def process_res(res):
+        if 'error' in res:
+            print(f"Task Failed (Idx {res['target_file_idx']}): {res['error']}")
+            print(res['traceback'])
+            return
 
-        for future in concurrent.futures.as_completed(futures):
-            res = future.result()
+        idx = res['target_file_idx']
+        fname = res['target_filename']
 
-            if 'error' in res:
-                print(f"Task Failed (Idx {res['target_file_idx']}): {res['error']}")
-                # print(res['traceback'])
-                continue
+        # Calculate Average Pred Mean and Std
+        top_preds = res.get('top_preds_table', [])
+        avg_pred_mean = np.mean([row['predicted_mean'] for row in top_preds]) if top_preds else 0.0
+        avg_pred_std = np.mean([row['uncertainty_std'] for row in top_preds]) if top_preds else 0.0
 
-            idx = res['target_file_idx']
-            fname = res['target_filename']
-            print(f"  Finished: {fname} (TrainFit: {res['best_fitness']:.2f}, Test Avg100: {res.get('test_avg_res', 0):.2f})")
+        print(f"  Finished: {fname} | ELBO Loss: {res['best_fitness']:.2f} | Avg \u03bc(Top{TOP_N}): {avg_pred_mean:.4f} | Avg \u03c3(Top{TOP_N}): {avg_pred_std:.4f}")
 
-            # Process Result
-            scores = res['predicted_scores']
-            act_res = res['actual_results']
-            act_prof = res['actual_profits']
+        # Process Result
+        scores = res['predicted_scores']
+        act_res = res['actual_results']
+        act_prof = res['actual_profits']
 
-            # Sort
-            sorted_indices = np.argsort(scores)[::-1]
+        # Sort
+        sorted_indices = np.argsort(scores)[::-1]
 
-            # Store History
-            for i, vec_idx in enumerate(sorted_indices[:TOP_N]):
-                rank = i + 1
-                rank_history[rank]['filenames'].append(fname)
-                rank_history[rank]['results'].append(float(act_res[vec_idx]))
-                rank_history[rank]['profits'].append(float(act_prof[vec_idx]))
-                rank_history[rank]['params'].append(global_params[vec_idx])
+        # Store History
+        for i, vec_idx in enumerate(sorted_indices[:TOP_N]):
+            rank = i + 1
+            rank_history[rank]['filenames'].append(fname)
+            rank_history[rank]['results'].append(float(act_res[vec_idx]))
+            rank_history[rank]['profits'].append(float(act_prof[vec_idx]))
+            rank_history[rank]['params'].append(global_params[vec_idx])
 
-            # Report Data
-            display_indices = sorted_indices[:2000]
-            smooth_series = pd.Series(act_res[display_indices]).rolling(window=SMOOTHING_WINDOW, min_periods=1, center=True).mean()
+        # Report Data
+        display_indices = sorted_indices[:2000]
+        smooth_series = pd.Series(act_res[display_indices]).rolling(window=SMOOTHING_WINDOW, min_periods=1, center=True).mean()
 
-            report_data[fname] = {
-                'pred_scores': np.round(scores[display_indices], 4).tolist(),
-                'act_results': np.round(act_res[display_indices], 4).tolist(),
-                'act_profits': np.round(act_prof[display_indices], 2).tolist(),
-                'pred_ranks': list(range(1, len(display_indices) + 1)),
-                'smooth': np.round(smooth_series.fillna(0).tolist(), 4).tolist(),
-                'avg': round(np.mean(act_res[display_indices]), 4),
-                'weights_info': res['weights_info']
-            }
+        # Convert top_preds_table values to native Python floats to avoid JSON serialization errors
+        top_preds = res.get('top_preds_table', [])
+        for row in top_preds:
+            row['vector_idx'] = int(row['vector_idx'])
+            row['predicted_mean'] = float(row['predicted_mean'])
+            row['uncertainty_std'] = float(row['uncertainty_std'])
+            row['alpha_score'] = float(row['alpha_score'])
+            row['actual_result'] = float(row['actual_result'])
+
+        report_data[fname] = {
+            'pred_scores': [float(x) for x in np.round(scores[display_indices], 4)],
+            'act_results': [float(x) for x in np.round(act_res[display_indices], 4)],
+            'act_profits': [float(x) for x in np.round(act_prof[display_indices], 2)],
+            'pred_ranks': list(range(1, len(display_indices) + 1)),
+            'smooth': [float(x) for x in np.round(smooth_series.fillna(0).tolist(), 4)],
+            'avg': float(np.round(np.mean(act_res[display_indices]), 4)),
+            'weights_info': res['weights_info'],
+            'top_preds_table': top_preds
+        }
+
+    # For simplicity and to avoid multiprocessing OOM entirely, run sequentially if max_workers=1
+    if MAX_WORKERS == 1:
+        for task in tasks:
+            res = worker_process_file(task)
+            process_res(res)
+    else:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, mp_context=ctx) as executor:
+            futures = {executor.submit(worker_process_file, task): task['target_file_idx'] for task in tasks}
+
+            for future in concurrent.futures.as_completed(futures):
+                res = future.result()
+                process_res(res)
 
     print("\nGenerating Reports...")
 
