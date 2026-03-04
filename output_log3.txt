@@ -1,3 +1,0 @@
-  File "/app/Py_Files/Strategy_Predictability_Map_V3/Map_Prediction_STK(GP).py", line 801
-    if MAX_WORKERS == 1:
-IndentationError: unexpected indent
