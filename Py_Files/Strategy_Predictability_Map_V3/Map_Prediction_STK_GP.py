@@ -335,7 +335,7 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
                             <h4>Confidence (\u03c3) vs Predicted Result (\u03bc) - Top {len(top_preds)}</h4>
                             <canvas id="scatter-{safe_fname}"></canvas>
                         </div>
-                        <div style="flex: 1 1 100%; padding: 15px; background: #f0f8ff; border: 1px solid #cce5ff; border-radius: 8px; margin-top: 10px;">
+                        <div style="flex: 1 1 100%; padding: 15px; background: #f0f8ff; border: 1px solid #cce5ff; border-radius: 8px; margin-top: 30px;">
                             <h4 style="margin-top:0;">SGP Model Info</h4>
                             <div style="font-family: monospace; font-size: 1.0em; color: #333;">
                                 {weights_str}
@@ -967,7 +967,7 @@ def main():
     avg_time_per_step = avg_time_per_file / steps_per_task if steps_per_task > 0 else 0
 
     print(f"\nAll files processed.")
-    print(f"Average time per step: {format_time(avg_time_per_step)}")
+    print(f"Average time per step: {avg_time_per_step:.4e} seconds")
 
     print("\nGenerating Reports...")
 
@@ -1002,7 +1002,7 @@ def main():
         'total_time': f"({format_time(data_loading_time)}) + ({format_time(file_processing_time)})",
         'avg_time_per_file': format_time(avg_time_per_file),
         'steps_per_file': steps_per_task,
-        'avg_time_per_step': format_time(avg_time_per_step)
+        'avg_time_per_step': f"{avg_time_per_step:.4e} seconds"
     }
 
     generate_html_report(target_dir, report_data, rank_history, time_stats)
