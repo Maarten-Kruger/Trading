@@ -16,6 +16,8 @@ import torch
 import gpytorch
 from sklearn.preprocessing import StandardScaler
 
+# pip install numpy pandas polars matplotlib torch gpytorch scikit-learn pyarrow
+
 # --- Configuration ---
 TRAIN_WINDOW = 20       # Number of past samples (files) to train on (Walk-Forward Window)
 TOP_N = 200             # Number of top predicted vectors to evaluate
