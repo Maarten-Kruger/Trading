@@ -15,6 +15,7 @@ import multiprocessing
 import torch
 import gpytorch
 from sklearn.preprocessing import StandardScaler
+import datetime
 
 # pip install numpy pandas polars matplotlib torch gpytorch scikit-learn pyarrow
 
@@ -35,6 +36,10 @@ STABILITY_WEIGHT = 1.0  # Kappa (κ). Higher values prioritize stability (lower 
 warnings.filterwarnings("ignore")
 
 # ---------------------
+
+def format_time(seconds):
+    """Format seconds into HH:MM:SS."""
+    return str(datetime.timedelta(seconds=int(seconds)))
 
 def get_date_from_filename(filename):
     """
@@ -225,7 +230,10 @@ def generate_final_verdict_pdf(output_path, rank1_data):
         pdf.savefig()
         plt.close()
 
-def generate_html_report(target_dir, report_data, rank_history):
+def generate_html_report(target_dir, report_data, rank_history, time_stats=None):
+    if time_stats is None:
+        time_stats = {}
+
     # Process Rank Summary Stats
     ranks_x = []
     max_dds_y = []
@@ -383,16 +391,29 @@ def generate_html_report(target_dir, report_data, rank_history):
             <h1 style="text-align: center;">Spatio-Temporal Kriging SGP Report</h1>
 
             <div class="config-box">
-                <h3 style="margin-top:0;">Configuration & Parameters</h3>
-                <ul style="column-count: 3; list-style-type: none; padding: 0; margin: 0;">
-                    <li><strong>Engine:</strong> GPyTorch + CUDA</li>
-                    <li><strong>Train Window (Time):</strong> {TRAIN_WINDOW} files</li>
-                    <li><strong>Top N Predictions:</strong> {TOP_N}</li>
-                    <li><strong>Inducing Points:</strong> {INDUCING_POINTS}</li>
-                    <li><strong>Training Iterations:</strong> {TRAINING_ITERATIONS}</li>
-                    <li><strong>Stability Weight (\u03ba):</strong> {STABILITY_WEIGHT}</li>
-                    <li><strong>Workers:</strong> {MAX_WORKERS}</li>
-                </ul>
+                <div style="display: flex; justify-content: space-between;">
+                    <div style="flex: 2;">
+                        <h3 style="margin-top:0;">Configuration & Parameters</h3>
+                        <ul style="column-count: 2; list-style-type: none; padding: 0; margin: 0;">
+                            <li><strong>Engine:</strong> GPyTorch + CUDA</li>
+                            <li><strong>Train Window (Time):</strong> {TRAIN_WINDOW} files</li>
+                            <li><strong>Top N Predictions:</strong> {TOP_N}</li>
+                            <li><strong>Inducing Points:</strong> {INDUCING_POINTS}</li>
+                            <li><strong>Training Iterations:</strong> {TRAINING_ITERATIONS}</li>
+                            <li><strong>Stability Weight (\u03ba):</strong> {STABILITY_WEIGHT}</li>
+                            <li><strong>Workers:</strong> {MAX_WORKERS}</li>
+                        </ul>
+                    </div>
+                    <div style="flex: 1; border-left: 2px solid #ffeeba; padding-left: 20px;">
+                        <h3 style="margin-top:0;">Performance Stats</h3>
+                        <ul style="list-style-type: none; padding: 0; margin: 0;">
+                            <li><strong>Total Time:</strong> {time_stats.get('total_time', 'N/A')}</li>
+                            <li><strong>Avg Time per File:</strong> {time_stats.get('avg_time_per_file', 'N/A')}</li>
+                            <li><strong>Steps per File:</strong> {time_stats.get('steps_per_file', 'N/A')}</li>
+                            <li><strong>Avg Time per Step:</strong> {time_stats.get('avg_time_per_step', 'N/A')}</li>
+                        </ul>
+                    </div>
+                </div>
             </div>
 
             <p style="text-align: center;"><strong>Score Formula:</strong> \u03b1(V) = \u03bc(V) - \u03ba \u00b7 \u03c3(V)</p>
@@ -722,6 +743,7 @@ def worker_process_file(task_args):
 
 # --- Main ---
 def main():
+    start_time_program = time.time()
     print("--- Spatio-Temporal Kriging (Sparse Gaussian Processes) Optimizer ---")
     print(f"Parallel Workers: {MAX_WORKERS}")
     print(f"SGP Config: INDUCING={INDUCING_POINTS}, ITER={TRAINING_ITERATIONS}, STABILITY_WEIGHT={STABILITY_WEIGHT}")
@@ -823,8 +845,17 @@ def main():
     import gc
     gc.collect()
 
+    data_loading_time = time.time() - start_time_program
+
+    # Calculate steps per task
+    steps_per_task = (INDUCING_POINTS ** 3) * TRAINING_ITERATIONS
+    print(f"Data loading completed in {format_time(data_loading_time)}.")
+    print(f"Number of files to process: {len(tasks)}")
+    print(f"Number of steps per task/worker: {steps_per_task}")
+
     # 5. Execute Parallel
     print(f"Submitting {len(tasks)} tasks to ProcessPoolExecutor (Workers={MAX_WORKERS})...")
+    start_time_processing = time.time()
 
     rank_history = {r: {'filenames': [], 'results': [], 'profits': [], 'params': []} for r in range(1, TOP_N + 1)}
     report_data = {}
@@ -890,18 +921,53 @@ def main():
             'top_preds_table': top_preds
         }
 
-    # For simplicity and to avoid multiprocessing OOM entirely, run sequentially if max_workers=1
-    if MAX_WORKERS == 1:
-        for task in tasks:
-            res = worker_process_file(task)
-            process_res(res)
-    else:
-        with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, mp_context=ctx) as executor:
-            futures = {executor.submit(worker_process_file, task): task['target_file_idx'] for task in tasks}
+    # Process tasks in batches of size MAX_WORKERS
+    num_tasks = len(tasks)
+    total_processed = 0
+    total_file_processing_time = 0.0
 
+    print(f"\nStarting batch processing (Batch Size: {MAX_WORKERS})...")
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, mp_context=ctx) as executor:
+        for i in range(0, num_tasks, MAX_WORKERS):
+            batch_tasks = tasks[i:i+MAX_WORKERS]
+            batch_start_time = time.time()
+
+            # Submit batch
+            futures = [executor.submit(worker_process_file, task) for task in batch_tasks]
+
+            # Wait for the entire batch to finish
             for future in concurrent.futures.as_completed(futures):
                 res = future.result()
                 process_res(res)
+
+            # Batch stats
+            batch_end_time = time.time()
+            batch_duration = batch_end_time - batch_start_time
+            total_file_processing_time += batch_duration
+
+            files_in_batch = len(batch_tasks)
+            total_processed += files_in_batch
+            files_remaining = num_tasks - total_processed
+
+            avg_time_per_file = total_file_processing_time / total_processed
+            eta_seconds = files_remaining * avg_time_per_file
+            total_program_time = time.time() - start_time_program
+
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"\n[{timestamp}] Batch completed!")
+            print(f"  Batch Time: {format_time(batch_duration)}")
+            print(f"  Average Time Per File: {format_time(avg_time_per_file)}")
+            print(f"  Files Remaining: {files_remaining}")
+            print(f"  ETA for remaining files: {format_time(eta_seconds)}")
+            print(f"  Total Running Time: {format_time(total_program_time)}\n")
+
+    file_processing_time = time.time() - start_time_processing
+    avg_time_per_file = file_processing_time / num_tasks if num_tasks > 0 else 0
+    avg_time_per_step = avg_time_per_file / steps_per_task if steps_per_task > 0 else 0
+
+    print(f"\nAll files processed.")
+    print(f"Average time per step: {format_time(avg_time_per_step)}")
 
     print("\nGenerating Reports...")
 
@@ -932,7 +998,14 @@ def main():
     generate_final_verdict_pdf(pdf_path, rank_history[1])
     print(f"PDF Saved: {pdf_path}")
 
-    generate_html_report(target_dir, report_data, rank_history)
+    time_stats = {
+        'total_time': f"({format_time(data_loading_time)}) + ({format_time(file_processing_time)})",
+        'avg_time_per_file': format_time(avg_time_per_file),
+        'steps_per_file': steps_per_task,
+        'avg_time_per_step': format_time(avg_time_per_step)
+    }
+
+    generate_html_report(target_dir, report_data, rank_history, time_stats)
     print("HTML Report Generated.")
 
 if __name__ == "__main__":
