@@ -928,11 +928,12 @@ def main():
 
     print(f"\nStarting batch processing (Batch Size: {MAX_WORKERS})...")
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, mp_context=ctx) as executor:
-        for i in range(0, num_tasks, MAX_WORKERS):
-            batch_tasks = tasks[i:i+MAX_WORKERS]
-            batch_start_time = time.time()
+    for i in range(0, num_tasks, MAX_WORKERS):
+        batch_tasks = tasks[i:i+MAX_WORKERS]
+        batch_start_time = time.time()
 
+        # Spawn fresh workers FOR THIS BATCH ONLY to release VRAM
+        with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_WORKERS, mp_context=ctx) as executor:
             # Submit batch
             futures = [executor.submit(worker_process_file, task) for task in batch_tasks]
 
@@ -941,26 +942,26 @@ def main():
                 res = future.result()
                 process_res(res)
 
-            # Batch stats
-            batch_end_time = time.time()
-            batch_duration = batch_end_time - batch_start_time
-            total_file_processing_time += batch_duration
+        # Batch stats
+        batch_end_time = time.time()
+        batch_duration = batch_end_time - batch_start_time
+        total_file_processing_time += batch_duration
 
-            files_in_batch = len(batch_tasks)
-            total_processed += files_in_batch
-            files_remaining = num_tasks - total_processed
+        files_in_batch = len(batch_tasks)
+        total_processed += files_in_batch
+        files_remaining = num_tasks - total_processed
 
-            avg_time_per_file = total_file_processing_time / total_processed
-            eta_seconds = files_remaining * avg_time_per_file
-            total_program_time = time.time() - start_time_program
+        avg_time_per_file = total_file_processing_time / total_processed
+        eta_seconds = files_remaining * avg_time_per_file
+        total_program_time = time.time() - start_time_program
 
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print(f"\n[{timestamp}] Batch completed!")
-            print(f"  Batch Time: {format_time(batch_duration)}")
-            print(f"  Average Time Per File: {format_time(avg_time_per_file)}")
-            print(f"  Files Remaining: {files_remaining}")
-            print(f"  ETA for remaining files: {format_time(eta_seconds)}")
-            print(f"  Total Running Time: {format_time(total_program_time)}\n")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"\n[{timestamp}] Batch completed!")
+        print(f"  Batch Time: {format_time(batch_duration)}")
+        print(f"  Average Time Per File: {format_time(avg_time_per_file)}")
+        print(f"  Files Remaining: {files_remaining}")
+        print(f"  ETA for remaining files: {format_time(eta_seconds)}")
+        print(f"  Total Running Time: {format_time(total_program_time)}\n")
 
     file_processing_time = time.time() - start_time_processing
     avg_time_per_file = file_processing_time / num_tasks if num_tasks > 0 else 0
