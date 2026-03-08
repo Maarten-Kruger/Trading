@@ -15,6 +15,7 @@ import multiprocessing
 import torch
 import gpytorch
 from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import MiniBatchKMeans
 import datetime
 
 # pip install numpy pandas polars matplotlib torch gpytorch scikit-learn pyarrow
@@ -25,6 +26,11 @@ TOP_N = 200             # Number of top predicted vectors to evaluate
 INITIAL_EQUITY = 10000  # Initial account balance for simulation
 SMOOTHING_WINDOW = 25   # Window for smooth average line
 MAX_WORKERS = 1
+
+PER_FILE = 2000
+HIGH = 0.33
+AVG = 0.33
+LOW = 0.34
 
 # SGP Configuration
 INDUCING_POINTS = 2000   # Number of inducing points for Sparse Gaussian Process
@@ -647,10 +653,16 @@ def worker_process_file(task_args):
         # Initialize SGP Model
         num_dims = train_X_tensor.shape[1]
 
-        # Select inducing points randomly from training set
+        # Select inducing points deterministically using KMeans clustering
         num_inducing = min(INDUCING_POINTS, train_X_tensor.shape[0])
-        inducing_indices = torch.randperm(train_X_tensor.shape[0])[:num_inducing]
-        inducing_points = train_X_tensor[inducing_indices]
+
+        if num_inducing < train_X_tensor.shape[0]:
+            kmeans = MiniBatchKMeans(n_clusters=num_inducing, random_state=42, batch_size=2048, n_init="auto")
+            kmeans.fit(train_X_scaled)
+            inducing_points_np = kmeans.cluster_centers_
+            inducing_points = torch.tensor(inducing_points_np, dtype=torch.float32, device=device)
+        else:
+            inducing_points = train_X_tensor
 
         model = SpatioTemporalSGP(inducing_points=inducing_points, num_spatial_dims=num_dims-1).to(device)
         likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
@@ -820,15 +832,52 @@ def main():
 
         # For training data, downsample if too large, say 10,000 max samples uniformly
         # To avoid Out Of Memory errors on `multiprocessing` pass
-        cols_to_keep = ['File_Index', 'Vector_Index', 'Result_Next', 'Profit_Next']
-        train_data = full_dataset_pd[
+        cols_to_keep = ['File_Index', 'Vector_Index', 'Result', 'Result_Next', 'Profit_Next']
+        train_data_raw = full_dataset_pd[
             (full_dataset_pd['File_Index'] >= train_start) &
             (full_dataset_pd['File_Index'] <= train_end)
         ][cols_to_keep]
 
-        # Sample training data if we're hitting memory issues
-        if len(train_data) > 20000:
-            train_data = train_data.sample(n=20000, random_state=42)
+        # Deterministic sampling based on PER_FILE
+        sampled_frames = []
+        for f_idx in range(train_start, train_end + 1):
+            file_data = train_data_raw[train_data_raw['File_Index'] == f_idx]
+            n_total = len(file_data)
+
+            if n_total == 0:
+                continue
+
+            # Sort by current Result
+            file_data = file_data.sort_values(by='Result')
+
+            target_per_file = min(PER_FILE, n_total)
+            n_high = int(HIGH * target_per_file)
+            n_avg = int(AVG * target_per_file)
+            n_low = target_per_file - n_high - n_avg # Ensure they sum up correctly
+
+            # Highest Results
+            high_set = file_data.tail(n_high)
+
+            # Lowest Results
+            low_set = file_data.head(n_low)
+
+            # Exclude already selected
+            remaining = file_data.drop(high_set.index).drop(low_set.index)
+
+            # Average Results
+            if n_avg > 0 and len(remaining) > 0:
+                mean_res = file_data['Result'].mean()
+                remaining['DistToMean'] = (remaining['Result'] - mean_res).abs()
+                remaining = remaining.sort_values(by='DistToMean')
+                avg_set = remaining.head(min(n_avg, len(remaining))).drop(columns=['DistToMean'])
+                sampled_frames.append(pd.concat([high_set, low_set, avg_set]))
+            else:
+                sampled_frames.append(pd.concat([high_set, low_set]))
+
+        if sampled_frames:
+            train_data = pd.concat(sampled_frames)
+        else:
+            train_data = pd.DataFrame(columns=cols_to_keep)
 
         pred_data = full_dataset_pd[full_dataset_pd['File_Index'] == (target_file_idx - 1)][cols_to_keep]
 
