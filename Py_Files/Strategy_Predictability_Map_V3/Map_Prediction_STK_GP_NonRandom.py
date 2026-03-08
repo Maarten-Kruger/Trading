@@ -897,10 +897,14 @@ def main():
     data_loading_time = time.time() - start_time_program
 
     # Calculate steps per task
-    steps_per_task = (INDUCING_POINTS ** 3) * TRAINING_ITERATIONS
+    N_rows = TRAIN_WINDOW * PER_FILE
+    M_inducing = INDUCING_POINTS
+    math_operations_per_iter = (M_inducing ** 3) + (N_rows * (M_inducing ** 2))
+    steps_per_task = math_operations_per_iter * TRAINING_ITERATIONS
+
     print(f"Data loading completed in {format_time(data_loading_time)}.")
     print(f"Number of files to process: {len(tasks)}")
-    print(f"Number of steps per task/worker: {steps_per_task}")
+    print(f"Number of steps per task/worker: {steps_per_task:.2e}")
 
     # 5. Execute Parallel
     print(f"Submitting {len(tasks)} tasks to ProcessPoolExecutor (Workers={MAX_WORKERS})...")
