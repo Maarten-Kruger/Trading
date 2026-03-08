@@ -640,16 +640,6 @@ def worker_process_file(task_args):
         train_Y_tensor = torch.tensor(train_Y_scaled, dtype=torch.float32, device=device)
         test_X_tensor = torch.tensor(test_X_scaled, dtype=torch.float32, device=device)
 
-        # Free some memory if possible
-        del train_data_pd
-        del pred_data_pd
-        del train_X_np
-        del train_Y_np
-        del test_X_np
-        del train_X_scaled
-        del train_Y_scaled
-        del test_X_scaled
-
         # Initialize SGP Model
         num_dims = train_X_tensor.shape[1]
 
@@ -663,6 +653,16 @@ def worker_process_file(task_args):
             inducing_points = torch.tensor(inducing_points_np, dtype=torch.float32, device=device)
         else:
             inducing_points = train_X_tensor
+
+        # Free some memory if possible
+        del train_data_pd
+        del pred_data_pd
+        del train_X_np
+        del train_Y_np
+        del test_X_np
+        del train_X_scaled
+        del train_Y_scaled
+        del test_X_scaled
 
         model = SpatioTemporalSGP(inducing_points=inducing_points, num_spatial_dims=num_dims-1).to(device)
         likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
