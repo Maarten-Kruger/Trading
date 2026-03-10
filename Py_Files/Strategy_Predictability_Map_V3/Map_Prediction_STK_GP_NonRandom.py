@@ -396,6 +396,7 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
         <div class="container">
             <h1 style="text-align: center;">Spatio-Temporal Kriging SGP Report</h1>
 
+        
             <div class="config-box">
                 <div style="display: flex; justify-content: space-between;">
                     <div style="flex: 2;">
@@ -408,8 +409,13 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
                             <li><strong>Training Iterations:</strong> {TRAINING_ITERATIONS}</li>
                             <li><strong>Stability Weight (\u03ba):</strong> {STABILITY_WEIGHT}</li>
                             <li><strong>Workers:</strong> {MAX_WORKERS}</li>
+                            <li><strong>Samples Per File:</strong> {PER_FILE}</li>
+                            <li><strong>Sampling Weights:</strong> High: {HIGH} | Avg: {AVG} | Low: {LOW}</li>
                         </ul>
                     </div>
+
+
+
                     <div style="flex: 1; border-left: 2px solid #ffeeba; padding-left: 20px;">
                         <h3 style="margin-top:0;">Performance Stats</h3>
                         <ul style="list-style-type: none; padding: 0; margin: 0;">
