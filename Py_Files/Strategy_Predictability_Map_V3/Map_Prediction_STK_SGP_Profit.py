@@ -34,9 +34,9 @@ LOW = 0.34
 # SGP Configuration
 INDUCING_POINTS = 1000   # Number of inducing points for Sparse Gaussian Process
 TRAINING_MAX = 200       # Maximum number of iterations for GP optimization
-TRAINING_THRESHOLD = 0.001 # Early stopping threshold for ELBO Loss improvement
+TRAINING_THRESHOLD = 0.0001 # Early stopping threshold for ELBO Loss improvement
 STABILITY_WEIGHT = 1.0  # Kappa (κ). Higher values prioritize stability (lower variance), lower values prioritize expected return.
-NOISE_FACTOR = 0.1 # Minimum noise level to prevent overfitting (added to likelihood noise constraint). 
+NOISE_FACTOR = 0.6 # Minimum noise level to prevent overfitting (added to likelihood noise constraint). 
                     #Percentage, e.g. 0.1 means noise will assumed to be at least 10% of the variance of the training targets.
 
 
