@@ -591,7 +591,7 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
     </html>
     """
 
-    with open(os.path.join(target_dir, "Map_Prediction_STK_GP.html"), "w", encoding='utf-8') as f:
+    with open(os.path.join(target_dir, "Map_Prediction_STK_SGP.html"), "w", encoding='utf-8') as f:
         f.write(html_content)
 
 
