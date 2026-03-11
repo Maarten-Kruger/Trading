@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 import polars as pl
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
 import concurrent.futures
 import multiprocessing
 import torch
@@ -34,7 +33,8 @@ LOW = 0.34
 
 # SGP Configuration
 INDUCING_POINTS = 1000   # Number of inducing points for Sparse Gaussian Process
-TRAINING_ITERATIONS = 200 # Number of iterations for GP optimization
+TRAINING_MAX = 200       # Maximum number of iterations for GP optimization
+TRAINING_THRESHOLD = 0.001 # Early stopping threshold for ELBO Loss improvement
 STABILITY_WEIGHT = 1.0  # Kappa (κ). Higher values prioritize stability (lower variance), lower values prioritize expected return.
 NOISE_FACTOR = 0.1 # Minimum noise level to prevent overfitting (added to likelihood noise constraint). 
                     #Percentage, e.g. 0.1 means noise will assumed to be at least 10% of the variance of the training targets.
@@ -210,34 +210,6 @@ def build_raw_features_polars(df_list, master_vectors):
 
     return full_df
 
-def generate_final_verdict_pdf(output_path, rank1_data):
-    """Generates a PDF report for the Top Rank."""
-    with PdfPages(output_path) as pdf:
-        plt.figure(figsize=(11, 8.5))
-        plt.suptitle("Final Verdict Report: Top Rank Model", fontsize=20, weight='bold')
-
-        stats_text = (
-            f"Top Rank Model (Rank 1)\n"
-            f"--------------------------------\n"
-            f"Total Profit: ${rank1_data['stats']['total_pl']}\n"
-            f"Max Drawdown: {rank1_data['stats']['max_dd']}%\n"
-            f"Avg Drawdown: {rank1_data['stats']['avg_dd']}%\n"
-            f"Sharpe Ratio: {rank1_data['stats']['sharpe']}\n"
-            f"Total Trades: {len(rank1_data['profits'])}\n"
-            f"Final Equity: ${rank1_data['equity_curve'][-1]:.2f}"
-        )
-        plt.figtext(0.1, 0.75, stats_text, fontsize=12, family='monospace', bbox={'facecolor': 'lightgrey', 'alpha': 0.5, 'pad': 10})
-
-        ax1 = plt.axes([0.1, 0.1, 0.8, 0.5])
-        ax1.plot(rank1_data['equity_curve'], color='green', linewidth=2)
-        ax1.set_title("Equity Curve ($10,000 Start)")
-        ax1.set_xlabel("Time (Files)")
-        ax1.set_ylabel("Account Balance ($)")
-        ax1.grid(True, alpha=0.3)
-
-        pdf.savefig()
-        plt.close()
-
 def generate_html_report(target_dir, report_data, rank_history, time_stats=None):
     if time_stats is None:
         time_stats = {}
@@ -276,8 +248,11 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
 
         html_rank_rows += f"""
         <div class="plot-container">
-            <details>
-                <summary onclick="lazyLoadRankChart({r})">Rank {r} Performance (Click to Expand)</summary>
+            <details class="modern-details">
+                <summary onclick="lazyLoadRankChart({r})">
+                    <span>Rank {r} Performance</span>
+                    <span class="icon">▼</span>
+                </summary>
                 <div class="section-content">
                     <table style="width: 100%; margin-bottom: 20px; font-size: 0.9em; background: #f9f9f9;">
                          <tr><th>Total P/L ($)</th><th>Max Drawdown (%)</th><th>Avg Drawdown (%)</th><th>Sharpe Ratio</th></tr>
@@ -329,17 +304,22 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
 
         html_file_rows += f"""
         <div class="plot-container">
-            <details>
+            <details class="modern-details">
                 <summary onclick="lazyLoadCharts('{filename}', '{safe_fname}')">
-                    {filename} (Click to Load Analysis)
+                    <span>{filename}</span>
+                    <span class="icon">▼</span>
                 </summary>
                 <div class="section-content">
                     <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-                        <div style="flex: 1 1 50%; min-width: 400px; height: 400px;">
+                        <div style="flex: 1 1 100%; height: 500px;">
                             <h4>Prediction Distribution (Sorted by Rank)</h4>
                             <canvas id="chart-{safe_fname}"></canvas>
                         </div>
-                        <div style="flex: 1 1 30%; min-width: 300px; height: 400px;">
+                        <div style="flex: 1 1 45%; min-width: 400px; height: 350px;">
+                            <h4>ELBO Loss History (Training)</h4>
+                            <canvas id="loss-{safe_fname}"></canvas>
+                        </div>
+                        <div style="flex: 1 1 45%; min-width: 400px; height: 350px;">
                             <h4>Confidence (\u03c3) vs Predicted Result (\u03bc) - Top {len(top_preds)}</h4>
                             <canvas id="scatter-{safe_fname}"></canvas>
                         </div>
@@ -384,10 +364,46 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
         <style>
             body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background-color: #f4f4f9; }}
             .container {{ max-width: 1600px; margin: 0 auto; padding-bottom: 50px; }}
-            .plot-container {{ margin-bottom: 15px; border: 1px solid #ddd; padding: 0; border-radius: 8px; background: #fff; overflow: hidden; }}
-            summary {{ cursor: pointer; font-weight: 600; font-size: 1.05em; padding: 12px; background-color: #e9ecef; transition: background 0.2s; }}
-            summary:hover {{ background-color: #dee2e6; }}
-            .section-content {{ padding: 20px; border-top: 1px solid #ddd; }}
+            .plot-container {{ margin-bottom: 15px; border: none; padding: 0; background: transparent; }}
+
+            .modern-details {{
+                background: #ffffff;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+                overflow: hidden;
+            }}
+            .modern-details summary {{
+                cursor: pointer;
+                font-weight: 600;
+                font-size: 1.05em;
+                padding: 15px 20px;
+                background-color: #f8f9fa;
+                border-bottom: 1px solid transparent;
+                transition: all 0.2s ease;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                list-style: none; /* Hide default arrow */
+            }}
+            .modern-details summary::-webkit-details-marker {{
+                display: none;
+            }}
+            .modern-details summary:hover {{
+                background-color: #e9ecef;
+            }}
+            .modern-details[open] summary {{
+                border-bottom: 1px solid #e0e0e0;
+                background-color: #e9ecef;
+            }}
+            .modern-details summary .icon {{
+                font-size: 0.8em;
+                transition: transform 0.3s ease;
+            }}
+            .modern-details[open] summary .icon {{
+                transform: rotate(180deg);
+            }}
+            .section-content {{ padding: 20px; }}
             table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
             th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
             th {{ background-color: #f8f9fa; }}
@@ -408,7 +424,8 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
                             <li><strong>Train Window (Time):</strong> {TRAIN_WINDOW} files</li>
                             <li><strong>Top N Predictions:</strong> {TOP_N}</li>
                             <li><strong>Inducing Points:</strong> {INDUCING_POINTS}</li>
-                            <li><strong>Training Iterations:</strong> {TRAINING_ITERATIONS}</li>
+                            <li><strong>Training Max:</strong> {TRAINING_MAX}</li>
+                            <li><strong>Training Threshold:</strong> {TRAINING_THRESHOLD}</li>
                             <li><strong>Stability Weight (\u03ba):</strong> {STABILITY_WEIGHT}</li>
                             <li><strong>Workers:</strong> {MAX_WORKERS}</li>
                             <li><strong>Samples Per File:</strong> {PER_FILE}</li>
@@ -432,12 +449,11 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
 
             <p style="text-align: center;"><strong>Score Formula:</strong> \u03b1(V) = \u03bc(V) - \u03ba \u00b7 \u03c3(V)</p>
 
-            <div style="text-align: center; margin-bottom: 30px;">
-                 <a href="Final_Verdict.pdf" target="_blank" style="padding: 10px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px;">Download Final Verdict PDF</a>
-            </div>
-
-            <details open style="margin-bottom: 40px; border: 2px solid #6c757d; border-radius: 8px;">
-                <summary style="background-color: #6c757d; color: white;">Global Performance Summary</summary>
+            <details class="modern-details" open style="margin-bottom: 20px; border: 2px solid #6c757d;">
+                <summary style="background-color: #6c757d; color: white;">
+                    <span>Global Performance Summary</span>
+                    <span class="icon">▼</span>
+                </summary>
                 <div class="section-content">
                     <div style="display: flex; gap: 20px;">
                         <div style="flex: 1; height: 400px;"><canvas id="summary-profit"></canvas></div>
@@ -446,11 +462,25 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
                 </div>
             </details>
 
-            <h3>File-by-File Analysis (Walk-Forward)</h3>
-            {html_file_rows}
+            <details class="modern-details" style="margin-bottom: 20px; border: 2px solid #007bff;">
+                <summary style="background-color: #007bff; color: white;">
+                    <span>File-by-File Analysis (Walk-Forward)</span>
+                    <span class="icon">▼</span>
+                </summary>
+                <div class="section-content" style="background: #f8f9fa;">
+                    {html_file_rows}
+                </div>
+            </details>
 
-            <h3>Rank Analysis (Longitudinal)</h3>
-            {html_rank_rows}
+            <details class="modern-details" style="margin-bottom: 20px; border: 2px solid #17a2b8;">
+                <summary style="background-color: #17a2b8; color: white;">
+                    <span>Rank Analysis (Longitudinal)</span>
+                    <span class="icon">▼</span>
+                </summary>
+                <div class="section-content" style="background: #f8f9fa;">
+                    {html_rank_rows}
+                </div>
+            </details>
         </div>
 
         <script>
@@ -468,7 +498,7 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
                         datasets: [{{
                             label: 'Total Profit ($)',
                             data: summaryData.profit,
-                            backgroundColor: 'rgba(75, 192, 192, 0.6)'
+                            backgroundColor: summaryData.profit.map(val => val < 0 ? 'rgba(255, 99, 132, 0.6)' : 'rgba(75, 192, 192, 0.6)')
                         }}]
                     }},
                     options: {{ responsive: true, maintainAspectRatio: false, plugins: {{ title: {{ display: true, text: 'Profit by Rank' }} }} }}
@@ -493,6 +523,31 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
                 const data = reportData[filename];
                 const ctx = document.getElementById('chart-' + safeFname).getContext('2d');
                 const scatterCtx = document.getElementById('scatter-' + safeFname).getContext('2d');
+                const lossCtx = document.getElementById('loss-' + safeFname).getContext('2d');
+
+                charts['loss-' + safeFname] = new Chart(lossCtx, {{
+                    type: 'line',
+                    data: {{
+                        labels: Array.from({{length: data.loss_history.length}}, (_, i) => i + 1),
+                        datasets: [{{
+                            label: 'ELBO Loss',
+                            data: data.loss_history,
+                            borderColor: 'red',
+                            backgroundColor: 'rgba(255, 0, 0, 0.1)',
+                            fill: true,
+                            tension: 0.1,
+                            pointRadius: 0
+                        }}]
+                    }},
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {{
+                            x: {{ title: {{ display: true, text: 'Iteration' }} }},
+                            y: {{ title: {{ display: true, text: 'Loss' }} }}
+                        }}
+                    }}
+                }});
 
                 charts[safeFname] = new Chart(ctx, {{
                     type: 'scatter',
@@ -569,9 +624,12 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
                         datasets: [{{
                             label: 'Equity',
                             data: data.equity_curve,
-                            borderColor: 'green',
+                            segment: {{
+                                borderColor: ctx => ctx.p0.parsed.y < 10000 || ctx.p1.parsed.y < 10000 ? 'red' : 'green',
+                                backgroundColor: ctx => ctx.p0.parsed.y < 10000 || ctx.p1.parsed.y < 10000 ? 'rgba(255, 0, 0, 0.1)' : 'rgba(0, 128, 0, 0.1)'
+                            }},
                             fill: true,
-                            backgroundColor: 'rgba(0, 128, 0, 0.1)'
+                            borderWidth: 2
                         }}]
                     }},
                     options: {{
@@ -695,13 +753,24 @@ def worker_process_file(task_args):
         mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=train_Y_tensor.size(0))
 
         final_loss = 0.0
-        for i in range(TRAINING_ITERATIONS):
+        prev_loss = float('inf')
+        loss_history = []
+        actual_iters = 0
+
+        for i in range(TRAINING_MAX):
             optimizer.zero_grad()
             output = model(train_X_tensor)
             loss = -mll(output, train_Y_tensor)
             loss.backward()
             optimizer.step()
+
             final_loss = loss.item()
+            loss_history.append(final_loss)
+            actual_iters += 1
+
+            if abs(prev_loss - final_loss) < TRAINING_THRESHOLD:
+                break
+            prev_loss = final_loss
 
         # Prediction
         model.eval()
@@ -732,7 +801,7 @@ def worker_process_file(task_args):
         weights_info = (
             f"<b>Spatio-Temporal SGP Trained:</b><br>"
             f"Inducing Points: {num_inducing}<br>"
-            f"Training Iterations: {TRAINING_ITERATIONS}<br>"
+            f"Training Iterations: {actual_iters} / {TRAINING_MAX}<br>"
             f"Final ELBO Loss: {final_loss:.4f}<br>"
             f"Stability Weight (\u03ba): {STABILITY_WEIGHT}<br>"
         )
@@ -761,7 +830,9 @@ def worker_process_file(task_args):
             'test_avg_res': 0.0, # Removed slope calc for simplicity, can add back if needed
             'test_slope': 0.0,
             'weights_info': weights_info,
-            'top_preds_table': top_preds
+            'top_preds_table': top_preds,
+            'actual_iters': actual_iters,
+            'loss_history': loss_history
         }
 
     except Exception as e:
@@ -773,7 +844,7 @@ def main():
     start_time_program = time.time()
     print("--- Spatio-Temporal Kriging (Sparse Gaussian Processes) Optimizer ---")
     print(f"Parallel Workers: {MAX_WORKERS}")
-    print(f"SGP Config: INDUCING={INDUCING_POINTS}, ITER={TRAINING_ITERATIONS}, STABILITY_WEIGHT={STABILITY_WEIGHT}")
+    print(f"SGP Config: INDUCING={INDUCING_POINTS}, MAX_ITER={TRAINING_MAX}, THRESHOLD={TRAINING_THRESHOLD}, STABILITY_WEIGHT={STABILITY_WEIGHT}")
 
     if len(sys.argv) > 1:
         target_dir = sys.argv[1]
@@ -915,7 +986,7 @@ def main():
     N_rows = TRAIN_WINDOW * PER_FILE
     M_inducing = INDUCING_POINTS
     math_operations_per_iter = (M_inducing ** 3) + (N_rows * (M_inducing ** 2))
-    steps_per_task = math_operations_per_iter * TRAINING_ITERATIONS
+    steps_per_task = math_operations_per_iter * TRAINING_MAX
 
     print(f"Data loading completed in {format_time(data_loading_time)}.")
     print(f"Number of files to process: {len(tasks)}")
@@ -946,8 +1017,9 @@ def main():
         top_preds = res.get('top_preds_table', [])
         avg_pred_mean = np.mean([row['predicted_mean'] for row in top_preds]) if top_preds else 0.0
         avg_pred_std = np.mean([row['uncertainty_std'] for row in top_preds]) if top_preds else 0.0
+        iters = res.get('actual_iters', 0)
 
-        print(f"  Finished: {fname} | ELBO Loss: {res['best_fitness']:.2f} | Avg \u03bc(Top{TOP_N}): {avg_pred_mean:.4f} | Avg \u03c3(Top{TOP_N}): {avg_pred_std:.4f}")
+        print(f"  Finished: {fname} | Iters: {iters} | ELBO Loss: {-res['best_fitness']:.4f} | Avg \u03bc(Top{TOP_N}): {avg_pred_mean:.4f} | Avg \u03c3(Top{TOP_N}): {avg_pred_std:.4f}")
 
         # Process Result
         scores = res['predicted_scores']
@@ -986,7 +1058,8 @@ def main():
             'smooth': [float(x) for x in np.round(smooth_series.fillna(0).tolist(), 4)],
             'avg': float(np.round(np.mean(act_res[display_indices]), 4)),
             'weights_info': res['weights_info'],
-            'top_preds_table': top_preds
+            'top_preds_table': top_preds,
+            'loss_history': res.get('loss_history', [])
         }
 
     # Process tasks in batches of size MAX_WORKERS
@@ -1062,10 +1135,6 @@ def main():
             'avg_dd': round(avg_dd, 2),
             'sharpe': round(sharpe, 3)
         }
-
-    pdf_path = os.path.join(target_dir, "Final_Verdict.pdf")
-    generate_final_verdict_pdf(pdf_path, rank_history[1])
-    print(f"PDF Saved: {pdf_path}")
 
     time_stats = {
         'total_time': f"({format_time(data_loading_time)}) + ({format_time(file_processing_time)})",
