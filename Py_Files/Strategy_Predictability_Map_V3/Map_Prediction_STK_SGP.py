@@ -311,15 +311,15 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
                 </summary>
                 <div class="section-content">
                     <div style="display: flex; gap: 20px; flex-wrap: wrap;">
-                        <div style="flex: 1 1 45%; min-width: 400px; height: 400px;">
+                        <div style="flex: 1 1 100%; height: 500px;">
                             <h4>Prediction Distribution (Sorted by Rank)</h4>
                             <canvas id="chart-{safe_fname}"></canvas>
                         </div>
-                        <div style="flex: 1 1 45%; min-width: 400px; height: 400px;">
+                        <div style="flex: 1 1 45%; min-width: 400px; height: 350px;">
                             <h4>ELBO Loss History (Training)</h4>
                             <canvas id="loss-{safe_fname}"></canvas>
                         </div>
-                        <div style="flex: 1 1 100%; height: 400px;">
+                        <div style="flex: 1 1 45%; min-width: 400px; height: 350px;">
                             <h4>Confidence (\u03c3) vs Predicted Result (\u03bc) - Top {len(top_preds)}</h4>
                             <canvas id="scatter-{safe_fname}"></canvas>
                         </div>
@@ -449,8 +449,11 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
 
             <p style="text-align: center;"><strong>Score Formula:</strong> \u03b1(V) = \u03bc(V) - \u03ba \u00b7 \u03c3(V)</p>
 
-            <details open style="margin-bottom: 40px; border: 2px solid #6c757d; border-radius: 8px;">
-                <summary style="background-color: #6c757d; color: white;">Global Performance Summary</summary>
+            <details class="modern-details" open style="margin-bottom: 20px; border: 2px solid #6c757d;">
+                <summary style="background-color: #6c757d; color: white;">
+                    <span>Global Performance Summary</span>
+                    <span class="icon">▼</span>
+                </summary>
                 <div class="section-content">
                     <div style="display: flex; gap: 20px;">
                         <div style="flex: 1; height: 400px;"><canvas id="summary-profit"></canvas></div>
@@ -459,11 +462,25 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
                 </div>
             </details>
 
-            <h3>File-by-File Analysis (Walk-Forward)</h3>
-            {html_file_rows}
+            <details class="modern-details" style="margin-bottom: 20px; border: 2px solid #007bff;">
+                <summary style="background-color: #007bff; color: white;">
+                    <span>File-by-File Analysis (Walk-Forward)</span>
+                    <span class="icon">▼</span>
+                </summary>
+                <div class="section-content" style="background: #f8f9fa;">
+                    {html_file_rows}
+                </div>
+            </details>
 
-            <h3>Rank Analysis (Longitudinal)</h3>
-            {html_rank_rows}
+            <details class="modern-details" style="margin-bottom: 20px; border: 2px solid #17a2b8;">
+                <summary style="background-color: #17a2b8; color: white;">
+                    <span>Rank Analysis (Longitudinal)</span>
+                    <span class="icon">▼</span>
+                </summary>
+                <div class="section-content" style="background: #f8f9fa;">
+                    {html_rank_rows}
+                </div>
+            </details>
         </div>
 
         <script>
