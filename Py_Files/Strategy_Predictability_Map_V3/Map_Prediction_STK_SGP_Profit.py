@@ -161,7 +161,7 @@ class SpatioTemporalSGP(gpytorch.models.ApproximateGP):
 
 def build_raw_features_polars(df_list, master_vectors):
     """
-    Builds the dataset of (Spatial_Params, Time_Index, Result, Profit) for each file.
+    Builds the dataset of (Spatial_Params, Time_Index, Profit) for each file.
     Does not compute rolling windows or hypercubes.
     df_list: List of Polars DataFrames (one per file, sorted chronologically).
     master_vectors: Polars DataFrame of vector parameters.
@@ -175,7 +175,6 @@ def build_raw_features_polars(df_list, master_vectors):
         merged = master_vectors.join(df, on=vector_cols, how='left').fill_null(0.0)
 
         # We keep the spatial parameters for each row, plus add the file_idx (time)
-        results = merged['Result'].to_numpy()
         profits = merged['Profit'].to_numpy()
 
         # We also need the actual parameter columns flattened out into this dataframe
@@ -183,13 +182,12 @@ def build_raw_features_polars(df_list, master_vectors):
         # But we do need the raw parameters for the SGP features.
 
         # Determine the length safely based on the array lengths
-        n_vectors = len(results)
+        n_vectors = len(profits)
 
         # Make a smaller dataframe to save memory
         file_df = pl.DataFrame({
             'File_Index': np.full(n_vectors, file_idx, dtype=np.int16),
             'Vector_Index': np.arange(n_vectors, dtype=np.int32),
-            'Result': results.astype(np.float32),
             'Profit': profits.astype(np.float32)
         })
 
@@ -197,14 +195,12 @@ def build_raw_features_polars(df_list, master_vectors):
 
     full_df = pl.concat(processed_files)
 
-    # We want to predict Result of NEXT file (Target)
+    # We want to predict Profit of NEXT file (Target)
     full_df = full_df.sort(['Vector_Index', 'File_Index'])
 
-    target_expr = pl.col("Result").shift(-1).alias("Result_Next")
     profit_next_expr = pl.col("Profit").shift(-1).alias("Profit_Next")
 
     full_df = full_df.with_columns([
-        target_expr.over("Vector_Index"),
         profit_next_expr.over("Vector_Index")
     ])
 
@@ -286,7 +282,7 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
                 <th>Predicted Mean (\u03bc)</th>
                 <th>Uncertainty Std (\u03c3)</th>
                 <th>Alpha Score (\u03b1)</th>
-                <th>Actual Result</th>
+                <th>Actual Profit</th>
             </tr>
         """
         for i, row in enumerate(top_preds):
@@ -297,7 +293,7 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
                 <td>{row['predicted_mean']:.4f}</td>
                 <td>{row['uncertainty_std']:.4f}</td>
                 <td>{row['alpha_score']:.4f}</td>
-                <td>{row['actual_result']:.4f}</td>
+                <td>{row['actual_profit']:.4f}</td>
             </tr>
             """
         table_html += "</table>"
@@ -320,7 +316,7 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
                             <canvas id="loss-{safe_fname}"></canvas>
                         </div>
                         <div style="flex: 1 1 45%; min-width: 400px; height: 350px;">
-                            <h4>Confidence (\u03c3) vs Predicted Result (\u03bc) - Top {len(top_preds)}</h4>
+                            <h4>Confidence (\u03c3) vs Predicted Profit (\u03bc) - Top {len(top_preds)}</h4>
                             <canvas id="scatter-{safe_fname}"></canvas>
                         </div>
                         <div style="flex: 1 1 100%; padding: 15px; background: #f0f8ff; border: 1px solid #cce5ff; border-radius: 8px; margin-top: 30px;">
@@ -563,8 +559,8 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
                                 tension: 0.3
                             }},
                             {{
-                                label: 'Actual Result',
-                                data: data.pred_ranks.map((r, i) => ({{x: r, y: data.act_results[i]}})),
+                                label: 'Actual Profit',
+                                data: data.pred_ranks.map((r, i) => ({{x: r, y: data.act_profits[i]}})),
                                 backgroundColor: 'rgba(54, 162, 235, 0.5)',
                                 pointRadius: 2
                             }}
@@ -575,7 +571,7 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
                         maintainAspectRatio: false,
                         scales: {{
                             x: {{ type: 'linear', title: {{ display: true, text: 'Prediction Rank' }} }},
-                            y: {{ title: {{ display: true, text: 'Actual Result' }} }}
+                            y: {{ title: {{ display: true, text: 'Actual Profit' }} }}
                         }}
                     }}
                 }});
@@ -670,7 +666,7 @@ def worker_process_file(task_args):
 
         # Prepare Training Data
         # Drop rows where target is NA/null
-        train_data_pd = train_data_pd.dropna(subset=['Result_Next'])
+        train_data_pd = train_data_pd.dropna(subset=['Profit_Next'])
 
         # Features: Spatial Parameters + Temporal Index
         # Extract Vector Indices to get spatial params
@@ -679,7 +675,7 @@ def worker_process_file(task_args):
         train_temporal = train_data_pd['File_Index'].values.reshape(-1, 1)
 
         train_X_np = np.hstack([train_spatial, train_temporal])
-        train_Y_np = train_data_pd['Result_Next'].values
+        train_Y_np = train_data_pd['Profit_Next'].values
 
         # Prepare Prediction Data (Input for target_file_idx)
         # We use the previous step's data to predict the target file.
@@ -690,7 +686,6 @@ def worker_process_file(task_args):
         test_temporal = np.full((len(test_spatial), 1), target_file_idx) # Predict for Time K
 
         test_X_np = np.hstack([test_spatial, test_temporal])
-        actual_results = pred_data_pd['Result_Next'].values # The actual results we are trying to predict
         actual_profits = pred_data_pd['Profit_Next'].values
 
         # Scale Data
@@ -817,14 +812,13 @@ def worker_process_file(task_args):
                 'predicted_mean': float(pred_mean[idx]),
                 'uncertainty_std': float(pred_std[idx]),
                 'alpha_score': float(alpha_scores[idx]),
-                'actual_result': float(actual_results[idx])
+                'actual_profit': float(actual_profits[idx])
             })
 
         return {
             'target_file_idx': target_file_idx,
             'target_filename': target_filename,
             'predicted_scores': alpha_scores,
-            'actual_results': actual_results,
             'actual_profits': actual_profits,
             'best_fitness': -final_loss, # Using negative loss as proxy for fitness tracking
             'test_avg_res': 0.0, # Removed slope calc for simplicity, can add back if needed
@@ -918,7 +912,7 @@ def main():
 
         # For training data, downsample if too large, say 10,000 max samples uniformly
         # To avoid Out Of Memory errors on `multiprocessing` pass
-        cols_to_keep = ['File_Index', 'Vector_Index', 'Result', 'Result_Next', 'Profit_Next']
+        cols_to_keep = ['File_Index', 'Vector_Index', 'Profit', 'Profit_Next']
         train_data_raw = full_dataset_pd[
             (full_dataset_pd['File_Index'] >= train_start) &
             (full_dataset_pd['File_Index'] <= train_end)
@@ -933,8 +927,8 @@ def main():
             if n_total == 0:
                 continue
 
-            # Sort by current Result
-            file_data = file_data.sort_values(by='Result')
+            # Sort by current Profit
+            file_data = file_data.sort_values(by='Profit')
 
             target_per_file = min(PER_FILE, n_total)
             n_high = int(HIGH * target_per_file)
@@ -952,8 +946,8 @@ def main():
 
             # Average Results
             if n_avg > 0 and len(remaining) > 0:
-                mean_res = file_data['Result'].mean()
-                remaining['DistToMean'] = (remaining['Result'] - mean_res).abs()
+                mean_prof = file_data['Profit'].mean()
+                remaining['DistToMean'] = (remaining['Profit'] - mean_prof).abs()
                 remaining = remaining.sort_values(by='DistToMean')
                 avg_set = remaining.head(min(n_avg, len(remaining))).drop(columns=['DistToMean'])
                 sampled_frames.append(pd.concat([high_set, low_set, avg_set]))
@@ -996,7 +990,7 @@ def main():
     print(f"Submitting {len(tasks)} tasks to ProcessPoolExecutor (Workers={MAX_WORKERS})...")
     start_time_processing = time.time()
 
-    rank_history = {r: {'filenames': [], 'results': [], 'profits': [], 'params': []} for r in range(1, TOP_N + 1)}
+    rank_history = {r: {'filenames': [], 'profits': [], 'params': []} for r in range(1, TOP_N + 1)}
     report_data = {}
 
     global_params = master_vectors.select(vector_cols).to_pandas().astype(str).agg(', '.join, axis=1).tolist()
@@ -1023,7 +1017,6 @@ def main():
 
         # Process Result
         scores = res['predicted_scores']
-        act_res = res['actual_results']
         act_prof = res['actual_profits']
 
         # Sort
@@ -1033,13 +1026,12 @@ def main():
         for i, vec_idx in enumerate(sorted_indices[:TOP_N]):
             rank = i + 1
             rank_history[rank]['filenames'].append(fname)
-            rank_history[rank]['results'].append(float(act_res[vec_idx]))
             rank_history[rank]['profits'].append(float(act_prof[vec_idx]))
             rank_history[rank]['params'].append(global_params[vec_idx])
 
         # Report Data
         display_indices = sorted_indices[:2000]
-        smooth_series = pd.Series(act_res[display_indices]).rolling(window=SMOOTHING_WINDOW, min_periods=1, center=True).mean()
+        smooth_series = pd.Series(act_prof[display_indices]).rolling(window=SMOOTHING_WINDOW, min_periods=1, center=True).mean()
 
         # Convert top_preds_table values to native Python floats to avoid JSON serialization errors
         top_preds = res.get('top_preds_table', [])
@@ -1048,15 +1040,14 @@ def main():
             row['predicted_mean'] = float(row['predicted_mean'])
             row['uncertainty_std'] = float(row['uncertainty_std'])
             row['alpha_score'] = float(row['alpha_score'])
-            row['actual_result'] = float(row['actual_result'])
+            row['actual_profit'] = float(row['actual_profit'])
 
         report_data[fname] = {
             'pred_scores': [float(x) for x in np.round(scores[display_indices], 4)],
-            'act_results': [float(x) for x in np.round(act_res[display_indices], 4)],
             'act_profits': [float(x) for x in np.round(act_prof[display_indices], 2)],
             'pred_ranks': list(range(1, len(display_indices) + 1)),
             'smooth': [float(x) for x in np.round(smooth_series.fillna(0).tolist(), 4)],
-            'avg': float(np.round(np.mean(act_res[display_indices]), 4)),
+            'avg': float(np.round(np.mean(act_prof[display_indices]), 4)),
             'weights_info': res['weights_info'],
             'top_preds_table': top_preds,
             'loss_history': res.get('loss_history', [])
