@@ -426,6 +426,7 @@ def generate_html_report(target_dir, report_data, rank_history, time_stats=None)
                             <li><strong>Workers:</strong> {MAX_WORKERS}</li>
                             <li><strong>Samples Per File:</strong> {PER_FILE}</li>
                             <li><strong>Sampling Weights:</strong> High: {HIGH} | Avg: {AVG} | Low: {LOW}</li>
+                            <li><strong>Noise Factor:</strong> {NOISE_FACTOR}</li>
                         </ul>
                     </div>
 
