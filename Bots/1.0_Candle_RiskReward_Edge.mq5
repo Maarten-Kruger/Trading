@@ -202,10 +202,11 @@ void ProcessStrategy()
     if(IsFridayCutoffReached()) return; // Prevent entries/modifications after Friday cutoff
 
     double current_spread_points = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+    Print("Current Spread: ", current_spread_points);
 
-    // Calculate Stop Loss and Take Profit in points, adjusted by spread
-    double stop_loss_d = InpSLPoints + current_spread_points;
-    double take_profit_d = (InpRiskReward * InpSLPoints) - current_spread_points;
+    // Calculate Stop Loss and Take Profit in points (ignoring spread for calculations)
+    double stop_loss_d = InpSLPoints;
+    double take_profit_d = (InpRiskReward * InpSLPoints);
 
     // Check if there is an active trade for this symbol and magic number
     ulong active_ticket = 0;
