@@ -232,23 +232,31 @@ void ProcessStrategy()
 
     if(active_ticket > 0)
     {
-        // Active trade exists: Move SL and TP based on current price
-        double new_sl = 0;
-        double new_tp = 0;
-
-        if(position_type == POSITION_TYPE_BUY)
+        if(InpRiskReward == 0.0)
         {
-            new_sl = bid - (stop_loss_d * point);
-            new_tp = bid + (take_profit_d * point);
+            // If RiskReward is 0, we do not trail/modify SL/TP. Instead, we just close the trade when checked.
+            trade.PositionClose(active_ticket);
         }
-        else if(position_type == POSITION_TYPE_SELL)
+        else
         {
-            new_sl = ask + (stop_loss_d * point);
-            new_tp = ask - (take_profit_d * point);
-        }
+            // Active trade exists: Move SL and TP based on current price
+            double new_sl = 0;
+            double new_tp = 0;
 
-        // Modify the position
-        trade.PositionModify(active_ticket, new_sl, new_tp);
+            if(position_type == POSITION_TYPE_BUY)
+            {
+                new_sl = bid - (stop_loss_d * point);
+                new_tp = bid + (take_profit_d * point);
+            }
+            else if(position_type == POSITION_TYPE_SELL)
+            {
+                new_sl = ask + (stop_loss_d * point);
+                new_tp = ask - (take_profit_d * point);
+            }
+
+            // Modify the position
+            trade.PositionModify(active_ticket, new_sl, new_tp);
+        }
     }
     else
     {
@@ -271,13 +279,13 @@ void ProcessStrategy()
         if(ema_current > ema_prev) // EMA pointing UP -> BUY
         {
             double sl = ask - (stop_loss_d * point);
-            double tp = ask + (take_profit_d * point);
+            double tp = (InpRiskReward == 0.0) ? 0.0 : ask + (take_profit_d * point);
             trade.Buy(lots, _Symbol, ask, sl, tp, "Strategy_Buy");
         }
         else if(ema_current < ema_prev) // EMA pointing DOWN -> SELL
         {
             double sl = bid + (stop_loss_d * point);
-            double tp = bid - (take_profit_d * point);
+            double tp = (InpRiskReward == 0.0) ? 0.0 : bid - (take_profit_d * point);
             trade.Sell(lots, _Symbol, bid, sl, tp, "Strategy_Sell");
         }
     }
