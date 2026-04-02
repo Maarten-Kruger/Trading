@@ -1,5 +1,5 @@
 pandas
 streamlit
-plotly
-kaleido
+matplotlib
+mplfinance
 numpy

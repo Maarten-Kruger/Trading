@@ -1,7 +1,7 @@
 import os
 import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import mplfinance as mpf
+import matplotlib.pyplot as plt
 import config
 
 def load_and_preprocess_data(file_path):
@@ -101,36 +101,33 @@ def generate_images(df, trigger_indices, file_name):
         if os.path.exists(image_path):
             continue
 
-        # Plotting
-        # Template Section: make_subplots can be adjusted to add indicator rows below
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                            vertical_spacing=0.03, subplot_titles=('Price', 'Volume'),
-                            row_width=[0.2, 0.7])
+        # Plotting using mplfinance
+        # Set Time as index for mplfinance
+        plot_df = window_df.set_index('Time')
 
-        # Candlestick chart
-        fig.add_trace(go.Candlestick(x=window_df['Time'],
-                                     open=window_df['Open'],
-                                     high=window_df['High'],
-                                     low=window_df['Low'],
-                                     close=window_df['Close'],
-                                     name='Price'), row=1, col=1)
+        # Create an addplot for the trigger marker
+        # Determine the position of the trigger candle in the window
+        trigger_pos = trigger_idx - start_idx
 
-        # Highlight trigger candle
-        trigger_row = df.iloc[trigger_idx]
-        fig.add_trace(go.Scatter(x=[trigger_row['Time']],
-                                 y=[trigger_row['High']],
-                                 mode='markers',
-                                 marker=dict(symbol='triangle-down', size=15, color='black'),
-                                 name='Trigger'), row=1, col=1)
+        # We need an array of the same length as plot_df, with nan everywhere except the trigger
+        marker_data = [float('nan')] * len(plot_df)
+        if 0 <= trigger_pos < len(plot_df):
+            # Place marker slightly above the high
+            marker_data[trigger_pos] = float(plot_df.iloc[trigger_pos]['High']) * 1.0005
 
-        # Volume chart
-        fig.add_trace(go.Bar(x=window_df['Time'], y=window_df['Volume'], name='Volume'), row=2, col=1)
+        ap = mpf.make_addplot(marker_data, type='scatter', markersize=100, marker='v', color='black')
 
-        # Update layout
-        fig.update_layout(title=f'Setup at {trigger_time}', xaxis_rangeslider_visible=False)
+        # Save image directly using mpf.plot
+        mpf.plot(plot_df,
+                 type='candle',
+                 volume=True,
+                 addplot=ap,
+                 title=f'Setup at {trigger_time}',
+                 savefig=dict(fname=image_path, dpi=100, bbox_inches='tight'),
+                 style='yahoo',
+                 warn_too_much_data=1000)
 
-        # Save image
-        fig.write_image(image_path, engine="kaleido")
+        plt.close('all') # Ensure resources are freed
         generated_count += 1
 
     # Append new labels
