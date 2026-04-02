@@ -31,56 +31,8 @@ def run_backtest(df, trigger_indices):
         # Calculate risk amount
         risk_amount = balance * (config.RISK_PER_TRADE_PERCENT / 100.0)
 
-        # --- DUMMY LOGIC START (Remove for empty template) ---
-        # Dummy Entry Logic: Always buy at the close of the trigger candle
-        # Dummy Stop Loss: 50 points
-        # Dummy Take Profit: 100 points
-        stop_loss_points = 50
-        take_profit_points = 100
-
-        # Account for spread on entry (buy at ask)
-        entry_price_with_spread = entry_price + (spread_points * config.POINT_VALUE)
-
-        # Calculate position size based on risk and stop loss
-        # Note: In real Forex, points (like spread) and pip/point value calculations
-        # differ heavily by asset class. This dummy math uses standard integer points.
-        if stop_loss_points > 0 and config.POINT_VALUE > 0:
-            position_size = risk_amount / (stop_loss_points * config.POINT_VALUE)
-        else:
-            position_size = 0.01 # Fallback
-
-        # Simulate trade outcome (simplified for dummy purposes)
-        # Look forward to see if TP or SL hits first
-        trade_result_pips = 0
-        exit_time = None
-
-        for i in range(trigger_idx + 1, len(df)):
-            future_row = df.iloc[i]
-            # Check Stop Loss (Low goes below entry - SL)
-            # Rough conversion of points to price (Assuming 1 point = 0.00001 for 5-digit broker Forex)
-            # This is highly simplified dummy logic.
-            point_value_approx = 0.00001
-
-            sl_price = entry_price_with_spread - (stop_loss_points * point_value_approx)
-            tp_price = entry_price_with_spread + (take_profit_points * point_value_approx)
-
-            if future_row['Low'] <= sl_price:
-                trade_result_pips = -stop_loss_points
-                exit_time = future_row['Time']
-                break
-            elif future_row['High'] >= tp_price:
-                trade_result_pips = take_profit_points
-                exit_time = future_row['Time']
-                break
-
-        # If trade never closed before end of dataset
-        if exit_time is None:
-            continue
-
-        # Calculate PnL
-        pnl = trade_result_pips * position_size * config.POINT_VALUE
-        balance += pnl
-        # --- DUMMY LOGIC END ---
+        # Place the real entry and exit rules here to see what happens when we run the simulation.
+        
 
         equity_curve.append(balance)
         timestamps.append(exit_time)

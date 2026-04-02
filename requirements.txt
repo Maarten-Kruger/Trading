@@ -1,5 +1,0 @@
-pandas
-streamlit
-matplotlib
-mplfinance
-numpy

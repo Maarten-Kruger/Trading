@@ -21,11 +21,7 @@ def load_and_preprocess_data(file_path):
     if 'Time' in df.columns:
         df['Time'] = pd.to_datetime(df['Time'])
 
-    # Calculate dummy indicator (Simple Moving Average crossover)
-    # --- DUMMY LOGIC START (Remove for empty template) ---
-    df['SMA_Fast'] = df['Close'].rolling(window=5).mean()
-    df['SMA_Slow'] = df['Close'].rolling(window=10).mean()
-    # --- DUMMY LOGIC END ---
+    # Calculate indicator/setup here
 
     return df
 
@@ -36,16 +32,8 @@ def find_triggers(df):
     """
     trigger_indices = []
 
-    # --- DUMMY LOGIC START (Remove for empty template) ---
-    # Trigger when Fast SMA crosses above Slow SMA
-    for i in range(1, len(df)):
-        if pd.isna(df['SMA_Slow'].iloc[i]):
-            continue
-
-        if (df['SMA_Fast'].iloc[i] > df['SMA_Slow'].iloc[i]) and \
-           (df['SMA_Fast'].iloc[i-1] <= df['SMA_Slow'].iloc[i-1]):
-            trigger_indices.append(i)
-    # --- DUMMY LOGIC END ---
+    # Place the trigger logic here. For example, let's say we want to trigger on a simple condition:
+    # if Close > Open for a bullish candle, we consider it a trigger (this is just an example, replace with actual logic)
 
     return trigger_indices
 
