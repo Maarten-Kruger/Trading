@@ -26,7 +26,7 @@ input int      InpBuffer        = 20;     // Sensitivity Buffer in Points (2 pip
 CTrade         trade;
 double         supportLevels[];
 double         resistanceLevels[];
-long           MagicNumber      = 123456; // Standard global variable for Magic Number
+long           MagicNumber      = 14453; // Standard global variable for Magic Number
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |

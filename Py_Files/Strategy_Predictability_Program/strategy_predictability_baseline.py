@@ -17,10 +17,10 @@ from collections import deque
 warnings.filterwarnings("ignore")
 
 # Configuration
-RESULT_CUTOFF = 25
+RESULT_CUTOFF = 20
 VECTOR_INPUT = 10  # Lookback window size
 TRAINING_WINDOW = 30 # Not strictly used for training here, but defines the window logic
-MAX_WORKERS = 4
+MAX_WORKERS = 1
 
 # --- Helper Functions ---
 
