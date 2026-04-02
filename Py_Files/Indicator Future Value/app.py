@@ -5,12 +5,13 @@ import config
 from phase1 import load_and_preprocess_data, find_triggers, generate_images
 from phase2 import run_classification_app
 from phase3 import run_backtest, generate_simulation_report
+from phase4 import run_gallery_app
 
 st.set_page_config(page_title="Trading Strategy Framework", layout="wide")
 
 # Sidebar navigation
 st.sidebar.title("Navigation")
-app_mode = st.sidebar.radio("Select Phase", ["Phase 1: Data & Images", "Phase 2: Classification", "Phase 3: Backtest"])
+app_mode = st.sidebar.radio("Select Phase", ["Phase 1: Data & Images", "Phase 2: Classification", "Phase 3: Backtest", "Phase 4: Gallery View"])
 
 # File uploader in sidebar
 st.sidebar.markdown("---")
@@ -42,13 +43,15 @@ if app_mode == "Phase 1: Data & Images":
                 trigger_indices = find_triggers(df)
 
                 progress_bar = st.progress(0)
-                st.write("Generating setup images...")
+                progress_text = st.empty()
+                progress_text.text("Preparing to generate images...")
 
-                output_dir, count = generate_images(df, trigger_indices, file_name, progress_bar)
+                output_dir, count = generate_images(df, trigger_indices, file_name, progress_bar, progress_text)
 
                 # Save output_dir to session state for Phase 2
                 st.session_state['output_dir'] = output_dir
                 progress_bar.empty()
+                progress_text.empty()
 
                 st.success(f"Successfully generated {count} setup images in directory: `{output_dir}`")
     else:
@@ -98,3 +101,6 @@ elif app_mode == "Phase 3: Backtest":
                 st.image(report_img)
     else:
         st.info("Please upload a CSV file.")
+
+elif app_mode == "Phase 4: Gallery View":
+    run_gallery_app()

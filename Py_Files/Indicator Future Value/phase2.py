@@ -39,7 +39,14 @@ def run_classification_app(output_dir):
         st.subheader("File Explorer")
 
         # Filter buttons
-        filter_status = st.radio("Filter", ["All", "Unclassified", "Classified"])
+        filter_status = st.radio("Classification Filter", ["All", "Unclassified", "Classified"])
+
+        # Signal filter
+        if 'Signal' in df_labels.columns:
+            signal_options = ["All"] + sorted(df_labels['Signal'].dropna().unique().tolist())
+            signal_filter = st.radio("Signal Filter", signal_options)
+        else:
+            signal_filter = "All"
 
         if filter_status == "Unclassified":
             display_df = df_labels[df_labels['Label'] == 'Unclassified']
@@ -59,6 +66,9 @@ def run_classification_app(output_dir):
                 display_df = classified_df
         else:
             display_df = df_labels
+
+        if signal_filter != "All" and 'Signal' in display_df.columns:
+            display_df = display_df[display_df['Signal'] == signal_filter]
 
         st.write(f"Showing {len(display_df)} setups")
 
