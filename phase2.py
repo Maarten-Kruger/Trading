@@ -14,8 +14,6 @@ def save_labels(output_dir, df):
     df.to_csv(labels_file, index=False)
 
 def run_classification_app(output_dir):
-    st.header("Phase 2: Classification App")
-
     if not output_dir or not os.path.exists(output_dir):
         st.warning("Please run Phase 1 first to generate images.")
         return
@@ -46,7 +44,19 @@ def run_classification_app(output_dir):
         if filter_status == "Unclassified":
             display_df = df_labels[df_labels['Label'] == 'Unclassified']
         elif filter_status == "Classified":
-            display_df = df_labels[df_labels['Label'] != 'Unclassified']
+            classified_df = df_labels[df_labels['Label'] != 'Unclassified']
+
+            # Secondary filter for specific bins
+            if not classified_df.empty:
+                unique_labels = sorted(classified_df['Label'].unique().tolist())
+                selected_bin_filter = st.selectbox("Filter by Bin", ["All Classified"] + unique_labels)
+
+                if selected_bin_filter != "All Classified":
+                    display_df = classified_df[classified_df['Label'] == selected_bin_filter]
+                else:
+                    display_df = classified_df
+            else:
+                display_df = classified_df
         else:
             display_df = df_labels
 
@@ -109,7 +119,7 @@ def run_classification_app(output_dir):
             st.write(f"Time: {current_row['Time']} | Current Label: **{current_row['Label']}**")
 
             if os.path.exists(image_path):
-                st.image(image_path, use_column_width=True)
+                st.image(image_path, use_container_width=True)
             else:
                 st.error(f"Image not found: {image_path}")
 

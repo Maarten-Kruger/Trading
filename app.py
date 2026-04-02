@@ -51,17 +51,28 @@ if app_mode == "Phase 1: Data & Images":
         st.info("Please upload a CSV file.")
 
 elif app_mode == "Phase 2: Classification":
-    # If output_dir is in session state, use it. Otherwise try to infer it if a file is uploaded.
-    output_dir = st.session_state.get('output_dir')
+    st.title("Phase 2: Classification App")
 
-    if not output_dir and st.session_state['current_file']:
-        base_name = os.path.splitext(st.session_state['file_name'])[0]
-        inferred_dir = f"{config.STRATEGY_NAME}_{base_name}"
-        if os.path.exists(inferred_dir):
-            output_dir = inferred_dir
-            st.session_state['output_dir'] = output_dir
+    # Find all possible output directories containing a labels.csv
+    available_dirs = []
+    for item in os.listdir('.'):
+        if os.path.isdir(item) and os.path.exists(os.path.join(item, 'labels.csv')):
+            available_dirs.append(item)
 
-    run_classification_app(output_dir)
+    if not available_dirs:
+        st.warning("No setup folders found. Please run Phase 1 first to generate images.")
+    else:
+        # Determine index of current output_dir if it exists
+        default_idx = 0
+        current_dir = st.session_state.get('output_dir')
+        if current_dir in available_dirs:
+            default_idx = available_dirs.index(current_dir)
+
+        selected_dir = st.selectbox("Select Setup Folder to Classify", available_dirs, index=default_idx)
+        st.session_state['output_dir'] = selected_dir
+
+        st.markdown("---")
+        run_classification_app(selected_dir)
 
 elif app_mode == "Phase 3: Backtest":
     st.title("Phase 3: Backtesting & Simulation")
