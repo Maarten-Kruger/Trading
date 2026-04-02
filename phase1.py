@@ -49,7 +49,7 @@ def find_triggers(df):
 
     return trigger_indices
 
-def generate_images(df, trigger_indices, file_name):
+def generate_images(df, trigger_indices, file_name, progress_bar=None):
     """
     Generates static images for each trigger and saves them in a structured folder.
     """
@@ -129,6 +129,9 @@ def generate_images(df, trigger_indices, file_name):
 
         plt.close('all') # Ensure resources are freed
         generated_count += 1
+
+        if progress_bar is not None:
+            progress_bar.progress((i + 1) / len(trigger_indices))
 
     # Append new labels
     if new_labels:

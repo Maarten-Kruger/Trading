@@ -138,8 +138,8 @@ def run_classification_app(output_dir):
                     save_labels(output_dir, df_labels)
                     st.rerun()
             with btn_col3:
-                if st.button("Retraced", use_container_width=True):
-                    df_labels.at[idx, 'Label'] = "Retraced"
+                if st.button("Sideways", use_container_width=True):
+                    df_labels.at[idx, 'Label'] = "Sideways"
                     save_labels(output_dir, df_labels)
                     st.rerun()
 

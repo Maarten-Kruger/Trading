@@ -41,10 +41,14 @@ if app_mode == "Phase 1: Data & Images":
                 df = load_and_preprocess_data(file_path)
                 trigger_indices = find_triggers(df)
 
-                output_dir, count = generate_images(df, trigger_indices, file_name)
+                progress_bar = st.progress(0)
+                st.write("Generating setup images...")
+
+                output_dir, count = generate_images(df, trigger_indices, file_name, progress_bar)
 
                 # Save output_dir to session state for Phase 2
                 st.session_state['output_dir'] = output_dir
+                progress_bar.empty()
 
                 st.success(f"Successfully generated {count} setup images in directory: `{output_dir}`")
     else:
