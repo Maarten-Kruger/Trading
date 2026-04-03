@@ -28,8 +28,27 @@ def run_classification_app(output_dir):
     if 'current_img_idx' not in st.session_state:
         st.session_state.current_img_idx = 0
 
+    # Extract all unique bins currently in the dataset to populate custom_bins
+    existing_bins = set()
+    for label_str in df_labels['Label'].dropna():
+        if label_str != 'Unclassified':
+            # Labels could be comma-separated
+            bins = [b.strip() for b in label_str.split(',') if b.strip()]
+            existing_bins.update(bins)
+
+    # Remove default bins from custom bins list
+    default_bins = ["Up", "Down", "Sideways"]
+    custom_bins_from_file = [b for b in existing_bins if b not in default_bins]
+
     if 'custom_bins' not in st.session_state:
-        st.session_state.custom_bins = []
+        st.session_state.custom_bins = custom_bins_from_file
+    else:
+        # Merge file bins with session state bins
+        for b in custom_bins_from_file:
+            if b not in st.session_state.custom_bins:
+                st.session_state.custom_bins.append(b)
+
+    all_available_bins = default_bins + st.session_state.custom_bins
 
     # 3-Column Layout
     col_left, col_center, col_right = st.columns([1, 2, 1])
@@ -53,13 +72,27 @@ def run_classification_app(output_dir):
         elif filter_status == "Classified":
             classified_df = df_labels[df_labels['Label'] != 'Unclassified']
 
-            # Secondary filter for specific bins
+            # Secondary filter for specific bins (Checkboxes with AND logic)
             if not classified_df.empty:
-                unique_labels = sorted(classified_df['Label'].unique().tolist())
-                selected_bin_filter = st.selectbox("Filter by Bin", ["All Classified"] + unique_labels)
+                st.write("Filter by Bins (AND logic):")
+                selected_filter_bins = []
 
-                if selected_bin_filter != "All Classified":
-                    display_df = classified_df[classified_df['Label'] == selected_bin_filter]
+                # Checkboxes for bin filtering
+                filter_cols = st.columns(2)
+                for i, bin_name in enumerate(all_available_bins):
+                    with filter_cols[i % 2]:
+                        if st.checkbox(bin_name, key=f"filter_{bin_name}"):
+                            selected_filter_bins.append(bin_name)
+
+                if selected_filter_bins:
+                    # Filter logic: Setup must contain ALL selected bins
+                    def contains_all_bins(label_str):
+                        if label_str == 'Unclassified': return False
+                        setup_bins = [b.strip() for b in label_str.split(',')]
+                        return all(b in setup_bins for b in selected_filter_bins)
+
+                    mask = classified_df['Label'].apply(contains_all_bins)
+                    display_df = classified_df[mask]
                 else:
                     display_df = classified_df
             else:
@@ -135,40 +168,47 @@ def run_classification_app(output_dir):
 
             st.write("### Classify")
 
+            # Determine currently checked bins for this image
+            current_label = df_labels.at[idx, 'Label']
+            if current_label == 'Unclassified' or pd.isna(current_label):
+                current_checked = []
+            else:
+                current_checked = [b.strip() for b in current_label.split(',')]
+
+            new_checked = []
+
             # Default Bins
-            btn_col1, btn_col2, btn_col3 = st.columns(3)
-            with btn_col1:
-                if st.button("Up", use_container_width=True):
-                    df_labels.at[idx, 'Label'] = "Up"
-                    save_labels(output_dir, df_labels)
-                    st.rerun()
-            with btn_col2:
-                if st.button("Down", use_container_width=True):
-                    df_labels.at[idx, 'Label'] = "Down"
-                    save_labels(output_dir, df_labels)
-                    st.rerun()
-            with btn_col3:
-                if st.button("Sideways", use_container_width=True):
-                    df_labels.at[idx, 'Label'] = "Sideways"
-                    save_labels(output_dir, df_labels)
-                    st.rerun()
+            st.write("Default Bins")
+            cb_cols = st.columns(3)
+            for i, bin_name in enumerate(default_bins):
+                with cb_cols[i]:
+                    is_checked = st.checkbox(bin_name, value=(bin_name in current_checked), key=f"cb_{bin_name}_{idx}")
+                    if is_checked:
+                        new_checked.append(bin_name)
 
             # Custom Bins
             if st.session_state.custom_bins:
                 st.write("Custom Bins")
-                custom_cols = st.columns(min(3, len(st.session_state.custom_bins)))
+                custom_cols = st.columns(3)
                 for i, custom_bin in enumerate(st.session_state.custom_bins):
-                    col_idx = i % 3
-                    with custom_cols[col_idx]:
-                        if st.button(custom_bin, key=f"btn_{custom_bin}", use_container_width=True):
-                            df_labels.at[idx, 'Label'] = custom_bin
-                            save_labels(output_dir, df_labels)
-                            st.rerun()
+                    with custom_cols[i % 3]:
+                        is_checked = st.checkbox(custom_bin, value=(custom_bin in current_checked), key=f"cb_{custom_bin}_{idx}")
+                        if is_checked:
+                            new_checked.append(custom_bin)
+
+            # Check if selection changed
+            if set(new_checked) != set(current_checked):
+                if not new_checked:
+                    df_labels.at[idx, 'Label'] = 'Unclassified'
+                else:
+                    df_labels.at[idx, 'Label'] = ', '.join(new_checked)
+                save_labels(output_dir, df_labels)
+                st.rerun()
 
             # Add new custom bin
             new_bin = st.text_input("Add Custom Bin")
             if st.button("Add Bin"):
-                if new_bin and new_bin not in st.session_state.custom_bins:
+                if new_bin and new_bin not in st.session_state.custom_bins and new_bin not in default_bins:
                     st.session_state.custom_bins.append(new_bin)
                     st.rerun()
 
@@ -188,19 +228,35 @@ def run_classification_app(output_dir):
 
     # --- RIGHT COLUMN: Statistics ---
     with col_right:
-        st.subheader("Statistics")
-        total = len(df_labels)
-        unclassified = len(df_labels[df_labels['Label'] == 'Unclassified'])
+        st.subheader("Statistics (Filtered)")
+
+        # Calculate statistics based on the FILTERED view (display_df)
+        total = len(display_df)
+        unclassified = len(display_df[display_df['Label'] == 'Unclassified'])
         classified = total - unclassified
 
-        st.write(f"**Total Setups:** {total}")
+        st.write(f"**Total Filtered:** {total}")
         st.write(f"**Classified:** {classified}")
         st.write(f"**Unclassified:** {unclassified}")
 
         st.progress(classified / total if total > 0 else 0)
 
         st.write("---")
-        st.write("**Counts by Label:**")
-        label_counts = df_labels['Label'].value_counts()
-        for label, count in label_counts.items():
+        st.write("**Counts by Bin:**")
+
+        # Count individual bins from comma-separated strings
+        bin_counts = {}
+        for label_str in display_df['Label'].dropna():
+            if label_str == 'Unclassified':
+                continue
+            bins = [b.strip() for b in label_str.split(',')]
+            for b in bins:
+                bin_counts[b] = bin_counts.get(b, 0) + 1
+
+        # Sort by count descending
+        sorted_counts = sorted(bin_counts.items(), key=lambda item: item[1], reverse=True)
+        for label, count in sorted_counts:
             st.write(f"- {label}: {count}")
+
+        if not sorted_counts and classified == 0:
+            st.write("No classified labels in this view.")

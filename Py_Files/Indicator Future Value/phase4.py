@@ -32,19 +32,72 @@ def run_gallery_app():
 
     st.markdown("---")
 
-    # Select Bin / Filter
-    classified_df = df_labels[df_labels['Label'] != 'Unclassified']
+    # Filters
+    st.subheader("Filters")
+    col1, col2 = st.columns(2)
 
-    if classified_df.empty:
-        st.info("No classified images in this folder. Please classify images in Phase 2 first.")
-        return
+    with col1:
+        filter_status = st.radio("Classification Filter", ["All", "Unclassified", "Classified"])
 
-    unique_labels = sorted(classified_df['Label'].unique().tolist())
-    selected_bin = st.selectbox("Select Classification Bin to View", unique_labels)
+    with col2:
+        if 'Signal' in df_labels.columns:
+            signal_options = ["All"] + sorted(df_labels['Signal'].dropna().unique().tolist())
+            signal_filter = st.radio("Signal Filter", signal_options)
+        else:
+            signal_filter = "All"
 
-    display_df = classified_df[classified_df['Label'] == selected_bin]
+    # Extract all unique bins for checkbox filtering
+    existing_bins = set()
+    for label_str in df_labels['Label'].dropna():
+        if label_str != 'Unclassified':
+            bins = [b.strip() for b in label_str.split(',') if b.strip()]
+            existing_bins.update(bins)
 
-    st.write(f"### Gallery: '{selected_bin}' ({len(display_df)} images)")
+    all_available_bins = sorted(list(existing_bins))
+    selected_filter_bins = []
+
+    if filter_status == "Unclassified":
+        display_df = df_labels[df_labels['Label'] == 'Unclassified']
+    elif filter_status == "Classified":
+        classified_df = df_labels[df_labels['Label'] != 'Unclassified']
+
+        if not classified_df.empty:
+            st.write("Filter by Bins (AND logic):")
+            # Checkboxes for bin filtering
+            filter_cols = st.columns(min(len(all_available_bins), 6)) if all_available_bins else []
+            for i, bin_name in enumerate(all_available_bins):
+                with filter_cols[i % len(filter_cols)]:
+                    if st.checkbox(bin_name, key=f"gal_filter_{bin_name}"):
+                        selected_filter_bins.append(bin_name)
+
+            if selected_filter_bins:
+                def contains_all_bins(label_str):
+                    if label_str == 'Unclassified': return False
+                    setup_bins = [b.strip() for b in label_str.split(',')]
+                    return all(b in setup_bins for b in selected_filter_bins)
+
+                mask = classified_df['Label'].apply(contains_all_bins)
+                display_df = classified_df[mask]
+            else:
+                display_df = classified_df
+        else:
+            display_df = classified_df
+    else:
+        display_df = df_labels
+
+    # Apply signal filter
+    if signal_filter != "All" and 'Signal' in display_df.columns:
+        display_df = display_df[display_df['Signal'] == signal_filter]
+
+    st.markdown("---")
+
+    filter_desc = filter_status
+    if signal_filter != "All":
+        filter_desc += f" | Signal: {signal_filter}"
+    if selected_filter_bins:
+        filter_desc += f" | Bins: {', '.join(selected_filter_bins)}"
+
+    st.write(f"### Gallery: {filter_desc} ({len(display_df)} images)")
 
     # Display images in 3 columns
     if not display_df.empty:
@@ -58,8 +111,9 @@ def run_gallery_app():
             with col:
                 if os.path.exists(image_path):
                     signal_text = f" | Signal: {row['Signal']}" if 'Signal' in row and pd.notna(row['Signal']) and row['Signal'] != "Unknown" else ""
-                    st.image(image_path, caption=f"{image_name} | {row['Time']}{signal_text}", use_container_width=True)
+                    label_text = f"\nLabels: {row['Label']}" if row['Label'] != 'Unclassified' else "\nUnclassified"
+                    st.image(image_path, caption=f"{image_name} | {row['Time']}{signal_text}{label_text}", use_container_width=True)
                 else:
                     st.error(f"Image not found: {image_name}")
     else:
-        st.info(f"No images found for bin '{selected_bin}'.")
+        st.info("No images match the selected filters.")
