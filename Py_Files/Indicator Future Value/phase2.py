@@ -109,29 +109,41 @@ def run_classification_app(output_dir):
         order_mode = st.radio("Order", ["Sequential", "Random"])
 
         # Create a list of options for the selectbox
-        options = []
-        for idx, row in display_df.iterrows():
-            mark = "❌" if row['Label'] == 'Unclassified' else "✅"
-            options.append(f"{idx}: {mark} {row['Image_Name']}")
+        # Get all valid indices currently in the filtered view
+        valid_indices = display_df.index.tolist()
 
-        if options:
+        if valid_indices:
             if order_mode == "Random":
                 import random
-                # Use a stable seed for random choice based on session state if possible
-                if 'random_options' not in st.session_state or st.session_state.get('last_filter') != filter_status or st.session_state.get('last_order') != order_mode:
-                    shuffled = list(options)
+                # Reshuffle if filter or order mode changes
+                if 'random_indices' not in st.session_state or st.session_state.get('last_filter') != filter_status or st.session_state.get('last_order') != order_mode:
+                    shuffled = list(valid_indices)
                     random.shuffle(shuffled)
-                    st.session_state.random_options = shuffled
+                    st.session_state.random_indices = shuffled
 
-                display_options = st.session_state.random_options
-                # Filter display options to only those still valid
-                display_options = [opt for opt in display_options if opt in options]
-                st.session_state.random_options = display_options
+                # Keep only valid indices, preserving random order
+                display_indices = [i for i in st.session_state.random_indices if i in valid_indices]
+                
+                # Add any new indices that might have appeared (just in case)
+                for i in valid_indices:
+                    if i not in display_indices:
+                        display_indices.append(i)
+                        
+                st.session_state.random_indices = display_indices
             else:
-                display_options = options
+                display_indices = valid_indices
 
             st.session_state.last_filter = filter_status
             st.session_state.last_order = order_mode
+
+            # Build display_options using the ordered indices
+            display_options = []
+            for i in display_indices:
+                row = display_df.loc[i]
+                mark = "❌" if row['Label'] == 'Unclassified' else "✅"
+                display_options.append(f"{i}: {mark} {row['Image_Name']}")
+                
+            options = display_options # Keep references intact for the code below
 
             # Find the index of the currently selected image in the options
             current_option_idx = 0
