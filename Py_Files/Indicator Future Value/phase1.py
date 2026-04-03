@@ -80,7 +80,6 @@ def generate_images(df, trigger_indices, file_name, progress_bar=None, progress_
             pass
 
     generated_count = 0
-    new_labels = []
 
     total_triggers = len(trigger_indices)
 
@@ -107,9 +106,25 @@ def generate_images(df, trigger_indices, file_name, progress_bar=None, progress_
 
         trigger_time = df['Time'].iloc[trigger_idx]
 
-        # If it's not in existing labels, we add it to the list to append later
+        # Check if we need to add to labels.csv
+        needs_label = False
         if existing_labels.empty or image_name not in existing_labels['Image_Name'].values:
-            new_labels.append({"Image_Name": image_name, "Time": trigger_time, "Signal": signal, "Label": "Unclassified"})
+            needs_label = True
+
+        if needs_label:
+            new_row = pd.DataFrame([{"Image_Name": image_name, "Time": trigger_time, "Signal": signal, "Label": "Unclassified"}])
+
+            # Determine if header needs to be written (only if file is empty or just created)
+            write_header = not os.path.exists(labels_file) or os.path.getsize(labels_file) == 0
+
+            # Save immediately
+            new_row.to_csv(labels_file, mode='a', header=write_header, index=False)
+
+            # Update existing_labels to reflect the addition so we don't add it again if the loop runs twice
+            if existing_labels.empty:
+                existing_labels = new_row
+            else:
+                existing_labels = pd.concat([existing_labels, new_row], ignore_index=True)
 
         # Only generate image if it doesn't exist
         if os.path.exists(image_path):
@@ -163,13 +178,5 @@ def generate_images(df, trigger_indices, file_name, progress_bar=None, progress_
             progress_bar.progress((i + 1) / total_triggers)
         if progress_text is not None:
             progress_text.text(f"Generating image {i + 1} of {total_triggers}...")
-
-    # Append new labels
-    if new_labels:
-        new_df = pd.DataFrame(new_labels)
-        if existing_labels.empty:
-            new_df.to_csv(labels_file, index=False)
-        else:
-            new_df.to_csv(labels_file, mode='a', header=False, index=False)
 
     return output_dir, generated_count
