@@ -9,6 +9,13 @@ def run_backtest(df, trigger_indices):
     """
     Template module for backtesting. Runs a standardized simulation using
     parameters defined in config.py.
+
+    OPTIMIZATION GUIDELINES:
+    - Avoid using `df.iloc[idx]` inside the loop, as creating Pandas Series row objects is very slow.
+    - Instead, extract the required columns into NumPy arrays before the loop (e.g. `close_prices = df['Close'].values`)
+      and index the arrays directly (`close_prices[idx]`).
+    - Alternatively, use `df.at[idx, 'Column']` or `df.iat[row, col]` for fast scalar lookups.
+    - If the backtest logic is highly complex, consider using Numba (`@njit`) to compile the backtest loop into C-speed machine code.
     """
     balance = config.STARTING_BALANCE
     equity_curve = [balance]
@@ -19,25 +26,51 @@ def run_backtest(df, trigger_indices):
     peak_balance = balance
     drawdowns = [0.0]
 
-    for trigger_idx in trigger_indices:
+    # Pre-extract numpy arrays for fast access
+    times = df['Time'].values
+    closes = df['Close'].values
+    spreads = df['Spread'].values
+    df_len = len(df)
+
+    for trigger_info in trigger_indices:
+        # Extract integer index
+        trigger_idx = trigger_info[0] if isinstance(trigger_info, tuple) else trigger_info
+
         # Example constraints: Make sure we have data to trade
-        if trigger_idx >= len(df) - 1:
+        if trigger_idx >= df_len - 1:
             continue
 
-        trigger_row = df.iloc[trigger_idx]
-        entry_price = trigger_row['Close']
-        spread_points = trigger_row['Spread']
+        # Fast scalar access using numpy arrays instead of df.iloc
+        entry_time = times[trigger_idx]
+        entry_price = closes[trigger_idx]
+        spread_points = spreads[trigger_idx]
 
         # Calculate risk amount
         risk_amount = balance * (config.RISK_PER_TRADE_PERCENT / 100.0)
 
+        # ---------------------------------------------------------------------------------------------------
+        # REQUIREMENT FOR CUSTOM STRATEGY CODE:
         # Place the real entry and exit rules here to see what happens when we run the simulation.
+        #
+        # For this template, we implement a dummy strategy that just holds for 1 candle
+        # and has a simulated random PnL to allow the code to run out-of-the-box.
+        # ---------------------------------------------------------------------------------------------------
+
+        # Template dummy logic
+        exit_idx = trigger_idx + 1
+        exit_time = times[exit_idx]
+
+        # Simulated trade logic (replace with real rules)
+        import random
+        # 50/50 win or lose risk amount
+        pnl = risk_amount if random.random() > 0.5 else -risk_amount
         
+        balance += pnl
 
         equity_curve.append(balance)
         timestamps.append(exit_time)
         trades.append({
-            'Entry_Time': trigger_row['Time'],
+            'Entry_Time': entry_time,
             'Exit_Time': exit_time,
             'PnL': pnl,
             'Balance': balance
