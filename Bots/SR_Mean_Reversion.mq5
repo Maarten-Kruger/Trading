@@ -20,7 +20,7 @@ input double InpRiskPercent          = 1.0;    // Risk percentage of equity per 
 
 //--- Global Variables (Hidden from Input Panel)
 uint   Slippage       = 5;          // Slippage in points
-ulong  MagicNumber    = 999999;     // Universal Magic Number
+ulong  MagicNumber    = 132435;     // Universal Magic Number
 
 // Optimization Weights (Must sum to ~100)
 double Wpr            = 20.0;       // Weight for Payoff Ratio (W_pr)
@@ -68,6 +68,24 @@ struct TradeTracker
 };
 
 TradeTracker g_tracked_trades[];
+
+//--- Theoretical TP & SR Tracker
+struct TheoTrade
+{
+    int    type;         // 1 = Buy, -1 = Sell
+    double tp;
+    double sl;
+    double sr_line;      // <-- NEW: Track the specific SR line for this setup
+    int    bars_elapsed;
+    bool   active;
+    bool   sr_hit;       // <-- NEW: Flag if it touched the SR line
+};
+
+TheoTrade g_theo_trades[];
+int g_theo_tp_hits = 0;
+int g_theo_sr_hits = 0;  // <-- NEW: Counter for SR hits
+int g_theo_total = 0;
+
 
 //--- Test Tracking Variables
 datetime g_test_start = 0;          // First bar time in test
@@ -333,6 +351,17 @@ void CheckForEntry(double current_atr)
             {
                 if(trade.ResultRetcode() == TRADE_RETCODE_DONE)
                     TrackNewTrade(trade.ResultOrder(), sr_line);
+                    // --- Register Theoretical Buy ---
+                    int idx = ArraySize(g_theo_trades);
+                    ArrayResize(g_theo_trades, idx + 1);
+                    g_theo_trades[idx].type = 1;
+                    g_theo_trades[idx].tp = tp;
+                    g_theo_trades[idx].sl = sl;
+                    g_theo_trades[idx].sr_line = sr_line; // <-- ADD THIS
+                    g_theo_trades[idx].bars_elapsed = 0;
+                    g_theo_trades[idx].active = true;
+                    g_theo_trades[idx].sr_hit = false;    // <-- ADD THIS
+                    g_theo_total++;
             }
         }
         else if(signal_type == -1) // SELL
@@ -363,6 +392,17 @@ void CheckForEntry(double current_atr)
             {
                 if(trade.ResultRetcode() == TRADE_RETCODE_DONE)
                     TrackNewTrade(trade.ResultOrder(), sr_line);
+                     // --- Register Theoretical Sell ---
+                    int idx = ArraySize(g_theo_trades);
+                    ArrayResize(g_theo_trades, idx + 1);
+                    g_theo_trades[idx].type = -1;
+                    g_theo_trades[idx].tp = tp;
+                    g_theo_trades[idx].sl = sl;
+                    g_theo_trades[idx].sr_line = sr_line; // <-- ADD THIS
+                    g_theo_trades[idx].bars_elapsed = 0;
+                    g_theo_trades[idx].active = true;
+                    g_theo_trades[idx].sr_hit = false;    // <-- ADD THIS
+                    g_theo_total++;
             }
         }
     }
@@ -557,6 +597,73 @@ void CalculateSRLines(double atr)
     }
 }
 
+
+
+//+------------------------------------------------------------------+
+//| Evaluate theoretical trades over a 500-candle horizon            |
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Evaluate theoretical trades over a 500-candle horizon            |
+//+------------------------------------------------------------------+
+void UpdateTheoreticalTrades()
+{
+    double high1 = iHigh(_Symbol, _Period, 1);
+    double low1  = iLow(_Symbol, _Period, 1);
+
+    for(int i = 0; i < ArraySize(g_theo_trades); i++)
+    {
+        // Skip trades that already concluded their theoretical run
+        if(!g_theo_trades[i].active) continue;
+
+        g_theo_trades[i].bars_elapsed++;
+
+        // --- NEW: Check for S/R Line Touch ---
+        if(!g_theo_trades[i].sr_hit)
+        {
+            // If the candle's high is above and low is below, it touched the line
+            if(high1 >= g_theo_trades[i].sr_line && low1 <= g_theo_trades[i].sr_line)
+            {
+                g_theo_trades[i].sr_hit = true;
+                g_theo_sr_hits++;
+            }
+        }
+
+        // --- Existing TP / SL Logic ---
+        if(g_theo_trades[i].type == 1) // Buy
+        {
+            if(high1 >= g_theo_trades[i].tp) 
+            {
+                g_theo_tp_hits++;
+                g_theo_trades[i].active = false;
+            }
+            else if(low1 <= g_theo_trades[i].sl) 
+            {
+                g_theo_trades[i].active = false; // Stopped out theoretically
+            }
+        }
+        else if(g_theo_trades[i].type == -1) // Sell
+        {
+            if(low1 <= g_theo_trades[i].tp) 
+            {
+                g_theo_tp_hits++;
+                g_theo_trades[i].active = false;
+            }
+            else if(high1 >= g_theo_trades[i].sl) 
+            {
+                g_theo_trades[i].active = false; // Stopped out theoretically
+            }
+        }
+
+        // Expire if it reaches 500 candles without hitting TP or SL
+        if(g_theo_trades[i].active && g_theo_trades[i].bars_elapsed >= 500)
+        {
+            g_theo_trades[i].active = false;
+        }
+    }
+}
+
+
+
 //+------------------------------------------------------------------+
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
@@ -566,6 +673,7 @@ void OnTick()
     if(!new_bar) return; // Evaluate only on bar close/open
 
     UpdateTestStats();
+    UpdateTheoreticalTrades(); // <-- ADD THIS LINE HERE
 
     // Update ATR
     double current_atr = GetCurrentATR();
@@ -741,6 +849,14 @@ double OnTester()
 
     printf("--- Final Score ---");
     printf("Objective Score: %.4f", objective_score);
+    
+// --- THEORETICAL 500-CANDLE STATS ---
+    double theo_win_rate = (g_theo_total > 0) ? ((double)g_theo_tp_hits / g_theo_total) * 100.0 : 0.0;
+    double theo_sr_rate  = (g_theo_total > 0) ? ((double)g_theo_sr_hits / g_theo_total) * 100.0 : 0.0;
+    
+    printf("--- Theoretical 500-Candle Stats ---");
+    printf("Ghost TP Hit Rate: %.2f%% (%d hits out of %d trades)", theo_win_rate, g_theo_tp_hits, g_theo_total);
+    printf("Ghost S/R Touch Rate: %.2f%% (%d touches out of %d trades)", theo_sr_rate, g_theo_sr_hits, g_theo_total);
 
     return(objective_score);
 }
