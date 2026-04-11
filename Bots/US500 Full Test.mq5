@@ -36,6 +36,7 @@ input long              InpMagicNum      = 987654;              // EA Magic Numb
 
 // Standard Mode Specifics
 input int               InpMaxCandles    = 500;                 // Max holding bars (Standard Mode)
+input double            InpRiskReward    = 2.0; // Risk:Reward Ratio (e.g., 2.0 means TP is 2x SL)
 
 // Hedge Mode Specifics
 input int               InpHedgePips     = 1000;                // Pips down to trigger Hedge
@@ -157,16 +158,14 @@ void OnTick() {
       return; // Skip entry logic during the Friday close window
    }
 
-   // B. Max Candles Expiry (Standard Mode Only)
-   if(InpRiskMode == RISK_STANDARD) {
-      for(int i = PositionsTotal() - 1; i >= 0; i--) {
-         ulong ticket = PositionGetTicket(i);
-         if(PositionSelectByTicket(ticket) && PositionGetInteger(POSITION_MAGIC) == InpMagicNum) {
-            datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
-            int barsPassed = iBarShift(_Symbol, _Period, openTime);
-            if(barsPassed >= InpMaxCandles) {
-               if(trade.PositionClose(ticket)) TotalClosedByRisk++;
-            }
+   // B. Max Candles Expiry (Universal for all modes)
+   for(int i = PositionsTotal() - 1; i >= 0; i--) {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket) && PositionGetInteger(POSITION_MAGIC) == InpMagicNum) {
+         datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+         int barsPassed = iBarShift(_Symbol, _Period, openTime);
+         if(barsPassed >= InpMaxCandles) {
+            if(trade.PositionClose(ticket)) TotalClosedByRisk++;
          }
       }
    }
@@ -311,8 +310,16 @@ void OnTick() {
             
             // Calculate initial Stop Loss based on Risk Mode
             if(InpRiskMode == RISK_STANDARD) {
-               sl = ask - (InpTargetPips * PipPoint);
-            } 
+               // If RR is 0 (or negative), disable the Stop Loss entirely
+               if(InpRiskReward <= 0.0) {
+                  sl = 0.0; 
+               } 
+               else {
+                  // Calculate Risk in pips based on the Reward (InpTargetPips) and the RR ratio
+                  double slPips = InpTargetPips / InpRiskReward;
+                  sl = ask - (slPips * PipPoint);
+               }
+            }
             else if(InpRiskMode == RISK_WEEKDAYS_ATR_TRAIL) {
                double atrVal[]; ArraySetAsSeries(atrVal, true);
                if(CopyBuffer(hATR, 0, 0, 1, atrVal) > 0) {
