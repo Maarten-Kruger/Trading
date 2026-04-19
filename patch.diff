@@ -1,0 +1,35 @@
+<<<<<<< SEARCH
+//--- Input parameters (Core Strategy Metrics)
+input double InpTPPoints       = 400;  // Take profit distance in points
+input double InpSLPoints       = 200;  // Stop loss distance in points
+input double InpRiskPercent    = 1.0;  // Risk percentage of equity per trade
+
+//--- Global Variables (Hidden from Input Panel)
+uint   Slippage       = 5;          // Slippage in points
+ulong  MagicNumber    = 999999;     // Universal Magic Number
+=======
+//--- Enum for Pattern Selection
+enum ENUM_PATTERN_MODE
+  {
+   PATTERN_ENGULFING_ONLY = 0, // Engulfing Only
+   PATTERN_CONTINUATION_ONLY = 1, // Continuation Only
+   PATTERN_BOTH = 2 // Both Patterns
+  };
+
+//--- Input parameters (Core Strategy Metrics)
+input double InpRiskPercent    = 1.0;  // Risk percentage of equity per trade
+input ENUM_PATTERN_MODE InpPatternMode = PATTERN_BOTH; // Pattern Mode Selection
+input int    InpTPBufferPoints = 50;   // Take profit buffer in points
+input int    InpSLBufferPoints = 50;   // Stop loss buffer in points
+input double InpMinRR          = 1.0;  // Minimum Risk:Reward ratio (0 to disable)
+
+//--- ZigZag Indicator Parameters
+input int    InpZigZagDepth    = 12;   // ZigZag Depth
+input int    InpZigZagDev      = 5;    // ZigZag Deviation
+input int    InpZigZagBackstep = 3;    // ZigZag Backstep
+
+//--- Global Variables (Hidden from Input Panel)
+uint   Slippage       = 5;          // Slippage in points
+ulong  MagicNumber    = 999999;     // Universal Magic Number
+int    g_zigzag_handle;             // Handle for the ZigZag indicator
+>>>>>>> REPLACE
