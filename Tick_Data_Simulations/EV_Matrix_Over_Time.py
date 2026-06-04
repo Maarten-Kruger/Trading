@@ -12,14 +12,24 @@ OUTPUT_FILE = 'EV_Matrix_Over_Time.csv'
 STEP_SECONDS = 60         # Step forward by 60 seconds each time
 LOOKBACK_SECONDS = 3600   # 3600 seconds (1 hour) lookback
 TICK_DENSITY = 100        # Every 100th tick
-SPREAD_THRESHOLD = 5 * 0.00001 # Only trade if spread is below 5 points
+PIP_VALUE = 0.00001       # E.g., 0.00001 for EURUSD, 0.01 for USDJPY, 1.0 for BTCUSD
+SPREAD_THRESHOLD = 5 * PIP_VALUE # Only trade if spread is below 5 points (scaled by PIP_VALUE)
+
+TRADE_START_HOUR = 8      # Start trading at 8:00
+TRADE_END_HOUR = 17       # Stop trading at 17:00 (5 PM)
 
 RR_LEVELS = np.array([1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5], dtype=np.float64)
 R_SIZES = np.array([20, 50, 75, 100], dtype=np.float64)
 
+@njit(cache=True)
+def get_hour_from_unix(timestamp_sec):
+    # UNIX time starts at 1970-01-01 00:00:00 UTC.
+    # Total seconds % 86400 gives seconds in the current day.
+    # Divide by 3600 to get the hour.
+    return (timestamp_sec % 86400) // 3600
 
 @njit(cache=True)
-def calculate_window_ev(bid_slice, ask_slice, r_sizes, rr_levels, tick_density, spread_threshold):
+def calculate_window_ev(bid_slice, ask_slice, times_slice, r_sizes, rr_levels, tick_density, spread_threshold, start_hour, end_hour, pip_value):
     """
     Calculates EV for a specific window of ticks.
     """
@@ -35,13 +45,20 @@ def calculate_window_ev(bid_slice, ask_slice, r_sizes, rr_levels, tick_density, 
         for i_rr in range(num_rr):
             rr = rr_levels[i_rr]
 
-            r_value = r_size * 0.00001
+            r_value = r_size * pip_value
             tp_value = r_value * rr
 
             wins = 0
             losses = 0
 
             for i in entry_indices:
+                tick_time = times_slice[i]
+                hour = get_hour_from_unix(tick_time)
+
+                # Skip if outside trading hours
+                if hour < start_hour or hour >= end_hour:
+                    continue
+
                 spread = ask_slice[i] - bid_slice[i]
 
                 # Only take the trade if spread is below the threshold
@@ -123,8 +140,9 @@ def process_chunk(args):
         if idx_start < idx_end:
             bid_slice = _g_bid[idx_start:idx_end]
             ask_slice = _g_ask[idx_start:idx_end]
+            times_slice = _g_times[idx_start:idx_end]
 
-            ev_matrix = calculate_window_ev(bid_slice, ask_slice, r_sizes, rr_levels, tick_density, SPREAD_THRESHOLD)
+            ev_matrix = calculate_window_ev(bid_slice, ask_slice, times_slice, r_sizes, rr_levels, tick_density, SPREAD_THRESHOLD, TRADE_START_HOUR, TRADE_END_HOUR, PIP_VALUE)
             results.append((t_step, ev_matrix))
         else:
             # Empty window
@@ -163,12 +181,6 @@ def main():
 
     start_times = eval_times - LOOKBACK_SECONDS
     end_times = eval_times
-
-    # Prepare column names for the output CSV
-    col_names = ['Timestamp']
-    for r in R_SIZES:
-        for rr in RR_LEVELS:
-            col_names.append(f'R{int(r)}_RR{rr}')
 
     num_cores = cpu_count()
     print(f"Using {num_cores} cores to process {len(eval_times)} steps...")
