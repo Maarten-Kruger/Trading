@@ -12,13 +12,14 @@ OUTPUT_FILE = 'EV_Matrix_Over_Time.csv'
 STEP_SECONDS = 60         # Step forward by 60 seconds each time
 LOOKBACK_SECONDS = 3600   # 3600 seconds (1 hour) lookback
 TICK_DENSITY = 100        # Every 100th tick
+SPREAD_THRESHOLD = 5 * 0.00001 # Only trade if spread is below 5 points
 
 RR_LEVELS = np.array([1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5], dtype=np.float64)
 R_SIZES = np.array([20, 50, 75, 100], dtype=np.float64)
 
 
 @njit(cache=True)
-def calculate_window_ev(bid_slice, ask_slice, r_sizes, rr_levels, tick_density):
+def calculate_window_ev(bid_slice, ask_slice, r_sizes, rr_levels, tick_density, spread_threshold):
     """
     Calculates EV for a specific window of ticks.
     """
@@ -43,8 +44,8 @@ def calculate_window_ev(bid_slice, ask_slice, r_sizes, rr_levels, tick_density):
             for i in entry_indices:
                 spread = ask_slice[i] - bid_slice[i]
 
-                # Only take the trade if spread is less than the stop loss size
-                if spread < r_value:
+                # Only take the trade if spread is below the threshold
+                if spread < spread_threshold:
                     # UP trade logic
                     entry_up = ask_slice[i]
                     sl_up = entry_up - r_value
@@ -95,24 +96,35 @@ def calculate_window_ev(bid_slice, ask_slice, r_sizes, rr_levels, tick_density):
 
     return ev_matrix
 
+# Global variables for worker processes to avoid pickling overhead
+_g_bid = None
+_g_ask = None
+_g_times = None
+
+def init_worker(bid_arr, ask_arr, times_arr):
+    global _g_bid, _g_ask, _g_times
+    _g_bid = bid_arr
+    _g_ask = ask_arr
+    _g_times = times_arr
+
 def process_chunk(args):
     """
     Process a chunk of time steps.
     """
-    (timestamps_chunk, start_times, end_times, bid, ask, times, r_sizes, rr_levels, tick_density) = args
+    (timestamps_chunk, start_times, end_times, r_sizes, rr_levels, tick_density) = args
     results = []
 
     for t_step, start_t, end_t in zip(timestamps_chunk, start_times, end_times):
         # Find indices within the lookback window [start_t, end_t]
         # Since times is sorted, we can use searchsorted
-        idx_start = np.searchsorted(times, start_t, side='left')
-        idx_end = np.searchsorted(times, end_t, side='right')
+        idx_start = np.searchsorted(_g_times, start_t, side='left')
+        idx_end = np.searchsorted(_g_times, end_t, side='right')
 
         if idx_start < idx_end:
-            bid_slice = bid[idx_start:idx_end]
-            ask_slice = ask[idx_start:idx_end]
+            bid_slice = _g_bid[idx_start:idx_end]
+            ask_slice = _g_ask[idx_start:idx_end]
 
-            ev_matrix = calculate_window_ev(bid_slice, ask_slice, r_sizes, rr_levels, tick_density)
+            ev_matrix = calculate_window_ev(bid_slice, ask_slice, r_sizes, rr_levels, tick_density, SPREAD_THRESHOLD)
             results.append((t_step, ev_matrix))
         else:
             # Empty window
@@ -133,9 +145,8 @@ def main():
     df['datetime'] = pd.to_datetime(df['<DATE>'] + ' ' + df['<TIME>'], format='%Y.%m.%d %H:%M:%S.%f')
 
     # Convert everything to numpy arrays for numba/multiprocessing
-    # pandas datetime to int64 returns microseconds for this datetime format.
-    # Convert directly to unix timestamps in seconds.
-    times_sec = df['datetime'].astype('int64').values / 1_000_000.0
+    # Using astype('datetime64[s]') is robust across pandas versions to get seconds directly
+    times_sec = df['datetime'].values.astype('datetime64[s]').astype(np.int64)
 
     bid = df['<BID>'].values.astype(np.float64)
     ask = df['<ASK>'].values.astype(np.float64)
@@ -170,12 +181,12 @@ def main():
         c_eval = eval_times[i:i + chunk_size]
         c_start = start_times[i:i + chunk_size]
         c_end = end_times[i:i + chunk_size]
-        chunks.append((c_eval, c_start, c_end, bid, ask, times_sec, R_SIZES, RR_LEVELS, TICK_DENSITY))
+        chunks.append((c_eval, c_start, c_end, R_SIZES, RR_LEVELS, TICK_DENSITY))
 
     start_compute_time = time.time()
 
     all_results = []
-    with Pool(processes=num_cores) as pool:
+    with Pool(processes=num_cores, initializer=init_worker, initargs=(bid, ask, times_sec)) as pool:
         for chunk_results in tqdm(pool.imap(process_chunk, chunks), total=len(chunks), desc="Processing time chunks"):
             all_results.extend(chunk_results)
 
