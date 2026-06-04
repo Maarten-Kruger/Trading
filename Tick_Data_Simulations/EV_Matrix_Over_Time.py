@@ -6,20 +6,20 @@ from multiprocessing import Pool, cpu_count
 import time
 
 # --- CONFIGURATION ---
-FILE_PATH = 'EURUSD_1.6_Tick Data.csv'
-OUTPUT_FILE = 'EV_Matrix_Over_Time.csv'
+FILE_PATH = 'BTCUSD_Jan.csv'
+OUTPUT_FILE = 'EV_Matrix_Over_Time_BTCUSD_9-18_Jan_3600_3600.csv'
 
-STEP_SECONDS = 60         # Step forward by 60 seconds each time
-LOOKBACK_SECONDS = 3600   # 3600 seconds (1 hour) lookback
+STEP_SECONDS = 3600         # Step forward by 1500 seconds each time
+LOOKBACK_SECONDS = 3600    # 1500 seconds (25 minutes) lookback
 TICK_DENSITY = 100        # Every 100th tick
-PIP_VALUE = 0.00001       # E.g., 0.00001 for EURUSD, 0.01 for USDJPY, 1.0 for BTCUSD
-SPREAD_THRESHOLD = 5 * PIP_VALUE # Only trade if spread is below 5 points (scaled by PIP_VALUE)
+PIP_VALUE = 1       # E.g., 0.00001 for EURUSD, 0.01 for USDJPY, 1.0 for BTCUSD
+SPREAD_THRESHOLD = 2 * PIP_VALUE # Only trade if spread is below 2 points (scaled by PIP_VALUE)
 
-TRADE_START_HOUR = 8      # Start trading at 8:00
-TRADE_END_HOUR = 17       # Stop trading at 17:00 (5 PM)
+TRADE_START_HOUR = 9      # Start trading at 9:00
+TRADE_END_HOUR = 18       # Stop trading at 17:00 (5 PM)
 
-RR_LEVELS = np.array([1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5], dtype=np.float64)
-R_SIZES = np.array([20, 50, 75, 100], dtype=np.float64)
+RR_LEVELS = np.array([1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5], dtype=np.float64)
+R_SIZES = np.array([2, 5, 10, 20, 50], dtype=np.float64)
 
 @njit(cache=True)
 def get_hour_from_unix(timestamp_sec):
