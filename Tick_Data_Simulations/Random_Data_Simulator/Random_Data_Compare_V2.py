@@ -11,9 +11,8 @@ OUTPUT_HTML = 'EURUSD_tick_experiment_100.html' # Name of the generated HTML fil
 POINT_MULTIPLIER = 100000            # Conversion to points (100,000 for 5-decimal pairs like EURUSD)
 THRESHOLD_POINTS = 100                # 5 pips = 50 points. Change this to test different breakout sizes
 MAX_TICK_JUMP_CAP = 50               # Caps extreme outliers in single-tick data errors
-HISTOGRAM_BINS = 100                 # Number of bins for the smooth histogram
+HISTOGRAM_BINS = 200                 # Number of bins for the smooth histogram
 SMOOTHING_WINDOW = 3                 # Rolling average window for the smooth curve (higher = smoother)
-HURST_WINDOW_SECONDS = 3600          # Window size in seconds for the rolling Hurst Exponent calculation
 
 # ==========================================
 # 1. LOAD DATA & GET PROBABILITY PROFILE
@@ -33,7 +32,7 @@ try:
     df = df.dropna(subset=['<BID>'])
     prices = df['<BID>'].values * POINT_MULTIPLIER
     timestamps = df['Datetime'].values
-except KeyError:
+except (KeyError, FileNotFoundError):
     # Fallback dummy data generation if file isn't found/formatted right so the script still runs
     print("Could not find <BID> column or file, generating synthetic data for demonstration.")
     np.random.seed(42)
@@ -58,9 +57,10 @@ sim_prices = np.insert(np.cumsum(shuffled_diffs) + prices[0], 0, prices[0])
 # 3. MEASURE DURATIONS & MAE & CALCULATE STATS
 # ==========================================
 print(f"Measuring duration and MAE to hit {THRESHOLD_POINTS} points...")
-def get_blocks_data(price_array, threshold):
+def get_blocks_data(price_array, threshold, timestamp_array):
     durations = []
     maes = []
+    directions = []
     ref_price = price_array[0]
     ref_idx = 0
 
@@ -79,16 +79,20 @@ def get_blocks_data(price_array, threshold):
         diff = current_price - ref_price
 
         if abs(diff) >= threshold:
-            durations.append(i - ref_idx)
+            # duration in seconds
+            time_diff = (timestamp_array[i] - timestamp_array[ref_idx])
+            durations.append(time_diff / np.timedelta64(1, 's'))
 
             if diff >= threshold:
                 # Upward breakout: MAE is the maximum unfavorable (downward) movement.
                 # So we look at the lowest point reached compared to ref_price.
                 mae = abs(min_price - ref_price)
+                directions.append(1)
             else:
                 # Downward breakout: MAE is the maximum unfavorable (upward) movement.
                 # So we look at the highest point reached compared to ref_price.
                 mae = abs(max_price - ref_price)
+                directions.append(-1)
 
             maes.append(mae)
 
@@ -98,10 +102,10 @@ def get_blocks_data(price_array, threshold):
             max_price = current_price
             min_price = current_price
 
-    return durations, maes
+    return durations, maes, directions
 
-durations_actual, mae_actual = get_blocks_data(prices, THRESHOLD_POINTS)
-durations_sim, mae_sim = get_blocks_data(sim_prices, THRESHOLD_POINTS)
+durations_actual, mae_actual, dirs_actual = get_blocks_data(prices, THRESHOLD_POINTS, timestamps)
+durations_sim, mae_sim, dirs_sim = get_blocks_data(sim_prices, THRESHOLD_POINTS, timestamps)
 
 def calc_stats(data_array):
     if not data_array:
@@ -149,7 +153,7 @@ bin_centers = (bins[:-1] + bins[1:]) / 2
 output_data = []
 for i in range(len(bin_centers)):
     output_data.append({
-        "duration_ticks": round(bin_centers[i], 1),
+        "duration_secs": round(bin_centers[i], 1),
         "Actual": round(smooth_actual[i], 2),
         "Simulated": round(smooth_sim[i], 2)
     })
@@ -179,94 +183,6 @@ mae_json_string = json.dumps(mae_output_data)
 
 pips_target = int(THRESHOLD_POINTS / 10)
 title_str = FILE_PATH.split('.')[0].replace('_', ' ')
-
-# ==========================================
-# 4.5 CALCULATE HURST EXPONENT OVER TIME
-# ==========================================
-print(f"Calculating Rolling Hurst Exponent (Window: {HURST_WINDOW_SECONDS}s)...")
-
-def get_hurst_exponent(ts):
-    """
-    Approximation of Hurst Exponent using R/S method.
-    Returns 0.5 if series is too short or variance is zero.
-    """
-    ts = np.asarray(ts)
-    if len(ts) < 20:
-        return 0.5
-
-    # Calculate price returns
-    lags = range(2, min(len(ts)//2, 100))
-    if not lags:
-        return 0.5
-
-    tau = []
-    lagvec = []
-
-    # Simple rescaled range
-    for lag in lags:
-        price_diff = np.subtract(ts[lag:], ts[:-lag])
-        if np.std(price_diff) == 0:
-            continue
-        tau.append(np.sqrt(np.std(price_diff)))
-        lagvec.append(lag)
-
-    if not tau:
-        return 0.5
-
-    # Fit line to log-log plot to extract Hurst exponent
-    m = np.polyfit(np.log(lagvec), np.log(tau), 1)
-    hurst = m[0]*2.0
-
-    # Bound the return value to realistic values [0, 1]
-    return np.clip(hurst, 0.0, 1.0)
-
-# Resample to windows based on time
-# We use pandas Series to handle the time-based windowing efficiently
-price_series_act = pd.Series(prices, index=timestamps)
-price_series_sim = pd.Series(sim_prices, index=timestamps)
-
-# Resample to 1-second intervals and ffill to ensure even spacing if needed,
-# then apply a rolling window. But since tick data can be dense, it's better to
-# group by time blocks directly.
-def compute_rolling_hurst(series, window_seconds, step_seconds):
-    # To save computation, we calculate Hurst on non-overlapping or slightly overlapping windows
-    # instead of purely rolling every single tick.
-    # Group by step_seconds (e.g. 15 minutes) and then look back `window_seconds`.
-    resampled = series.resample(f'{step_seconds}s').last().dropna()
-    hurst_values = []
-    times = []
-
-    # For every point in the resampled series, grab the raw ticks within the lookback window
-    for time_end in resampled.index:
-        time_start = time_end - pd.Timedelta(seconds=window_seconds)
-        # Slicing the raw series
-        window_data = series.loc[time_start:time_end].values
-        if len(window_data) > 50: # Need enough ticks
-            h = get_hurst_exponent(window_data)
-            hurst_values.append(h)
-            times.append(time_end.strftime('%Y-%m-%d %H:%M:%S'))
-    return times, hurst_values
-
-# We step every 1/10th of the window to get a smooth line without overcomputing
-STEP_SECONDS = max(60, HURST_WINDOW_SECONDS // 10)
-hurst_times_act, hurst_vals_act = compute_rolling_hurst(price_series_act, HURST_WINDOW_SECONDS, STEP_SECONDS)
-_, hurst_vals_sim = compute_rolling_hurst(price_series_sim, HURST_WINDOW_SECONDS, STEP_SECONDS)
-
-# Ensure they match in length for charting (they should since index is same, but just in case)
-min_len = min(len(hurst_times_act), len(hurst_vals_sim))
-hurst_times_act = hurst_times_act[:min_len]
-hurst_vals_act = hurst_vals_act[:min_len]
-hurst_vals_sim = hurst_vals_sim[:min_len]
-
-hurst_json_string = json.dumps({
-    "times": hurst_times_act,
-    "actual": [round(h, 3) for h in hurst_vals_act],
-    "simulated": [round(h, 3) for h in hurst_vals_sim]
-})
-
-actual_hurst_stats = calc_stats(hurst_vals_act)
-sim_hurst_stats = calc_stats(hurst_vals_sim)
-
 
 # ==========================================
 # 4.6 CALCULATE STREAKS (TARGET HITS)
@@ -314,6 +230,76 @@ streak_json_string = json.dumps(streak_data)
 
 actual_streak_stats = calc_stats(streaks_actual)
 sim_streak_stats = calc_stats(streaks_sim)
+
+
+# ==========================================
+# 4.7 VOLATILITY AUTOCORRELATION
+# ==========================================
+print("Calculating Volatility Autocorrelation...")
+def calc_vol_autocorr(durations, directions, quantiles=5):
+    if len(durations) < 2:
+        return []
+
+    durations = np.array(durations)
+    directions = np.array(directions)
+
+    # We want to group by the PREVIOUS duration to see the NEXT duration
+    prev_durations = durations[:-1]
+    next_durations = durations[1:]
+
+    prev_dirs = directions[:-1]
+    next_dirs = directions[1:]
+
+    # Direction relation: 1 if continuation, -1 if reversal
+    dir_relation = prev_dirs * next_dirs
+
+    # Bin the previous durations into quantiles
+    try:
+        bins = np.percentile(prev_durations, np.linspace(0, 100, quantiles + 1))
+        bins[-1] += 1e-9 # ensure highest value is included
+        bin_indices = np.digitize(prev_durations, bins) - 1
+    except Exception:
+        return []
+
+    results = []
+    labels = ["Very Fast", "Fast", "Average", "Slow", "Very Slow"]
+
+    for i in range(quantiles):
+        mask = (bin_indices == i)
+        if not np.any(mask):
+            continue
+
+        mask_cont = mask & (dir_relation == 1)
+        mask_rev = mask & (dir_relation == -1)
+
+        avg_cont = np.mean(next_durations[mask_cont]) if np.any(mask_cont) else 0
+        avg_rev = np.mean(next_durations[mask_rev]) if np.any(mask_rev) else 0
+
+        results.append({
+            "speed_bin": labels[i] if i < len(labels) else f"Bin {i}",
+            "continuation": round(float(avg_cont), 2),
+            "reversal": round(float(avg_rev), 2)
+        })
+
+    return results
+
+vol_autocorr_act = calc_vol_autocorr(durations_actual, dirs_actual)
+vol_autocorr_sim = calc_vol_autocorr(durations_sim, dirs_sim)
+
+# Combine into a single JSON struct
+combined_autocorr = []
+for i in range(len(vol_autocorr_act)):
+    act_data = vol_autocorr_act[i]
+    sim_data = vol_autocorr_sim[i] if i < len(vol_autocorr_sim) else {"continuation": 0, "reversal": 0}
+    combined_autocorr.append({
+        "speed_bin": act_data["speed_bin"],
+        "act_cont": act_data["continuation"],
+        "act_rev": act_data["reversal"],
+        "sim_cont": sim_data["continuation"],
+        "sim_rev": sim_data["reversal"]
+    })
+
+autocorr_json_string = json.dumps(combined_autocorr)
 
 # ==========================================
 # 5. GENERATE HTML WIDGET (LIGHT THEME DASHBOARD)
@@ -462,10 +448,13 @@ html_template = f"""<!DOCTYPE html>
         </div>
     </div>
 
+
+
+
     <div class="card">
-        <div class="card-header">Rolling Hurst Exponent (Window: {HURST_WINDOW_SECONDS}s)</div>
+        <div class="card-header">Volatility Autocorrelation (Next Move Duration based on Previous Move Speed)</div>
         <div class="chart-container">
-            <canvas id="hurstChart"></canvas>
+            <canvas id="autocorrChart"></canvas>
         </div>
     </div>
 
@@ -476,7 +465,7 @@ html_template = f"""<!DOCTYPE html>
             <div class="stat-col">
                 <h3 class="title-actual">Actual EURUSD</h3>
 
-                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Duration (Ticks)</div>
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Duration (Seconds)</div>
                 <div class="stat-row">
                     <span class="stat-label">Trials</span>
                     <span class="stat-value">{actual_stats['trials']:,}</span>
@@ -518,21 +507,13 @@ html_template = f"""<!DOCTYPE html>
                     <span class="stat-value">{max(act_lens, default=0):.0f}</span>
                 </div>
 
-                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Hurst Exponent</div>
-                <div class="stat-row">
-                    <span class="stat-label">Mean</span>
-                    <span class="stat-value">{actual_hurst_stats['mean']:.3f}</span>
-                </div>
-                <div class="stat-row">
-                    <span class="stat-label">Std Dev</span>
-                    <span class="stat-value">{actual_hurst_stats['std']:.3f}</span>
-                </div>
+
             </div>
 
             <div class="stat-col">
                 <h3 class="title-sim">Simulated</h3>
 
-                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Duration (Ticks)</div>
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Duration (Seconds)</div>
                 <div class="stat-row">
                     <span class="stat-label">Trials</span>
                     <span class="stat-value">{sim_stats['trials']:,}</span>
@@ -574,20 +555,12 @@ html_template = f"""<!DOCTYPE html>
                     <span class="stat-value">{max(sim_lens, default=0):.0f}</span>
                 </div>
 
-                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Hurst Exponent</div>
-                <div class="stat-row">
-                    <span class="stat-label">Mean</span>
-                    <span class="stat-value">{sim_hurst_stats['mean']:.3f}</span>
-                </div>
-                <div class="stat-row">
-                    <span class="stat-label">Std Dev</span>
-                    <span class="stat-value">{sim_hurst_stats['std']:.3f}</span>
-                </div>
+
             </div>
         </div>
 
         <div class="insight-box">
-            <strong>What the gap tells you:</strong> The actual market reaches ±{pips_target} pips <em>later</em> than pure random (mean {actual_stats['mean']:.1f} vs {sim_stats['mean']:.1f} ticks). Both distributions share the same tick-size profile — the only thing that differs is direction. The heavier right tail in real data reflects <strong>mean-reversion micro-structure</strong>: consecutive ticks often reverse (market makers ping-ponging the spread), causing the price to "waste" ticks oscillating near the origin before eventually trending far enough to hit the target.
+            <strong>What the gap tells you:</strong> The actual market reaches ±{pips_target} pips <em>later</em> than pure random (mean {actual_stats['mean']:.1f} vs {sim_stats['mean']:.1f} seconds). Both distributions share the same tick-size profile — the only thing that differs is direction. The heavier right tail in real data reflects <strong>mean-reversion micro-structure</strong>: consecutive ticks often reverse (market makers ping-ponging the spread), causing the price to "waste" ticks oscillating near the origin before eventually trending far enough to hit the target.
         </div>
     </div>
 
@@ -595,7 +568,7 @@ html_template = f"""<!DOCTYPE html>
         <div class="card-header">Experiment Setup</div>
         <div class="setup-section">
             <p><strong>What is being measured?</strong></p>
-            <p>We walk forward tick-by-tick through the data series and record <strong>how many ticks it takes until the price has moved ±{pips_target} pips ({THRESHOLD_POINTS} points) away from the start</strong>. The count increments by 1 per tick consumed, not per pip.</p>
+            <p>We walk forward tick-by-tick through the data series and record <strong>how many seconds it takes until the price has moved ±{pips_target} pips ({THRESHOLD_POINTS} points) away from the start</strong>. The count increments by 1 per second elapsed, not per pip.</p>
             <p>The same experiment is repeated on a <strong>synthetic random walk</strong> that uses the exact same per-tick move distribution observed in the real data — but with no sequential dependence (each tick is drawn independently with a 50/50 directional probability).</p>
         </div>
     </div>
@@ -604,35 +577,33 @@ html_template = f"""<!DOCTYPE html>
 <script>
     const rawData = {json_data_string};
 
-    const labels = rawData.map(d => d.duration_ticks);
+    const labels = rawData.map(d => d.duration_secs);
     const actualData = rawData.map(d => d.Actual);
     const simData = rawData.map(d => d.Simulated);
 
     const ctx = document.getElementById('volatilityChart').getContext('2d');
     new Chart(ctx, {{
-        type: 'line',
+        type: 'bar',
         data: {{
             labels: labels,
             datasets: [
                 {{
                     label: 'Actual Data',
                     data: actualData,
-                    backgroundColor: 'rgba(59, 130, 246, 0.15)', /* blue */
+                    backgroundColor: 'rgba(59, 130, 246, 0.7)',
                     borderColor: 'rgba(59, 130, 246, 1)',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    fill: true,
-                    tension: 0.4 
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
                 }},
                 {{
                     label: 'Simulated',
                     data: simData,
-                    backgroundColor: 'rgba(249, 115, 22, 0.15)', /* orange */
+                    backgroundColor: 'rgba(249, 115, 22, 0.7)',
                     borderColor: 'rgba(249, 115, 22, 1)',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    fill: true,
-                    tension: 0.4
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
                 }}
             ]
         }},
@@ -658,7 +629,7 @@ html_template = f"""<!DOCTYPE html>
             }},
             scales: {{
                 x: {{ 
-                    title: {{ display: true, text: 'Ticks to reach ±{pips_target} pips', color: '#64748b', font: {{ size: 12 }} }},
+                    title: {{ display: true, text: 'Seconds to reach ±{pips_target} pips', color: '#64748b', font: {{ size: 12 }} }},
                     grid: {{ display: false }},
                     ticks: {{ color: '#64748b' }}
                 }},
@@ -722,37 +693,41 @@ html_template = f"""<!DOCTYPE html>
         }}
     }});
 
-    // --- HURST EXPONENT CHART ---
-    const rawHurstData = {hurst_json_string};
-    const hurstLabels = rawHurstData.times;
-    const hurstAct = rawHurstData.actual;
-    const hurstSim = rawHurstData.simulated;
 
-    const ctxHurst = document.getElementById('hurstChart').getContext('2d');
-    new Chart(ctxHurst, {{
-        type: 'line',
+
+    // --- VOLATILITY AUTOCORRELATION CHART ---
+    const rawAutocorr = {autocorr_json_string};
+    const autoLabels = rawAutocorr.map(d => d.speed_bin);
+
+    const ctxAuto = document.getElementById('autocorrChart').getContext('2d');
+    new Chart(ctxAuto, {{
+        type: 'bar',
         data: {{
-            labels: hurstLabels,
+            labels: autoLabels,
             datasets: [
                 {{
-                    label: 'Actual Data Hurst',
-                    data: hurstAct,
-                    borderColor: 'rgba(59, 130, 246, 1)',
-                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    fill: false,
-                    tension: 0.1
+                    label: 'Actual - Continuation',
+                    data: rawAutocorr.map(d => d.act_cont),
+                    backgroundColor: 'rgba(59, 130, 246, 0.9)', // Solid Blue
+                    borderWidth: 0
                 }},
                 {{
-                    label: 'Simulated Hurst',
-                    data: hurstSim,
-                    borderColor: 'rgba(249, 115, 22, 1)',
-                    backgroundColor: 'rgba(249, 115, 22, 0.1)',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    fill: false,
-                    tension: 0.1
+                    label: 'Actual - Reversal',
+                    data: rawAutocorr.map(d => d.act_rev),
+                    backgroundColor: 'rgba(59, 130, 246, 0.4)', // Light Blue
+                    borderWidth: 0
+                }},
+                {{
+                    label: 'Simulated - Continuation',
+                    data: rawAutocorr.map(d => d.sim_cont),
+                    backgroundColor: 'rgba(249, 115, 22, 0.9)', // Solid Orange
+                    borderWidth: 0
+                }},
+                {{
+                    label: 'Simulated - Reversal',
+                    data: rawAutocorr.map(d => d.sim_rev),
+                    backgroundColor: 'rgba(249, 115, 22, 0.4)', // Light Orange
+                    borderWidth: 0
                 }}
             ]
         }},
@@ -765,16 +740,14 @@ html_template = f"""<!DOCTYPE html>
             }},
             scales: {{
                 x: {{
-                    title: {{ display: true, text: 'Time', color: '#64748b' }},
-                    grid: {{ display: false }},
-                    ticks: {{ maxTicksLimit: 10 }}
+                    title: {{ display: true, text: 'Previous Move Speed Quantile', color: '#64748b' }},
+                    grid: {{ display: false }}
                 }},
                 y: {{
                     type: 'linear',
-                    title: {{ display: true, text: 'Hurst Exponent', color: '#64748b' }},
+                    title: {{ display: true, text: 'Average Next Move Duration (Seconds)', color: '#64748b' }},
                     grid: {{ color: '#f1f5f9' }},
-                    min: 0,
-                    max: 1
+                    beginAtZero: true
                 }}
             }}
         }}
@@ -788,29 +761,27 @@ html_template = f"""<!DOCTYPE html>
 
     const ctxMae = document.getElementById('maeChart').getContext('2d');
     new Chart(ctxMae, {{
-        type: 'line',
+        type: 'bar',
         data: {{
             labels: maeLabels,
             datasets: [
                 {{
                     label: 'Actual Data MAE',
                     data: maeAct,
-                    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.7)',
                     borderColor: 'rgba(59, 130, 246, 1)',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    fill: true,
-                    tension: 0.4
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
                 }},
                 {{
                     label: 'Simulated MAE',
                     data: maeSim,
-                    backgroundColor: 'rgba(249, 115, 22, 0.15)',
+                    backgroundColor: 'rgba(249, 115, 22, 0.7)',
                     borderColor: 'rgba(249, 115, 22, 1)',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    fill: true,
-                    tension: 0.4
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
                 }}
             ]
         }},
