@@ -6,14 +6,14 @@ from multiprocessing import Pool, cpu_count
 import time
 
 # --- CONFIGURATION ---
-FILE_PATH = 'BTCUSD_Jan.csv'
-OUTPUT_FILE = 'EV_Matrix_Over_Time_BTCUSD_9-18_Jan_3600_3600.csv'
+FILE_PATH = 'US500.cash_Jan.csv'
+OUTPUT_FILE = 'EV_Matrix_Over_Time_US500cash_16pm-18_March_900_900.csv'
 
-STEP_SECONDS = 3600         # Step forward by 1500 seconds each time
-LOOKBACK_SECONDS = 3600    # 1500 seconds (25 minutes) lookback
-TICK_DENSITY = 100        # Every 100th tick
-PIP_VALUE = 1       # E.g., 0.00001 for EURUSD, 0.01 for USDJPY, 1.0 for BTCUSD
-SPREAD_THRESHOLD = 2 * PIP_VALUE # Only trade if spread is below 2 points (scaled by PIP_VALUE)
+STEP_SECONDS = 900         # Step forward by 900 seconds each time
+LOOKBACK_SECONDS = 900     # 900 seconds (15 minutes) lookback
+TICK_DENSITY = 100          # Every 100th tick
+PIP_VALUE = 1          # E.g., 0.00001 for EURUSD, 0.01 for USDJPY, 1.0 for BTCUSD
+SPREAD_THRESHOLD = 0.6 * PIP_VALUE # Only trade if spread is below 10 points (scaled by PIP_VALUE)
 
 TRADE_START_HOUR = 9      # Start trading at 9:00
 TRADE_END_HOUR = 18       # Stop trading at 17:00 (5 PM)
