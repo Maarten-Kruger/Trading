@@ -13,6 +13,7 @@ THRESHOLD_POINTS = 100                # 5 pips = 50 points. Change this to test 
 MAX_TICK_JUMP_CAP = 50               # Caps extreme outliers in single-tick data errors
 HISTOGRAM_BINS = 100                 # Number of bins for the smooth histogram
 SMOOTHING_WINDOW = 3                 # Rolling average window for the smooth curve (higher = smoother)
+HURST_WINDOW_SECONDS = 3600          # Window size in seconds for the rolling Hurst Exponent calculation
 
 # ==========================================
 # 1. LOAD DATA & GET PROBABILITY PROFILE
@@ -21,66 +22,104 @@ print(f"Loading data from {FILE_PATH}...")
 # Note: Adjust separator or loading logic if your CSV structure requires it.
 try:
     df = pd.read_csv(FILE_PATH, sep='\t')
-    prices = df['<BID>'].dropna().values * POINT_MULTIPLIER
+    # Combine date and time to create a datetime column
+    if '<DATE>' in df.columns and '<TIME>' in df.columns:
+        df['Datetime'] = pd.to_datetime(df['<DATE>'] + ' ' + df['<TIME>'], format='%Y.%m.%d %H:%M:%S.%f')
+    elif 'Datetime' not in df.columns:
+        # Fallback if specific format missing but another time column might exist
+        df['Datetime'] = pd.date_range("2026-01-01", periods=len(df), freq="1s")
+
+    # Drop rows where <BID> is missing to ensure equal lengths
+    df = df.dropna(subset=['<BID>'])
+    prices = df['<BID>'].values * POINT_MULTIPLIER
+    timestamps = df['Datetime'].values
 except KeyError:
     # Fallback dummy data generation if file isn't found/formatted right so the script still runs
     print("Could not find <BID> column or file, generating synthetic data for demonstration.")
     np.random.seed(42)
     prices = np.cumsum(np.random.normal(0, 1, 100000)) * 10
+    timestamps = pd.date_range("2026-01-01", periods=len(prices), freq="1s").values
+
 N = len(prices)
 
 print(f"Loaded {N} ticks. Calculating real market tick profile...")
-# Get absolute jumps and cap outliers
-abs_diff_actual = np.abs(np.diff(prices)).round()
-abs_diff_actual = np.clip(abs_diff_actual, 0, MAX_TICK_JUMP_CAP)
-
-# Calculate empirical probabilities
-unique, counts = np.unique(abs_diff_actual, return_counts=True)
-probabilities = counts / counts.sum()
+# Get actual diffs
+diff_actual = np.diff(prices)
 
 # ==========================================
 # 2. SIMULATE RANDOM WALK
 # ==========================================
-print("Simulating Random Walk using market probability profile...")
+print("Simulating Random Walk using randomly shuffled actual ticks...")
 np.random.seed(42)  # For reproducibility
-sim_magnitudes = np.random.choice(unique, size=N-1, p=probabilities)
-sim_directions = np.random.choice([-1, 1], size=N-1, p=[0.5, 0.5])
-sim_steps = sim_magnitudes * sim_directions
-sim_prices = np.insert(np.cumsum(sim_steps) + prices[0], 0, prices[0])
+shuffled_diffs = np.random.permutation(diff_actual)
+sim_prices = np.insert(np.cumsum(shuffled_diffs) + prices[0], 0, prices[0])
 
 # ==========================================
-# 3. MEASURE DURATIONS & CALCULATE STATS
+# 3. MEASURE DURATIONS & MAE & CALCULATE STATS
 # ==========================================
-print(f"Measuring duration to hit {THRESHOLD_POINTS} points...")
-def get_durations(price_array, threshold):
+print(f"Measuring duration and MAE to hit {THRESHOLD_POINTS} points...")
+def get_blocks_data(price_array, threshold):
     durations = []
+    maes = []
     ref_price = price_array[0]
     ref_idx = 0
+
+    # We want to keep track of the max and min seen so far in this block
+    max_price = ref_price
+    min_price = ref_price
+
     for i in range(1, len(price_array)):
-        if abs(price_array[i] - ref_price) >= threshold:
+        current_price = price_array[i]
+
+        if current_price > max_price:
+            max_price = current_price
+        if current_price < min_price:
+            min_price = current_price
+
+        diff = current_price - ref_price
+
+        if abs(diff) >= threshold:
             durations.append(i - ref_idx)
-            ref_price = price_array[i]
+
+            if diff >= threshold:
+                # Upward breakout: MAE is the maximum unfavorable (downward) movement.
+                # So we look at the lowest point reached compared to ref_price.
+                mae = abs(min_price - ref_price)
+            else:
+                # Downward breakout: MAE is the maximum unfavorable (upward) movement.
+                # So we look at the highest point reached compared to ref_price.
+                mae = abs(max_price - ref_price)
+
+            maes.append(mae)
+
+            # Reset block stats
+            ref_price = current_price
             ref_idx = i
-    return durations
+            max_price = current_price
+            min_price = current_price
 
-durations_actual = get_durations(prices, THRESHOLD_POINTS)
-durations_sim = get_durations(sim_prices, THRESHOLD_POINTS)
+    return durations, maes
 
-def calc_stats(durations):
-    if not durations:
+durations_actual, mae_actual = get_blocks_data(prices, THRESHOLD_POINTS)
+durations_sim, mae_sim = get_blocks_data(sim_prices, THRESHOLD_POINTS)
+
+def calc_stats(data_array):
+    if not data_array:
         return {"trials": 0, "mean": 0, "median": 0, "std": 0, "p25": 0, "p75": 0, "p95": 0}
     return {
-        "trials": len(durations),
-        "mean": np.mean(durations),
-        "median": np.median(durations),
-        "std": np.std(durations),
-        "p25": np.percentile(durations, 25),
-        "p75": np.percentile(durations, 75),
-        "p95": np.percentile(durations, 95)
+        "trials": len(data_array),
+        "mean": np.mean(data_array),
+        "median": np.median(data_array),
+        "std": np.std(data_array),
+        "p25": np.percentile(data_array, 25),
+        "p75": np.percentile(data_array, 75),
+        "p95": np.percentile(data_array, 95)
     }
 
 actual_stats = calc_stats(durations_actual)
 sim_stats = calc_stats(durations_sim)
+actual_mae_stats = calc_stats(mae_actual)
+sim_mae_stats = calc_stats(mae_sim)
 
 print(f"Actual {THRESHOLD_POINTS}-point moves: {actual_stats['trials']}")
 print(f"Simulated {THRESHOLD_POINTS}-point moves: {sim_stats['trials']}")
@@ -117,11 +156,120 @@ for i in range(len(bin_centers)):
 
 json_data_string = json.dumps(output_data)
 
+# --- MAE Histogram Data ---
+max_mae = max(actual_mae_stats['p95'], sim_mae_stats['p95']) if actual_mae_stats['trials'] > 0 else 100
+bins_mae = np.linspace(0, max_mae * 1.2, HISTOGRAM_BINS)
+
+hist_mae_act, _ = np.histogram(mae_actual, bins=bins_mae)
+hist_mae_sim, _ = np.histogram(mae_sim, bins=bins_mae)
+
+smooth_mae_act = smooth(hist_mae_act, SMOOTHING_WINDOW)
+smooth_mae_sim = smooth(hist_mae_sim, SMOOTHING_WINDOW)
+bin_centers_mae = (bins_mae[:-1] + bins_mae[1:]) / 2
+
+mae_output_data = []
+for i in range(len(bin_centers_mae)):
+    mae_output_data.append({
+        "mae_points": round(bin_centers_mae[i], 1),
+        "Actual": round(smooth_mae_act[i], 2),
+        "Simulated": round(smooth_mae_sim[i], 2)
+    })
+
+mae_json_string = json.dumps(mae_output_data)
+
 pips_target = int(THRESHOLD_POINTS / 10)
 title_str = FILE_PATH.split('.')[0].replace('_', ' ')
 
 # ==========================================
-# 4.5 CALCULATE STREAKS (TARGET HITS)
+# 4.5 CALCULATE HURST EXPONENT OVER TIME
+# ==========================================
+print(f"Calculating Rolling Hurst Exponent (Window: {HURST_WINDOW_SECONDS}s)...")
+
+def get_hurst_exponent(ts):
+    """
+    Approximation of Hurst Exponent using R/S method.
+    Returns 0.5 if series is too short or variance is zero.
+    """
+    ts = np.asarray(ts)
+    if len(ts) < 20:
+        return 0.5
+
+    # Calculate price returns
+    lags = range(2, min(len(ts)//2, 100))
+    if not lags:
+        return 0.5
+
+    tau = []
+    lagvec = []
+
+    # Simple rescaled range
+    for lag in lags:
+        price_diff = np.subtract(ts[lag:], ts[:-lag])
+        if np.std(price_diff) == 0:
+            continue
+        tau.append(np.sqrt(np.std(price_diff)))
+        lagvec.append(lag)
+
+    if not tau:
+        return 0.5
+
+    # Fit line to log-log plot to extract Hurst exponent
+    m = np.polyfit(np.log(lagvec), np.log(tau), 1)
+    hurst = m[0]*2.0
+
+    # Bound the return value to realistic values [0, 1]
+    return np.clip(hurst, 0.0, 1.0)
+
+# Resample to windows based on time
+# We use pandas Series to handle the time-based windowing efficiently
+price_series_act = pd.Series(prices, index=timestamps)
+price_series_sim = pd.Series(sim_prices, index=timestamps)
+
+# Resample to 1-second intervals and ffill to ensure even spacing if needed,
+# then apply a rolling window. But since tick data can be dense, it's better to
+# group by time blocks directly.
+def compute_rolling_hurst(series, window_seconds, step_seconds):
+    # To save computation, we calculate Hurst on non-overlapping or slightly overlapping windows
+    # instead of purely rolling every single tick.
+    # Group by step_seconds (e.g. 15 minutes) and then look back `window_seconds`.
+    resampled = series.resample(f'{step_seconds}s').last().dropna()
+    hurst_values = []
+    times = []
+
+    # For every point in the resampled series, grab the raw ticks within the lookback window
+    for time_end in resampled.index:
+        time_start = time_end - pd.Timedelta(seconds=window_seconds)
+        # Slicing the raw series
+        window_data = series.loc[time_start:time_end].values
+        if len(window_data) > 50: # Need enough ticks
+            h = get_hurst_exponent(window_data)
+            hurst_values.append(h)
+            times.append(time_end.strftime('%Y-%m-%d %H:%M:%S'))
+    return times, hurst_values
+
+# We step every 1/10th of the window to get a smooth line without overcomputing
+STEP_SECONDS = max(60, HURST_WINDOW_SECONDS // 10)
+hurst_times_act, hurst_vals_act = compute_rolling_hurst(price_series_act, HURST_WINDOW_SECONDS, STEP_SECONDS)
+_, hurst_vals_sim = compute_rolling_hurst(price_series_sim, HURST_WINDOW_SECONDS, STEP_SECONDS)
+
+# Ensure they match in length for charting (they should since index is same, but just in case)
+min_len = min(len(hurst_times_act), len(hurst_vals_sim))
+hurst_times_act = hurst_times_act[:min_len]
+hurst_vals_act = hurst_vals_act[:min_len]
+hurst_vals_sim = hurst_vals_sim[:min_len]
+
+hurst_json_string = json.dumps({
+    "times": hurst_times_act,
+    "actual": [round(h, 3) for h in hurst_vals_act],
+    "simulated": [round(h, 3) for h in hurst_vals_sim]
+})
+
+actual_hurst_stats = calc_stats(hurst_vals_act)
+sim_hurst_stats = calc_stats(hurst_vals_sim)
+
+
+# ==========================================
+# 4.6 CALCULATE STREAKS (TARGET HITS)
 # ==========================================
 print("Calculating target hit streaks...")
 def get_target_streaks(price_array, threshold):
@@ -163,6 +311,9 @@ for i in range(1, max_streak + 1):
     })
 
 streak_json_string = json.dumps(streak_data)
+
+actual_streak_stats = calc_stats(streaks_actual)
+sim_streak_stats = calc_stats(streaks_sim)
 
 # ==========================================
 # 5. GENERATE HTML WIDGET (LIGHT THEME DASHBOARD)
@@ -305,62 +456,132 @@ html_template = f"""<!DOCTYPE html>
     </div>
 
     <div class="card">
+        <div class="card-header">Maximum Adverse Excursion (MAE) Distribution</div>
+        <div class="chart-container">
+            <canvas id="maeChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Rolling Hurst Exponent (Window: {HURST_WINDOW_SECONDS}s)</div>
+        <div class="chart-container">
+            <canvas id="hurstChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
         <div class="card-header">Summary Statistics</div>
         
         <div class="stats-grid">
             <div class="stat-col">
                 <h3 class="title-actual">Actual EURUSD</h3>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Duration (Ticks)</div>
                 <div class="stat-row">
                     <span class="stat-label">Trials</span>
                     <span class="stat-value">{actual_stats['trials']:,}</span>
                 </div>
                 <div class="stat-row">
                     <span class="stat-label">Mean</span>
-                    <span class="stat-value">{actual_stats['mean']:.1f} ticks</span>
+                    <span class="stat-value">{actual_stats['mean']:.1f}</span>
                 </div>
                 <div class="stat-row">
                     <span class="stat-label">Median</span>
-                    <span class="stat-value">{actual_stats['median']:.0f} ticks</span>
+                    <span class="stat-value">{actual_stats['median']:.0f}</span>
                 </div>
                 <div class="stat-row">
                     <span class="stat-label">Std Dev</span>
-                    <span class="stat-value">{actual_stats['std']:.1f} ticks</span>
+                    <span class="stat-value">{actual_stats['std']:.1f}</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">MAE (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">{actual_mae_stats['mean']:.1f}</span>
                 </div>
                 <div class="stat-row">
-                    <span class="stat-label">P25 / P75</span>
-                    <span class="stat-value">{actual_stats['p25']:.0f} / {actual_stats['p75']:.0f}</span>
+                    <span class="stat-label">Median</span>
+                    <span class="stat-value">{actual_mae_stats['median']:.0f}</span>
                 </div>
                 <div class="stat-row">
-                    <span class="stat-label">P95</span>
-                    <span class="stat-value">{actual_stats['p95']:.0f} ticks</span>
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">{actual_mae_stats['std']:.1f}</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Streaks</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean Length</span>
+                    <span class="stat-value">{actual_streak_stats['mean']:.1f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Max Length</span>
+                    <span class="stat-value">{max(act_lens, default=0):.0f}</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Hurst Exponent</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">{actual_hurst_stats['mean']:.3f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">{actual_hurst_stats['std']:.3f}</span>
                 </div>
             </div>
 
             <div class="stat-col">
                 <h3 class="title-sim">Simulated</h3>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Duration (Ticks)</div>
                 <div class="stat-row">
                     <span class="stat-label">Trials</span>
                     <span class="stat-value">{sim_stats['trials']:,}</span>
                 </div>
                 <div class="stat-row">
                     <span class="stat-label">Mean</span>
-                    <span class="stat-value">{sim_stats['mean']:.1f} ticks</span>
+                    <span class="stat-value">{sim_stats['mean']:.1f}</span>
                 </div>
                 <div class="stat-row">
                     <span class="stat-label">Median</span>
-                    <span class="stat-value">{sim_stats['median']:.0f} ticks</span>
+                    <span class="stat-value">{sim_stats['median']:.0f}</span>
                 </div>
                 <div class="stat-row">
                     <span class="stat-label">Std Dev</span>
-                    <span class="stat-value">{sim_stats['std']:.1f} ticks</span>
+                    <span class="stat-value">{sim_stats['std']:.1f}</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">MAE (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">{sim_mae_stats['mean']:.1f}</span>
                 </div>
                 <div class="stat-row">
-                    <span class="stat-label">P25 / P75</span>
-                    <span class="stat-value">{sim_stats['p25']:.0f} / {sim_stats['p75']:.0f}</span>
+                    <span class="stat-label">Median</span>
+                    <span class="stat-value">{sim_mae_stats['median']:.0f}</span>
                 </div>
                 <div class="stat-row">
-                    <span class="stat-label">P95</span>
-                    <span class="stat-value">{sim_stats['p95']:.0f} ticks</span>
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">{sim_mae_stats['std']:.1f}</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Streaks</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean Length</span>
+                    <span class="stat-value">{sim_streak_stats['mean']:.1f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Max Length</span>
+                    <span class="stat-value">{max(sim_lens, default=0):.0f}</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Hurst Exponent</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">{sim_hurst_stats['mean']:.3f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">{sim_hurst_stats['std']:.3f}</span>
                 </div>
             </div>
         </div>
@@ -499,7 +720,126 @@ html_template = f"""<!DOCTYPE html>
                 }}
             }}
         }}
-    }});    
+    }});
+
+    // --- HURST EXPONENT CHART ---
+    const rawHurstData = {hurst_json_string};
+    const hurstLabels = rawHurstData.times;
+    const hurstAct = rawHurstData.actual;
+    const hurstSim = rawHurstData.simulated;
+
+    const ctxHurst = document.getElementById('hurstChart').getContext('2d');
+    new Chart(ctxHurst, {{
+        type: 'line',
+        data: {{
+            labels: hurstLabels,
+            datasets: [
+                {{
+                    label: 'Actual Data Hurst',
+                    data: hurstAct,
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    fill: false,
+                    tension: 0.1
+                }},
+                {{
+                    label: 'Simulated Hurst',
+                    data: hurstSim,
+                    borderColor: 'rgba(249, 115, 22, 1)',
+                    backgroundColor: 'rgba(249, 115, 22, 0.1)',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    fill: false,
+                    tension: 0.1
+                }}
+            ]
+        }},
+        options: {{
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {{ mode: 'index', intersect: false }},
+            plugins: {{
+                legend: {{ position: 'top', align: 'start', labels: {{ usePointStyle: true, boxWidth: 8 }} }}
+            }},
+            scales: {{
+                x: {{
+                    title: {{ display: true, text: 'Time', color: '#64748b' }},
+                    grid: {{ display: false }},
+                    ticks: {{ maxTicksLimit: 10 }}
+                }},
+                y: {{
+                    type: 'linear',
+                    title: {{ display: true, text: 'Hurst Exponent', color: '#64748b' }},
+                    grid: {{ color: '#f1f5f9' }},
+                    min: 0,
+                    max: 1
+                }}
+            }}
+        }}
+    }});
+
+    // --- MAE CHART ---
+    const rawMaeData = {mae_json_string};
+    const maeLabels = rawMaeData.map(d => d.mae_points);
+    const maeAct = rawMaeData.map(d => d.Actual);
+    const maeSim = rawMaeData.map(d => d.Simulated);
+
+    const ctxMae = document.getElementById('maeChart').getContext('2d');
+    new Chart(ctxMae, {{
+        type: 'line',
+        data: {{
+            labels: maeLabels,
+            datasets: [
+                {{
+                    label: 'Actual Data MAE',
+                    data: maeAct,
+                    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    fill: true,
+                    tension: 0.4
+                }},
+                {{
+                    label: 'Simulated MAE',
+                    data: maeSim,
+                    backgroundColor: 'rgba(249, 115, 22, 0.15)',
+                    borderColor: 'rgba(249, 115, 22, 1)',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    fill: true,
+                    tension: 0.4
+                }}
+            ]
+        }},
+        options: {{
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {{ mode: 'index', intersect: false }},
+            plugins: {{
+                tooltip: {{
+                    callbacks: {{
+                        label: function(context) {{ return context.dataset.label + ': ' + context.parsed.y.toFixed(2); }}
+                    }}
+                }},
+                legend: {{ position: 'top', align: 'start', labels: {{ usePointStyle: true, boxWidth: 8 }} }}
+            }},
+            scales: {{
+                x: {{
+                    title: {{ display: true, text: 'Maximum Adverse Excursion (Points)', color: '#64748b' }},
+                    grid: {{ display: false }}
+                }},
+                y: {{
+                    type: 'linear',
+                    title: {{ display: true, text: 'Frequency (Smoothed)', color: '#64748b' }},
+                    grid: {{ color: '#f1f5f9' }},
+                    beginAtZero: true
+                }}
+            }}
+        }}
+    }});
 </script>
 
 </body>
