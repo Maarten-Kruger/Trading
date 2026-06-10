@@ -264,6 +264,9 @@ hurst_json_string = json.dumps({
     "simulated": [round(h, 3) for h in hurst_vals_sim]
 })
 
+actual_hurst_stats = calc_stats(hurst_vals_act)
+sim_hurst_stats = calc_stats(hurst_vals_sim)
+
 
 # ==========================================
 # 4.6 CALCULATE STREAKS (TARGET HITS)
@@ -308,6 +311,9 @@ for i in range(1, max_streak + 1):
     })
 
 streak_json_string = json.dumps(streak_data)
+
+actual_streak_stats = calc_stats(streaks_actual)
+sim_streak_stats = calc_stats(streaks_sim)
 
 # ==========================================
 # 5. GENERATE HTML WIDGET (LIGHT THEME DASHBOARD)
@@ -469,57 +475,113 @@ html_template = f"""<!DOCTYPE html>
         <div class="stats-grid">
             <div class="stat-col">
                 <h3 class="title-actual">Actual EURUSD</h3>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Duration (Ticks)</div>
                 <div class="stat-row">
                     <span class="stat-label">Trials</span>
                     <span class="stat-value">{actual_stats['trials']:,}</span>
                 </div>
                 <div class="stat-row">
                     <span class="stat-label">Mean</span>
-                    <span class="stat-value">{actual_stats['mean']:.1f} ticks</span>
+                    <span class="stat-value">{actual_stats['mean']:.1f}</span>
                 </div>
                 <div class="stat-row">
                     <span class="stat-label">Median</span>
-                    <span class="stat-value">{actual_stats['median']:.0f} ticks</span>
+                    <span class="stat-value">{actual_stats['median']:.0f}</span>
                 </div>
                 <div class="stat-row">
                     <span class="stat-label">Std Dev</span>
-                    <span class="stat-value">{actual_stats['std']:.1f} ticks</span>
+                    <span class="stat-value">{actual_stats['std']:.1f}</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">MAE (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">{actual_mae_stats['mean']:.1f}</span>
                 </div>
                 <div class="stat-row">
-                    <span class="stat-label">P25 / P75</span>
-                    <span class="stat-value">{actual_stats['p25']:.0f} / {actual_stats['p75']:.0f}</span>
+                    <span class="stat-label">Median</span>
+                    <span class="stat-value">{actual_mae_stats['median']:.0f}</span>
                 </div>
                 <div class="stat-row">
-                    <span class="stat-label">P95</span>
-                    <span class="stat-value">{actual_stats['p95']:.0f} ticks</span>
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">{actual_mae_stats['std']:.1f}</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Streaks</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean Length</span>
+                    <span class="stat-value">{actual_streak_stats['mean']:.1f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Max Length</span>
+                    <span class="stat-value">{max(act_lens, default=0):.0f}</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Hurst Exponent</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">{actual_hurst_stats['mean']:.3f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">{actual_hurst_stats['std']:.3f}</span>
                 </div>
             </div>
 
             <div class="stat-col">
                 <h3 class="title-sim">Simulated</h3>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Duration (Ticks)</div>
                 <div class="stat-row">
                     <span class="stat-label">Trials</span>
                     <span class="stat-value">{sim_stats['trials']:,}</span>
                 </div>
                 <div class="stat-row">
                     <span class="stat-label">Mean</span>
-                    <span class="stat-value">{sim_stats['mean']:.1f} ticks</span>
+                    <span class="stat-value">{sim_stats['mean']:.1f}</span>
                 </div>
                 <div class="stat-row">
                     <span class="stat-label">Median</span>
-                    <span class="stat-value">{sim_stats['median']:.0f} ticks</span>
+                    <span class="stat-value">{sim_stats['median']:.0f}</span>
                 </div>
                 <div class="stat-row">
                     <span class="stat-label">Std Dev</span>
-                    <span class="stat-value">{sim_stats['std']:.1f} ticks</span>
+                    <span class="stat-value">{sim_stats['std']:.1f}</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">MAE (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">{sim_mae_stats['mean']:.1f}</span>
                 </div>
                 <div class="stat-row">
-                    <span class="stat-label">P25 / P75</span>
-                    <span class="stat-value">{sim_stats['p25']:.0f} / {sim_stats['p75']:.0f}</span>
+                    <span class="stat-label">Median</span>
+                    <span class="stat-value">{sim_mae_stats['median']:.0f}</span>
                 </div>
                 <div class="stat-row">
-                    <span class="stat-label">P95</span>
-                    <span class="stat-value">{sim_stats['p95']:.0f} ticks</span>
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">{sim_mae_stats['std']:.1f}</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Streaks</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean Length</span>
+                    <span class="stat-value">{sim_streak_stats['mean']:.1f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Max Length</span>
+                    <span class="stat-value">{max(sim_lens, default=0):.0f}</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Hurst Exponent</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">{sim_hurst_stats['mean']:.3f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">{sim_hurst_stats['std']:.3f}</span>
                 </div>
             </div>
         </div>
