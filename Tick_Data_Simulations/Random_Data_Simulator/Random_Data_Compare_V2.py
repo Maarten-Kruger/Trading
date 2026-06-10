@@ -12,7 +12,8 @@ POINT_MULTIPLIER = 100000            # Conversion to points (100,000 for 5-decim
 THRESHOLD_POINTS = 100                # 5 pips = 50 points. Change this to test different breakout sizes
 MAX_TICK_JUMP_CAP = 50               # Caps extreme outliers in single-tick data errors
 HISTOGRAM_BINS = 200                 # Number of bins for the smooth histogram
-SMOOTHING_WINDOW = 3                 # Rolling average window for the smooth curve (higher = smoother)
+START_HOUR = 8                       # Filter ticks starting at this hour (e.g. 8 for 08:00)
+END_HOUR = 17                        # Filter ticks ending at this hour (e.g. 17 for 17:59)
 
 # ==========================================
 # 1. LOAD DATA & GET PROBABILITY PROFILE
@@ -30,6 +31,10 @@ try:
 
     # Drop rows where <BID> is missing to ensure equal lengths
     df = df.dropna(subset=['<BID>'])
+
+    # Filter by time of day
+    df = df[(df['Datetime'].dt.hour >= START_HOUR) & (df['Datetime'].dt.hour <= END_HOUR)]
+
     prices = df['<BID>'].values * POINT_MULTIPLIER
     timestamps = df['Datetime'].values
 except (KeyError, FileNotFoundError):
@@ -140,13 +145,7 @@ bins = np.linspace(0, max_dur * 1.2, HISTOGRAM_BINS)
 hist_actual, _ = np.histogram(durations_actual, bins=bins)
 hist_sim, _ = np.histogram(durations_sim, bins=bins)
 
-# Smooth the histograms
-def smooth(y, box_pts):
-    box = np.ones(box_pts) / box_pts
-    return np.convolve(y, box, mode='same')
 
-smooth_actual = smooth(hist_actual, SMOOTHING_WINDOW)
-smooth_sim = smooth(hist_sim, SMOOTHING_WINDOW)
 bin_centers = (bins[:-1] + bins[1:]) / 2
 
 # Package into JSON format for Chart.js
@@ -154,8 +153,8 @@ output_data = []
 for i in range(len(bin_centers)):
     output_data.append({
         "duration_secs": round(bin_centers[i], 1),
-        "Actual": round(smooth_actual[i], 2),
-        "Simulated": round(smooth_sim[i], 2)
+        "Actual": float(hist_actual[i]),
+        "Simulated": float(hist_sim[i])
     })
 
 json_data_string = json.dumps(output_data)
@@ -167,16 +166,15 @@ bins_mae = np.linspace(0, max_mae * 1.2, HISTOGRAM_BINS)
 hist_mae_act, _ = np.histogram(mae_actual, bins=bins_mae)
 hist_mae_sim, _ = np.histogram(mae_sim, bins=bins_mae)
 
-smooth_mae_act = smooth(hist_mae_act, SMOOTHING_WINDOW)
-smooth_mae_sim = smooth(hist_mae_sim, SMOOTHING_WINDOW)
+
 bin_centers_mae = (bins_mae[:-1] + bins_mae[1:]) / 2
 
 mae_output_data = []
 for i in range(len(bin_centers_mae)):
     mae_output_data.append({
         "mae_points": round(bin_centers_mae[i], 1),
-        "Actual": round(smooth_mae_act[i], 2),
-        "Simulated": round(smooth_mae_sim[i], 2)
+        "Actual": float(hist_mae_act[i]),
+        "Simulated": float(hist_mae_sim[i])
     })
 
 mae_json_string = json.dumps(mae_output_data)
@@ -429,7 +427,7 @@ html_template = f"""<!DOCTYPE html>
     </div>
 
     <div class="card">
-        <div class="card-header">Duration Distribution (Smooth KDE)</div>
+        <div class="card-header">Duration Distribution</div>
         <div class="chart-container">
             <canvas id="volatilityChart"></canvas>
         </div>
@@ -634,7 +632,7 @@ html_template = f"""<!DOCTYPE html>
                     ticks: {{ color: '#64748b' }}
                 }},
                 y: {{ 
-                    title: {{ display: true, text: 'Count (KDE-smoothed)', color: '#64748b', font: {{ size: 12 }} }},
+                    title: {{ display: true, text: 'Count', color: '#64748b', font: {{ size: 12 }} }},
                     grid: {{ color: '#f1f5f9' }},
                     ticks: {{ color: '#64748b' }},
                     beginAtZero: true 
@@ -804,7 +802,7 @@ html_template = f"""<!DOCTYPE html>
                 }},
                 y: {{
                     type: 'linear',
-                    title: {{ display: true, text: 'Frequency (Smoothed)', color: '#64748b' }},
+                    title: {{ display: true, text: 'Frequency', color: '#64748b' }},
                     grid: {{ color: '#f1f5f9' }},
                     beginAtZero: true
                 }}
