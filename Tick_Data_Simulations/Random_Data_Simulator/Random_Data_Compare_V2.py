@@ -6,16 +6,17 @@ import json
 # CONFIGURATION & VARIABLES
 # ==========================================
 FILE_PATH = 'EURUSD_Jan.csv'         # Path to your tick data file
-OUTPUT_HTML = 'EURUSD_tick_experiment_100.html' # Name of the generated HTML file
+OUTPUT_HTML = 'EURUSD_tick_experiment_50.html' # Name of the generated HTML file
 
 POINT_MULTIPLIER = 100000            # Conversion to points (100,000 for 5-decimal pairs like EURUSD)
-THRESHOLD_POINTS = 100                # 5 pips = 50 points. Change this to test different breakout sizes
+THRESHOLD_POINTS = 50                # 5 pips = 50 points. Change this to test different breakout sizes
 MAX_TICK_JUMP_CAP = 50               # Caps extreme outliers in single-tick data errors
 HISTOGRAM_BINS = 200                 # Number of bins for the smooth histogram
 START_HOUR = 8                       # Filter ticks starting at this hour (e.g. 8 for 08:00)
 END_HOUR = 17                        # Filter ticks ending at this hour (e.g. 17 for 17:59)
 BLOCK_MINUTES = 5                    # Size of time blocks in minutes
 SAMPLE_BLOCKS = 10000                # Number of time blocks to show in sample OHLC path
+
 
 # ==========================================
 # 1. LOAD DATA & GET PROBABILITY PROFILE
@@ -254,7 +255,7 @@ ohlc_sim = calc_ohlc_metrics(df_sim, BLOCK_MINUTES)
 max_size_ohlc = max(np.percentile(ohlc_act['total_size'], 95) if len(ohlc_act) > 0 else 100,
                     np.percentile(ohlc_sim['total_size'], 95) if len(ohlc_sim) > 0 else 100)
 
-bins_size = np.linspace(0, max_size_ohlc * 1.2, HISTOGRAM_BINS)
+bins_size = np.linspace(0, max_size_ohlc * 1.2, 50)
 bin_centers_size = (bins_size[:-1] + bins_size[1:]) / 2
 
 ohlc_act['bin'] = pd.cut(ohlc_act['total_size'], bins=bins_size, labels=bin_centers_size)
