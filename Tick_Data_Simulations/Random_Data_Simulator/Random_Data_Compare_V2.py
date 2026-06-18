@@ -260,22 +260,37 @@ bin_centers_size = (bins_size[:-1] + bins_size[1:]) / 2
 ohlc_act['bin'] = pd.cut(ohlc_act['total_size'], bins=bins_size, labels=bin_centers_size)
 ohlc_sim['bin'] = pd.cut(ohlc_sim['total_size'], bins=bins_size, labels=bin_centers_size)
 
-grouped_act = ohlc_act.groupby('bin', observed=False)[['body', 'head', 'tail']].mean().fillna(0)
-grouped_sim = ohlc_sim.groupby('bin', observed=False)[['body', 'head', 'tail']].mean().fillna(0)
+grouped_act_mean = ohlc_act.groupby('bin', observed=False)[['body', 'head', 'tail']].mean().fillna(0)
+grouped_sim_mean = ohlc_sim.groupby('bin', observed=False)[['body', 'head', 'tail']].mean().fillna(0)
+
+count_act = ohlc_act.groupby('bin', observed=False).size()
+count_sim = ohlc_sim.groupby('bin', observed=False).size()
 
 size_dist_data = []
 for i, b in enumerate(bin_centers_size):
     size_dist_data.append({
         "size_bin": round(float(b), 1),
-        "act_body": float(grouped_act.loc[b, 'body']),
-        "act_head": float(grouped_act.loc[b, 'head']),
-        "act_tail": float(grouped_act.loc[b, 'tail']),
-        "sim_body": float(grouped_sim.loc[b, 'body']),
-        "sim_head": float(grouped_sim.loc[b, 'head']),
-        "sim_tail": float(grouped_sim.loc[b, 'tail']),
+        "act_body": float(grouped_act_mean.loc[b, 'body']),
+        "act_head": float(grouped_act_mean.loc[b, 'head']),
+        "act_tail": float(grouped_act_mean.loc[b, 'tail']),
+        "act_count": int(count_act.loc[b]),
+        "sim_body": float(grouped_sim_mean.loc[b, 'body']),
+        "sim_head": float(grouped_sim_mean.loc[b, 'head']),
+        "sim_tail": float(grouped_sim_mean.loc[b, 'tail']),
+        "sim_count": int(count_sim.loc[b]),
     })
 
 size_dist_json = json.dumps(size_dist_data)
+
+# Global Size Stats
+size_stats = {
+    'act_body': ohlc_act['body'].mean() if len(ohlc_act) > 0 else 0,
+    'act_head': ohlc_act['head'].mean() if len(ohlc_act) > 0 else 0,
+    'act_tail': ohlc_act['tail'].mean() if len(ohlc_act) > 0 else 0,
+    'sim_body': ohlc_sim['body'].mean() if len(ohlc_sim) > 0 else 0,
+    'sim_head': ohlc_sim['head'].mean() if len(ohlc_sim) > 0 else 0,
+    'sim_tail': ohlc_sim['tail'].mean() if len(ohlc_sim) > 0 else 0,
+}
 
 # Take sample for OHLC Path Line Overlay
 sample_act_closes = ohlc_act['close'].head(SAMPLE_BLOCKS).tolist()
@@ -497,6 +512,19 @@ html_template = f"""<!DOCTYPE html>
                     <span class="stat-value">{max(act_lens, default=0):.0f}</span>
                 </div>
 
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Time Block Avg Size (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Body</span>
+                    <span class="stat-value">{size_stats['act_body']:.1f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Head</span>
+                    <span class="stat-value">{size_stats['act_head']:.1f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Tail</span>
+                    <span class="stat-value">{size_stats['act_tail']:.1f}</span>
+                </div>
 
             </div>
 
@@ -545,6 +573,19 @@ html_template = f"""<!DOCTYPE html>
                     <span class="stat-value">{max(sim_lens, default=0):.0f}</span>
                 </div>
 
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Time Block Avg Size (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Body</span>
+                    <span class="stat-value">{size_stats['sim_body']:.1f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Head</span>
+                    <span class="stat-value">{size_stats['sim_head']:.1f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Tail</span>
+                    <span class="stat-value">{size_stats['sim_tail']:.1f}</span>
+                </div>
 
             </div>
         </div>
@@ -801,7 +842,18 @@ html_template = f"""<!DOCTYPE html>
             maintainAspectRatio: false,
             interaction: {{ mode: 'index', intersect: false }},
             plugins: {{
-                legend: {{ position: 'top', align: 'start', labels: {{ usePointStyle: true, boxWidth: 8 }} }}
+                legend: {{ position: 'top', align: 'start', labels: {{ usePointStyle: true, boxWidth: 8 }} }},
+                tooltip: {{
+                    callbacks: {{
+                        label: function(context) {{
+                            const dataset = context.dataset;
+                            const index = context.dataIndex;
+                            const isActual = dataset.stack === 'actual';
+                            const count = isActual ? rawSizeData[index].act_count : rawSizeData[index].sim_count;
+                            return `${{dataset.label}}: ${{context.parsed.y.toFixed(2)}} (Count: ${{count}})`;
+                        }}
+                    }}
+                }}
             }},
             scales: {{
                 x: {{
