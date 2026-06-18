@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tick Volatility: Actual vs Simulated</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-body: #f8fafc;
+            --bg-card: #ffffff;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --border-color: #e2e8f0;
+            --color-actual: #3b82f6;
+            --color-actual-bg: rgba(59, 130, 246, 0.15);
+            --color-sim: #f97316;
+            --color-sim-bg: rgba(249, 115, 22, 0.15);
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            line-height: 1.5;
+            margin: 0;
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+        .header {
+            margin-bottom: 25px;
+        }
+        h1 {
+            font-size: 24px;
+            font-weight: 700;
+            margin: 0 0 8px 0;
+            color: var(--text-main);
+        }
+        .subtitle {
+            font-size: 14px;
+            color: var(--text-muted);
+            margin: 0;
+        }
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .card-header {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 20px;
+        }
+        .chart-container {
+            position: relative;
+            height: 400px;
+            width: 100%;
+        }
+        
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+        }
+        .stat-col h3 {
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+            margin: 0 0 12px 0;
+        }
+        .title-actual { color: var(--color-actual); }
+        .title-sim { color: var(--color-sim); }
+        
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 14px;
+        }
+        .stat-row:last-child { border-bottom: none; }
+        .stat-label { color: var(--text-muted); }
+        .stat-value { font-weight: 600; color: var(--text-main); }
+        
+        /* Insights & Setup Boxes */
+        .insight-box {
+            background-color: #f1f5f9;
+            border-left: 3px solid #8b5cf6;
+            padding: 16px 20px;
+            border-radius: 4px;
+            margin-top: 24px;
+            font-size: 14px;
+        }
+        .setup-section {
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+        .setup-section p { margin-top: 10px; margin-bottom: 10px; }
+        strong { color: var(--text-main); font-weight: 600; }
+        
+        @media (max-width: 768px) {
+            .stats-grid { grid-template-columns: 1fr; gap: 20px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>BTCUSD Jan — Ticks to ±50 Pips</h1>
+        <p class="subtitle">Actual market data vs. Monte Carlo simulation using empirical tick-move probabilities</p>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Duration Distribution</div>
+        <div class="chart-container">
+            <canvas id="volatilityChart"></canvas>
+        </div>
+
+    <div class="card">
+        <div class="card-header">Streak Distribution (Consecutive Hits in Same Direction)</div>
+        <div class="chart-container">
+            <canvas id="streakChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Maximum Adverse Excursion (MAE) Distribution</div>
+        <div class="chart-container">
+            <canvas id="maeChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Time Block Size Distribution (Head, Body, Tail)</div>
+        <div class="chart-container">
+            <canvas id="sizeChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Sample Path Overlay</div>
+        <div class="chart-container">
+            <canvas id="sampleChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Summary Statistics</div>
+        
+        <div class="stats-grid">
+            <div class="stat-col">
+                <h3 class="title-actual">Actual EURUSD</h3>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Duration (Seconds)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Trials</span>
+                    <span class="stat-value">299</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">8522.8</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Median</span>
+                    <span class="stat-value">1752</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">21948.2</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">MAE (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">181.3</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Median</span>
+                    <span class="stat-value">140</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">140.8</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Streaks</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean Length</span>
+                    <span class="stat-value">2.0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Max Length</span>
+                    <span class="stat-value">10</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Time Block Avg Size (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Body</span>
+                    <span class="stat-value">137.0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Head</span>
+                    <span class="stat-value">69.6</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Tail</span>
+                    <span class="stat-value">75.7</span>
+                </div>
+
+            </div>
+
+            <div class="stat-col">
+                <h3 class="title-sim">Simulated</h3>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Duration (Seconds)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Trials</span>
+                    <span class="stat-value">164</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">15525.8</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Median</span>
+                    <span class="stat-value">4243</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">22775.9</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">MAE (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">193.6</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Median</span>
+                    <span class="stat-value">157</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">139.4</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Streaks</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean Length</span>
+                    <span class="stat-value">2.1</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Max Length</span>
+                    <span class="stat-value">10</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Time Block Avg Size (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Body</span>
+                    <span class="stat-value">132.4</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Head</span>
+                    <span class="stat-value">54.9</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Tail</span>
+                    <span class="stat-value">57.0</span>
+                </div>
+
+            </div>
+        </div>
+
+        <div class="insight-box">
+            <strong>What the gap tells you:</strong> The actual market reaches ±50 pips <em>later</em> than pure random (mean 8522.8 vs 15525.8 seconds). Both distributions share the same tick-size profile — the only thing that differs is direction. The heavier right tail in real data reflects <strong>mean-reversion micro-structure</strong>: consecutive ticks often reverse (market makers ping-ponging the spread), causing the price to "waste" ticks oscillating near the origin before eventually trending far enough to hit the target.
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Experiment Setup</div>
+        <div class="setup-section">
+            <p><strong>What is being measured?</strong></p>
+            <p>We walk forward tick-by-tick through the data series and record <strong>how many seconds it takes until the price has moved ±50 pips (500 points) away from the start</strong>. The count increments by 1 per second elapsed, not per pip.</p>
+            <p>The same experiment is repeated on a <strong>synthetic random walk</strong> that uses the exact same per-tick move distribution observed in the real data — but with no sequential dependence (each tick is drawn independently with a 50/50 directional probability).</p>
+        </div>
+    </div>
+</div>
+
+<script>
+    const rawData = [{"duration_secs": 208.4, "Actual": 58.0, "Simulated": 6.0}, {"duration_secs": 625.3, "Actual": 39.0, "Simulated": 7.0}, {"duration_secs": 1042.2, "Actual": 28.0, "Simulated": 10.0}, {"duration_secs": 1459.1, "Actual": 20.0, "Simulated": 8.0}, {"duration_secs": 1876.0, "Actual": 20.0, "Simulated": 11.0}, {"duration_secs": 2292.9, "Actual": 11.0, "Simulated": 5.0}, {"duration_secs": 2709.7, "Actual": 9.0, "Simulated": 7.0}, {"duration_secs": 3126.6, "Actual": 11.0, "Simulated": 17.0}, {"duration_secs": 3543.5, "Actual": 13.0, "Simulated": 6.0}, {"duration_secs": 3960.4, "Actual": 9.0, "Simulated": 4.0}, {"duration_secs": 4377.3, "Actual": 5.0, "Simulated": 4.0}, {"duration_secs": 4794.2, "Actual": 6.0, "Simulated": 1.0}, {"duration_secs": 5211.0, "Actual": 4.0, "Simulated": 6.0}, {"duration_secs": 5627.9, "Actual": 0.0, "Simulated": 4.0}, {"duration_secs": 6044.8, "Actual": 3.0, "Simulated": 2.0}, {"duration_secs": 6461.7, "Actual": 1.0, "Simulated": 1.0}, {"duration_secs": 6878.6, "Actual": 2.0, "Simulated": 2.0}, {"duration_secs": 7295.4, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 7712.3, "Actual": 4.0, "Simulated": 1.0}, {"duration_secs": 8129.2, "Actual": 3.0, "Simulated": 1.0}, {"duration_secs": 8546.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 8963.0, "Actual": 2.0, "Simulated": 1.0}, {"duration_secs": 9379.9, "Actual": 3.0, "Simulated": 1.0}, {"duration_secs": 9796.7, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 10213.6, "Actual": 1.0, "Simulated": 5.0}, {"duration_secs": 10630.5, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 11047.4, "Actual": 1.0, "Simulated": 3.0}, {"duration_secs": 11464.3, "Actual": 2.0, "Simulated": 1.0}, {"duration_secs": 11881.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 12298.0, "Actual": 0.0, "Simulated": 2.0}, {"duration_secs": 12714.9, "Actual": 2.0, "Simulated": 2.0}, {"duration_secs": 13131.8, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 13548.7, "Actual": 1.0, "Simulated": 2.0}, {"duration_secs": 13965.6, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 14382.5, "Actual": 2.0, "Simulated": 3.0}, {"duration_secs": 14799.3, "Actual": 1.0, "Simulated": 2.0}, {"duration_secs": 15216.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 15633.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 16050.0, "Actual": 1.0, "Simulated": 1.0}, {"duration_secs": 16466.9, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 16883.7, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 17300.6, "Actual": 0.0, "Simulated": 2.0}, {"duration_secs": 17717.5, "Actual": 1.0, "Simulated": 1.0}, {"duration_secs": 18134.4, "Actual": 2.0, "Simulated": 0.0}, {"duration_secs": 18551.3, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 18968.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 19385.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 19801.9, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 20218.8, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 20635.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 21052.6, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 21469.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 21886.3, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 22303.2, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 22720.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 23137.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 23553.9, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 23970.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 24387.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 24804.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 25221.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 25638.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 26055.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 26472.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 26888.9, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 27305.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 27722.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 28139.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 28556.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 28973.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 29390.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 29807.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 30224.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 30640.9, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 31057.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 31474.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 31891.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 32308.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 32725.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 33142.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 33559.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 33975.9, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 34392.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 34809.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 35226.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 35643.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 36060.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 36477.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 36894.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 37311.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 37727.9, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 38144.8, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 38561.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 38978.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 39395.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 39812.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 40229.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 40646.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 41062.9, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 41479.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 41896.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 42313.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 42730.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 43147.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 43564.2, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 43981.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 44398.0, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 44814.9, "Actual": 2.0, "Simulated": 0.0}, {"duration_secs": 45231.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 45648.6, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 46065.5, "Actual": 2.0, "Simulated": 0.0}, {"duration_secs": 46482.4, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 46899.3, "Actual": 3.0, "Simulated": 0.0}, {"duration_secs": 47316.2, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 47733.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 48149.9, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 48566.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 48983.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 49400.6, "Actual": 1.0, "Simulated": 2.0}, {"duration_secs": 49817.5, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 50234.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 50651.2, "Actual": 0.0, "Simulated": 2.0}, {"duration_secs": 51068.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 51485.0, "Actual": 1.0, "Simulated": 1.0}, {"duration_secs": 51901.9, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 52318.8, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 52735.7, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 53152.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 53569.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 53986.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 54403.2, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 54820.1, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 55237.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 55653.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 56070.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 56487.6, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 56904.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 57321.4, "Actual": 0.0, "Simulated": 2.0}, {"duration_secs": 57738.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 58155.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 58572.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 58988.9, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 59405.8, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 59822.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 60239.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 60656.4, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 61073.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 61490.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 61907.1, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 62324.0, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 62740.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 63157.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 63574.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 63991.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 64408.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 64825.3, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 65242.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 65659.0, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 66075.9, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 66492.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 66909.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 67326.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 67743.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 68160.3, "Actual": 0.0, "Simulated": 2.0}, {"duration_secs": 68577.2, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 68994.1, "Actual": 0.0, "Simulated": 2.0}, {"duration_secs": 69411.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 69827.8, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 70244.7, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 70661.6, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 71078.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 71495.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 71912.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 72329.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 72746.0, "Actual": 1.0, "Simulated": 1.0}, {"duration_secs": 73162.9, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 73579.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 73996.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 74413.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 74830.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 75247.3, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 75664.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 76081.1, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 76498.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 76914.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 77331.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 77748.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 78165.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 78582.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 78999.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 79416.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 79833.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 80249.9, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 80666.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 81083.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 81500.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 81917.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 82334.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 82751.2, "Actual": 0.0, "Simulated": 0.0}];
+
+    const labels = rawData.map(d => d.duration_secs);
+    const actualData = rawData.map(d => d.Actual);
+    const simData = rawData.map(d => d.Simulated);
+
+    const ctx = document.getElementById('volatilityChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Actual Data',
+                    data: actualData,
+                    backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
+                },
+                {
+                    label: 'Simulated',
+                    data: simData,
+                    backgroundColor: 'rgba(249, 115, 22, 0.7)',
+                    borderColor: 'rgba(249, 115, 22, 1)',
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                tooltip: { 
+                    callbacks: { 
+                        label: function(context) { return context.dataset.label + ': ' + context.parsed.y.toFixed(2); } 
+                    } 
+                },
+                legend: { 
+                    position: 'top',
+                    align: 'start',
+                    labels: {
+                        usePointStyle: true,
+                        boxWidth: 8,
+                        font: { family: "-apple-system, system-ui, sans-serif", size: 13, weight: '500' }
+                    }
+                }
+            },
+            scales: {
+                x: { 
+                    title: { display: true, text: 'Seconds to reach ±50 pips', color: '#64748b', font: { size: 12 } },
+                    grid: { display: false },
+                    ticks: { color: '#64748b' }
+                },
+                y: { 
+                    title: { display: true, text: 'Count', color: '#64748b', font: { size: 12 } },
+                    grid: { color: '#f1f5f9' },
+                    ticks: { color: '#64748b' },
+                    beginAtZero: true 
+                }
+            }
+        }
+    });
+
+    // --- STREAK CHART ---
+    const rawStreakData = [{"streak_len": 1, "Actual": 74, "Simulated": 40}, {"streak_len": 2, "Actual": 48, "Simulated": 21}, {"streak_len": 3, "Actual": 14, "Simulated": 7}, {"streak_len": 4, "Actual": 6, "Simulated": 5}, {"streak_len": 5, "Actual": 8, "Simulated": 2}, {"streak_len": 6, "Actual": 1, "Simulated": 2}, {"streak_len": 7, "Actual": 1, "Simulated": 0}, {"streak_len": 8, "Actual": 0, "Simulated": 0}, {"streak_len": 9, "Actual": 0, "Simulated": 1}, {"streak_len": 10, "Actual": 1, "Simulated": 1}];
+    const streakLabels = rawStreakData.map(d => d.streak_len);
+    const streakAct = rawStreakData.map(d => d.Actual);
+    const streakSim = rawStreakData.map(d => d.Simulated);
+
+    const ctxStreak = document.getElementById('streakChart').getContext('2d');
+    new Chart(ctxStreak, {
+        type: 'bar',
+        data: {
+            labels: streakLabels,
+            datasets: [
+                {
+                    label: 'Actual Data',
+                    data: streakAct,
+                    backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 1
+                },
+                {
+                    label: 'Simulated',
+                    data: streakSim,
+                    backgroundColor: 'rgba(249, 115, 22, 0.7)',
+                    borderColor: 'rgba(249, 115, 22, 1)',
+                    borderWidth: 1
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'top', align: 'start', labels: { usePointStyle: true, boxWidth: 8 } }
+            },
+            scales: {
+                x: { 
+                    title: { display: true, text: 'Consecutive Hits', color: '#64748b' },
+                    grid: { display: false }
+                },
+                y: { 
+                    type: 'linear', 
+                    title: { display: true, text: 'Frequency', color: '#64748b' },
+                    grid: { color: '#f1f5f9' },
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+
+    // --- MAE CHART ---
+    const rawMaeData = [{"mae_points": 1.4, "Actual": 10.0, "Simulated": 2.0}, {"mae_points": 4.1, "Actual": 7.0, "Simulated": 4.0}, {"mae_points": 6.9, "Actual": 4.0, "Simulated": 0.0}, {"mae_points": 9.6, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 12.4, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 15.1, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 17.9, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 20.6, "Actual": 3.0, "Simulated": 1.0}, {"mae_points": 23.4, "Actual": 3.0, "Simulated": 1.0}, {"mae_points": 26.1, "Actual": 3.0, "Simulated": 0.0}, {"mae_points": 28.8, "Actual": 1.0, "Simulated": 1.0}, {"mae_points": 31.6, "Actual": 6.0, "Simulated": 1.0}, {"mae_points": 34.3, "Actual": 6.0, "Simulated": 3.0}, {"mae_points": 37.1, "Actual": 3.0, "Simulated": 1.0}, {"mae_points": 39.8, "Actual": 3.0, "Simulated": 1.0}, {"mae_points": 42.6, "Actual": 7.0, "Simulated": 0.0}, {"mae_points": 45.3, "Actual": 3.0, "Simulated": 1.0}, {"mae_points": 48.1, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 50.8, "Actual": 3.0, "Simulated": 1.0}, {"mae_points": 53.6, "Actual": 2.0, "Simulated": 2.0}, {"mae_points": 56.3, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 59.1, "Actual": 5.0, "Simulated": 1.0}, {"mae_points": 61.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 64.6, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 67.3, "Actual": 3.0, "Simulated": 2.0}, {"mae_points": 70.1, "Actual": 1.0, "Simulated": 3.0}, {"mae_points": 72.8, "Actual": 6.0, "Simulated": 0.0}, {"mae_points": 75.5, "Actual": 3.0, "Simulated": 0.0}, {"mae_points": 78.3, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 81.0, "Actual": 3.0, "Simulated": 2.0}, {"mae_points": 83.8, "Actual": 0.0, "Simulated": 3.0}, {"mae_points": 86.5, "Actual": 3.0, "Simulated": 2.0}, {"mae_points": 89.3, "Actual": 3.0, "Simulated": 2.0}, {"mae_points": 92.0, "Actual": 6.0, "Simulated": 2.0}, {"mae_points": 94.8, "Actual": 3.0, "Simulated": 0.0}, {"mae_points": 97.5, "Actual": 3.0, "Simulated": 1.0}, {"mae_points": 100.3, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 103.0, "Actual": 3.0, "Simulated": 2.0}, {"mae_points": 105.8, "Actual": 2.0, "Simulated": 3.0}, {"mae_points": 108.5, "Actual": 2.0, "Simulated": 0.0}, {"mae_points": 111.3, "Actual": 0.0, "Simulated": 3.0}, {"mae_points": 114.0, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 116.8, "Actual": 2.0, "Simulated": 3.0}, {"mae_points": 119.5, "Actual": 3.0, "Simulated": 3.0}, {"mae_points": 122.2, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 125.0, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 127.7, "Actual": 3.0, "Simulated": 1.0}, {"mae_points": 130.5, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 133.2, "Actual": 4.0, "Simulated": 1.0}, {"mae_points": 136.0, "Actual": 3.0, "Simulated": 1.0}, {"mae_points": 138.7, "Actual": 5.0, "Simulated": 1.0}, {"mae_points": 141.5, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 144.2, "Actual": 4.0, "Simulated": 2.0}, {"mae_points": 147.0, "Actual": 3.0, "Simulated": 1.0}, {"mae_points": 149.7, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 152.5, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 155.2, "Actual": 0.0, "Simulated": 2.0}, {"mae_points": 158.0, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 160.7, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 163.5, "Actual": 1.0, "Simulated": 1.0}, {"mae_points": 166.2, "Actual": 0.0, "Simulated": 2.0}, {"mae_points": 168.9, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 171.7, "Actual": 3.0, "Simulated": 2.0}, {"mae_points": 174.4, "Actual": 1.0, "Simulated": 1.0}, {"mae_points": 177.2, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 179.9, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 182.7, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 185.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 188.2, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 190.9, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 193.7, "Actual": 6.0, "Simulated": 0.0}, {"mae_points": 196.4, "Actual": 1.0, "Simulated": 1.0}, {"mae_points": 199.2, "Actual": 2.0, "Simulated": 0.0}, {"mae_points": 201.9, "Actual": 3.0, "Simulated": 1.0}, {"mae_points": 204.7, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 207.4, "Actual": 3.0, "Simulated": 1.0}, {"mae_points": 210.2, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 212.9, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 215.6, "Actual": 2.0, "Simulated": 2.0}, {"mae_points": 218.4, "Actual": 2.0, "Simulated": 0.0}, {"mae_points": 221.1, "Actual": 5.0, "Simulated": 0.0}, {"mae_points": 223.9, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 226.6, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 229.4, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 232.1, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 234.9, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 237.6, "Actual": 1.0, "Simulated": 1.0}, {"mae_points": 240.4, "Actual": 0.0, "Simulated": 2.0}, {"mae_points": 243.1, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 245.9, "Actual": 2.0, "Simulated": 2.0}, {"mae_points": 248.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 251.4, "Actual": 4.0, "Simulated": 1.0}, {"mae_points": 254.1, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 256.9, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 259.6, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 262.3, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 265.1, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 267.8, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 270.6, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 273.3, "Actual": 3.0, "Simulated": 2.0}, {"mae_points": 276.1, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 278.8, "Actual": 2.0, "Simulated": 0.0}, {"mae_points": 281.6, "Actual": 1.0, "Simulated": 1.0}, {"mae_points": 284.3, "Actual": 3.0, "Simulated": 1.0}, {"mae_points": 287.1, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 289.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 292.6, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 295.3, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 298.1, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 300.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 303.6, "Actual": 3.0, "Simulated": 0.0}, {"mae_points": 306.3, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 309.0, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 311.8, "Actual": 1.0, "Simulated": 1.0}, {"mae_points": 314.5, "Actual": 3.0, "Simulated": 2.0}, {"mae_points": 317.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 320.0, "Actual": 3.0, "Simulated": 0.0}, {"mae_points": 322.8, "Actual": 3.0, "Simulated": 1.0}, {"mae_points": 325.5, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 328.3, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 331.0, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 333.8, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 336.5, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 339.3, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 342.0, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 344.8, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 347.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 350.3, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 353.0, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 355.7, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 358.5, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 361.2, "Actual": 1.0, "Simulated": 1.0}, {"mae_points": 364.0, "Actual": 2.0, "Simulated": 2.0}, {"mae_points": 366.7, "Actual": 1.0, "Simulated": 1.0}, {"mae_points": 369.5, "Actual": 0.0, "Simulated": 2.0}, {"mae_points": 372.2, "Actual": 2.0, "Simulated": 0.0}, {"mae_points": 375.0, "Actual": 2.0, "Simulated": 0.0}, {"mae_points": 377.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 380.5, "Actual": 2.0, "Simulated": 1.0}, {"mae_points": 383.2, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 386.0, "Actual": 2.0, "Simulated": 0.0}, {"mae_points": 388.7, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 391.5, "Actual": 2.0, "Simulated": 0.0}, {"mae_points": 394.2, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 397.0, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 399.7, "Actual": 1.0, "Simulated": 1.0}, {"mae_points": 402.4, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 405.2, "Actual": 2.0, "Simulated": 0.0}, {"mae_points": 407.9, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 410.7, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 413.4, "Actual": 0.0, "Simulated": 2.0}, {"mae_points": 416.2, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 418.9, "Actual": 2.0, "Simulated": 0.0}, {"mae_points": 421.7, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 424.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 427.2, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 429.9, "Actual": 1.0, "Simulated": 1.0}, {"mae_points": 432.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 435.4, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 438.2, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 440.9, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 443.7, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 446.4, "Actual": 2.0, "Simulated": 0.0}, {"mae_points": 449.1, "Actual": 2.0, "Simulated": 2.0}, {"mae_points": 451.9, "Actual": 1.0, "Simulated": 1.0}, {"mae_points": 454.6, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 457.4, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 460.1, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 462.9, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 465.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 468.4, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 471.1, "Actual": 3.0, "Simulated": 0.0}, {"mae_points": 473.9, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 476.6, "Actual": 2.0, "Simulated": 0.0}, {"mae_points": 479.4, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 482.1, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 484.9, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 487.6, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 490.4, "Actual": 1.0, "Simulated": 0.0}, {"mae_points": 493.1, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 495.8, "Actual": 2.0, "Simulated": 3.0}, {"mae_points": 498.6, "Actual": 0.0, "Simulated": 1.0}, {"mae_points": 501.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 504.1, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 506.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 509.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 512.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 515.1, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 517.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 520.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 523.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 526.1, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 528.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 531.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 534.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 537.1, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 539.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 542.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 545.3, "Actual": 0.0, "Simulated": 0.0}];
+    const maeLabels = rawMaeData.map(d => d.mae_points);
+    const maeAct = rawMaeData.map(d => d.Actual);
+    const maeSim = rawMaeData.map(d => d.Simulated);
+
+    const ctxMae = document.getElementById('maeChart').getContext('2d');
+    new Chart(ctxMae, {
+        type: 'bar',
+        data: {
+            labels: maeLabels,
+            datasets: [
+                {
+                    label: 'Actual Data MAE',
+                    data: maeAct,
+                    backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
+                },
+                {
+                    label: 'Simulated MAE',
+                    data: maeSim,
+                    backgroundColor: 'rgba(249, 115, 22, 0.7)',
+                    borderColor: 'rgba(249, 115, 22, 1)',
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: function(context) { return context.dataset.label + ': ' + context.parsed.y.toFixed(2); }
+                    }
+                },
+                legend: { position: 'top', align: 'start', labels: { usePointStyle: true, boxWidth: 8 } }
+            },
+            scales: {
+                x: {
+                    title: { display: true, text: 'Maximum Adverse Excursion (Points)', color: '#64748b' },
+                    grid: { display: false }
+                },
+                y: {
+                    type: 'linear',
+                    title: { display: true, text: 'Frequency', color: '#64748b' },
+                    grid: { color: '#f1f5f9' },
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+
+    // --- SIZE DISTRIBUTION CHART ---
+    const rawSizeData = [{"size_bin": 9.0, "act_body": 5.30000000000291, "act_head": 6.169999999998254, "act_tail": 6.039999999993597, "act_count": 1, "sim_body": 0.0, "sim_head": 0.0, "sim_tail": 0.0, "sim_count": 0}, {"size_bin": 27.1, "act_body": 8.023750000000291, "act_head": 8.797500000000582, "act_tail": 12.775000000000546, "act_count": 16, "sim_body": 0.0, "sim_head": 0.0, "sim_tail": 0.0, "sim_count": 0}, {"size_bin": 45.2, "act_body": 17.205217391302817, "act_head": 11.924999999999747, "act_tail": 17.295000000001416, "act_count": 46, "sim_body": 21.108000000045287, "sim_head": 14.689999999967403, "sim_tail": 12.277999999982422, "sim_count": 5}, {"size_bin": 63.3, "act_body": 24.44309859154795, "act_head": 17.362394366197332, "act_tail": 20.46647887323978, "act_count": 71, "sim_body": 29.7028571428122, "sim_head": 17.21500000003393, "sim_tail": 19.710000000006403, "sim_count": 14}, {"size_bin": 81.4, "act_body": 32.507619047619905, "act_head": 25.232857142856652, "act_tail": 24.119523809522867, "act_count": 63, "sim_body": 29.217948717967, "sim_head": 26.496923076908644, "sim_tail": 27.411025641029344, "sim_count": 39}, {"size_bin": 99.5, "act_body": 41.61462499999961, "act_head": 28.508000000001083, "act_tail": 29.460999999999878, "act_count": 80, "sim_body": 40.95079365078109, "sim_head": 27.14619047620097, "sim_tail": 32.05682539683235, "sim_count": 63}, {"size_bin": 117.6, "act_body": 44.977938144330054, "act_head": 39.556082474227125, "act_tail": 33.33329896907248, "act_count": 97, "sim_body": 51.153257575756335, "sim_head": 37.41666666666634, "sim_tail": 29.654772727269147, "sim_count": 132}, {"size_bin": 135.7, "act_body": 50.201521739130996, "act_head": 40.7628260869566, "act_tail": 45.18956521739038, "act_count": 92, "sim_body": 56.735948275854376, "sim_head": 39.98396551723899, "sim_tail": 38.558362068973956, "sim_count": 116}, {"size_bin": 153.8, "act_body": 65.09211764705901, "act_head": 40.78200000000036, "act_tail": 48.411058823529956, "act_count": 85, "sim_body": 68.8035454545555, "sim_head": 41.76290909089902, "sim_tail": 43.628727272717384, "sim_count": 110}, {"size_bin": 171.9, "act_body": 77.5264556962023, "act_head": 45.656075949367846, "act_tail": 48.30670886075963, "act_count": 79, "sim_body": 76.36903508774054, "sim_head": 46.74666666666586, "sim_tail": 48.07070175437714, "sim_count": 114}, {"size_bin": 190.0, "act_body": 86.75249999999893, "act_head": 55.31116666666785, "act_tail": 47.64083333333328, "act_count": 60, "sim_body": 93.22306306306629, "sim_head": 46.759279279275596, "sim_tail": 51.034234234239506, "sim_count": 111}, {"size_bin": 208.1, "act_body": 98.49250000000126, "act_head": 58.190999999998894, "act_tail": 51.20933333333354, "act_count": 60, "sim_body": 99.12576923077079, "sim_head": 57.934615384611575, "sim_tail": 50.4693269230741, "sim_count": 104}, {"size_bin": 226.2, "act_body": 84.34588235293974, "act_head": 72.98764705882373, "act_tail": 69.9849019607868, "act_count": 51, "sim_body": 115.57127659572592, "sim_head": 61.30148936171509, "sim_tail": 49.28042553192202, "sim_count": 94}, {"size_bin": 244.3, "act_body": 88.8011764705891, "act_head": 67.81764705882205, "act_tail": 86.01941176470513, "act_count": 51, "sim_body": 122.51690476192778, "sim_head": 57.32749999999024, "sim_tail": 64.86404761903188, "sim_count": 84}, {"size_bin": 262.4, "act_body": 129.28264150943252, "act_head": 68.16226415094405, "act_tail": 64.29999999999988, "act_count": 53, "sim_body": 148.07145454548723, "sim_head": 56.09490909091335, "sim_tail": 58.75363636360959, "sim_count": 55}, {"size_bin": 280.5, "act_body": 138.4054761904758, "act_head": 76.39833333333392, "act_tail": 64.94285714285658, "act_count": 42, "sim_body": 144.91638297871458, "sim_head": 72.12957446807079, "sim_tail": 62.416808510636365, "sim_count": 47}, {"size_bin": 298.6, "act_body": 130.09174999999885, "act_head": 77.5070000000018, "act_tail": 91.18000000000066, "act_count": 40, "sim_body": 165.93608695658023, "sim_head": 63.29152173909065, "sim_tail": 68.74434782607189, "sim_count": 46}, {"size_bin": 316.7, "act_body": 131.88033333333442, "act_head": 87.91533333333258, "act_tail": 95.9866666666654, "act_count": 30, "sim_body": 173.05234042558314, "sim_head": 74.69404255318706, "sim_tail": 67.98042553191215, "sim_count": 47}, {"size_bin": 334.8, "act_body": 152.36642857142942, "act_head": 79.98285714285625, "act_tail": 102.14999999999885, "act_count": 28, "sim_body": 196.35121212118423, "sim_head": 61.743333333342115, "sim_tail": 75.77151515148977, "sim_count": 33}, {"size_bin": 352.9, "act_body": 160.59399999999906, "act_head": 88.49640000000188, "act_tail": 104.99199999999895, "act_count": 25, "sim_body": 201.19965517235636, "sim_head": 66.94068965517639, "sim_tail": 85.3951724137883, "sim_count": 29}, {"size_bin": 371.0, "act_body": 160.29270270270234, "act_head": 84.67567567567608, "act_tail": 127.02621621621664, "act_count": 37, "sim_body": 217.99090909092445, "sim_head": 73.57454545456527, "sim_tail": 80.17681818181882, "sim_count": 22}, {"size_bin": 389.1, "act_body": 195.86166666666577, "act_head": 108.04416666666718, "act_tail": 85.70958333333328, "act_count": 24, "sim_body": 171.3654545454344, "sim_head": 93.72863636364094, "sim_tail": 122.76863636361337, "sim_count": 22}, {"size_bin": 407.2, "act_body": 207.85916666666648, "act_head": 111.08750000000207, "act_tail": 87.30458333333202, "act_count": 24, "sim_body": 233.25272727263854, "sim_head": 71.66818181820219, "sim_tail": 102.45909090914144, "sim_count": 11}, {"size_bin": 425.3, "act_body": 219.33478260869362, "act_head": 112.68608695652105, "act_tail": 93.72739130435018, "act_count": 23, "sim_body": 192.85294117657844, "sim_head": 88.91058823519458, "sim_tail": 143.89882352937917, "sim_count": 17}, {"size_bin": 443.4, "act_body": 228.8373333333322, "act_head": 123.04133333333303, "act_tail": 92.95600000000074, "act_count": 15, "sim_body": 294.3242857141491, "sim_head": 46.28999999998944, "sim_tail": 103.94571428579262, "sim_count": 7}, {"size_bin": 461.5, "act_body": 217.78611111111, "act_head": 92.64944444444619, "act_tail": 149.44333333333472, "act_count": 18, "sim_body": 271.8892307692026, "sim_head": 51.15384615381929, "sim_tail": 137.55615384623076, "sim_count": 13}, {"size_bin": 479.6, "act_body": 263.2508333333305, "act_head": 105.08666666666856, "act_tail": 110.42750000000039, "act_count": 12, "sim_body": 276.3662499999655, "sim_head": 98.41249999999309, "sim_tail": 105.02749999995194, "sim_count": 16}, {"size_bin": 497.7, "act_body": 196.1607692307701, "act_head": 120.68692307692366, "act_tail": 180.64846153845988, "act_count": 13, "sim_body": 324.84125000010044, "sim_head": 97.57375000001957, "sim_tail": 77.29875000002357, "sim_count": 16}, {"size_bin": 515.8, "act_body": 210.28333333333163, "act_head": 147.92499999999805, "act_tail": 158.40666666666948, "act_count": 12, "sim_body": 373.1845454545546, "sim_head": 81.14636363644173, "sim_tail": 62.33545454546666, "sim_count": 11}, {"size_bin": 533.9, "act_body": 253.0871428571398, "act_head": 151.90857142857047, "act_tail": 129.3757142857139, "act_count": 14, "sim_body": 316.5674999996627, "sim_head": 110.10499999999229, "sim_tail": 106.87749999996959, "sim_count": 4}, {"size_bin": 552.0, "act_body": 328.19842105263257, "act_head": 90.27684210526441, "act_tail": 134.07684210526196, "act_count": 19, "sim_body": 254.32249999987107, "sim_head": 96.15500000002794, "sim_tail": 202.5575000001445, "sim_count": 4}, {"size_bin": 570.1, "act_body": 296.03166666666584, "act_head": 140.32000000000212, "act_tail": 132.08333333333334, "act_count": 12, "sim_body": 353.7899999999063, "sim_head": 76.133999999988, "sim_tail": 139.98799999994225, "sim_count": 5}, {"size_bin": 588.2, "act_body": 267.6258333333341, "act_head": 129.47333333333276, "act_tail": 190.60833333333235, "act_count": 12, "sim_body": 407.96999999979744, "sim_head": 80.27749999999651, "sim_tail": 99.47000000009211, "sim_count": 4}, {"size_bin": 606.3, "act_body": 293.05999999999915, "act_head": 218.96900000000022, "act_tail": 96.26699999999983, "act_count": 10, "sim_body": 313.8628571428562, "sim_head": 134.57285714285223, "sim_tail": 154.21571428580708, "sim_count": 7}, {"size_bin": 624.4, "act_body": 355.2450000000026, "act_head": 139.56666666666328, "act_tail": 132.26499999999942, "act_count": 6, "sim_body": 364.3599999997896, "sim_head": 120.70500000003813, "sim_tail": 134.0100000000093, "sim_count": 2}, {"size_bin": 642.5, "act_body": 421.72749999999905, "act_head": 102.17500000000109, "act_tail": 120.2137500000008, "act_count": 8, "sim_body": 393.66333333322353, "sim_head": 106.54333333327668, "sim_tail": 144.04000000008577, "sim_count": 3}, {"size_bin": 660.6, "act_body": 315.5522222222272, "act_head": 127.72333333333114, "act_tail": 217.8266666666637, "act_count": 9, "sim_body": 584.0299999996932, "sim_head": 30.01000000005297, "sim_tail": 48.609999999956926, "sim_count": 1}, {"size_bin": 678.7, "act_body": 395.1299999999992, "act_head": 107.81625000000167, "act_tail": 177.74499999999898, "act_count": 8, "sim_body": 557.7300000003743, "sim_head": 21.96999999995751, "sim_tail": 105.24000000003434, "sim_count": 1}, {"size_bin": 696.8, "act_body": 433.0699999999979, "act_head": 159.10250000000087, "act_tail": 105.17125000000124, "act_count": 8, "sim_body": 185.5799999992887, "sim_head": 383.8100000010454, "sim_tail": 120.15999999982887, "sim_count": 1}, {"size_bin": 714.9, "act_body": 260.5220000000001, "act_head": 174.87600000000094, "act_tail": 281.1749999999971, "act_count": 10, "sim_body": 694.809999999794, "sim_head": 6.489999999990687, "sim_tail": 4.790000000008149, "sim_count": 1}, {"size_bin": 733.0, "act_body": 412.15428571428595, "act_head": 102.84142857143057, "act_tail": 221.7614285714288, "act_count": 7, "sim_body": 562.622000000006, "sim_head": 97.52399999996123, "sim_tail": 71.76200000002864, "sim_count": 5}, {"size_bin": 751.1, "act_body": 294.70999999999185, "act_head": 248.1999999999971, "act_tail": 199.77000000000407, "act_count": 1, "sim_body": 571.3599999998987, "sim_head": 82.37749999992593, "sim_tail": 95.2375000002794, "sim_count": 4}, {"size_bin": 769.2, "act_body": 403.9383333333317, "act_head": 176.79333333333489, "act_tail": 188.98666666666637, "act_count": 6, "sim_body": 526.3899999999267, "sim_head": 168.98999999990338, "sim_tail": 76.88000000007742, "sim_count": 1}, {"size_bin": 787.3, "act_body": 343.12600000000094, "act_head": 275.1179999999964, "act_tail": 171.8679999999993, "act_count": 5, "sim_body": 668.2400000000052, "sim_head": 39.810000000012224, "sim_tail": 85.7099999999482, "sim_count": 1}, {"size_bin": 805.4, "act_body": 489.0287499999977, "act_head": 130.43249999999898, "act_tail": 186.75500000000102, "act_count": 8, "sim_body": 669.3599999999569, "sim_head": 0.6200000000098953, "sim_tail": 141.86000000007334, "sim_count": 1}, {"size_bin": 823.5, "act_body": 384.4375, "act_head": 334.23249999999825, "act_tail": 103.39500000000044, "act_count": 4, "sim_body": 0.0, "sim_head": 0.0, "sim_tail": 0.0, "sim_count": 0}, {"size_bin": 841.6, "act_body": 594.5533333333296, "act_head": 105.35000000000097, "act_tail": 139.61999999999534, "act_count": 3, "sim_body": 801.7099999994389, "sim_head": 6.3399999999965075, "sim_tail": 33.120000000039, "sim_count": 1}, {"size_bin": 859.7, "act_body": 532.239999999998, "act_head": 237.81000000000495, "act_tail": 85.33999999999651, "act_count": 2, "sim_body": 0.0, "sim_head": 0.0, "sim_tail": 0.0, "sim_count": 0}, {"size_bin": 877.8, "act_body": 534.0933333333329, "act_head": 252.4733333333376, "act_tail": 92.94000000000233, "act_count": 3, "sim_body": 0.0, "sim_head": 0.0, "sim_tail": 0.0, "sim_count": 0}];
+    const sizeLabels = rawSizeData.map(d => d.size_bin);
+
+    const ctxSize = document.getElementById('sizeChart').getContext('2d');
+    new Chart(ctxSize, {
+        type: 'bar',
+        data: {
+            labels: sizeLabels,
+            datasets: [
+                {
+                    label: 'Actual - Tail',
+                    data: rawSizeData.map(d => d.act_tail),
+                    backgroundColor: 'rgba(59, 130, 246, 0.4)',
+                    stack: 'actual',
+                    borderWidth: 0
+                },
+                {
+                    label: 'Actual - Body',
+                    data: rawSizeData.map(d => d.act_body),
+                    backgroundColor: 'rgba(59, 130, 246, 0.9)',
+                    stack: 'actual',
+                    borderWidth: 0
+                },
+                {
+                    label: 'Actual - Head',
+                    data: rawSizeData.map(d => d.act_head),
+                    backgroundColor: 'rgba(59, 130, 246, 0.6)',
+                    stack: 'actual',
+                    borderWidth: 0
+                },
+                {
+                    label: 'Simulated - Tail',
+                    data: rawSizeData.map(d => d.sim_tail),
+                    backgroundColor: 'rgba(249, 115, 22, 0.4)',
+                    stack: 'simulated',
+                    borderWidth: 0
+                },
+                {
+                    label: 'Simulated - Body',
+                    data: rawSizeData.map(d => d.sim_body),
+                    backgroundColor: 'rgba(249, 115, 22, 0.9)',
+                    stack: 'simulated',
+                    borderWidth: 0
+                },
+                {
+                    label: 'Simulated - Head',
+                    data: rawSizeData.map(d => d.sim_head),
+                    backgroundColor: 'rgba(249, 115, 22, 0.6)',
+                    stack: 'simulated',
+                    borderWidth: 0
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'top', align: 'start', labels: { usePointStyle: true, boxWidth: 8 } },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const dataset = context.dataset;
+                            const index = context.dataIndex;
+                            const isActual = dataset.stack === 'actual';
+                            const count = isActual ? rawSizeData[index].act_count : rawSizeData[index].sim_count;
+                            return `${dataset.label}: ${context.parsed.y.toFixed(2)} (Count: ${count})`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    title: { display: true, text: 'Total Block Size (Points)', color: '#64748b' },
+                    grid: { display: false }
+                },
+                y: {
+                    title: { display: true, text: 'Average Size Components (Points)', color: '#64748b' },
+                    grid: { color: '#f1f5f9' },
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+
+    // --- SAMPLE PATH CHART ---
+    const rawSampleData = {"actual": [88958.92, 88946.43, 88987.43, 89060.29, 89125.37, 89041.11, 89131.68, 89359.54, 89734.13, 89508.13, 89597.57, 89562.73, 89435.12, 89287.29, 89435.43, 89412.93, 89383.23, 89361.52, 89416.0, 89315.52, 89383.18, 89457.64, 89360.37, 89282.33, 89069.74, 88815.46, 89313.98, 89518.99, 89101.44, 89062.26, 89682.92, 89352.7, 89711.3, 89981.86, 90091.77, 90315.29, 90577.81, 90564.26, 90482.67, 90338.75, 90309.56, 90258.34, 89966.41, 89724.82, 89916.76, 89898.84, 89944.4, 89855.16, 89488.92, 89704.34, 89755.17, 89625.36, 89651.86, 89758.35, 89897.82, 89755.82, 89705.75, 89740.9, 89776.67, 89713.98, 89650.49, 89671.3, 89713.26, 89697.57, 89630.24, 89729.3, 89730.87, 89989.91, 89881.36, 89908.49, 89914.84, 89945.43, 89996.4, 90125.35, 90110.04, 90078.29, 89955.36, 90004.53, 89955.58, 89921.62, 89972.19, 90007.7, 90072.49, 90059.37, 90016.37, 90019.37, 90063.0, 90046.55, 90004.93, 90113.54, 90096.8, 90087.57, 90022.88, 90093.42, 90081.46, 90078.42, 91282.29, 91197.26, 91361.45, 91319.42, 91295.31, 91268.47, 91383.8, 91407.09, 91503.79, 91450.2, 91548.26, 91548.81, 91323.49, 91339.56, 91332.19, 91267.38, 91213.87, 91291.26, 91059.81, 91093.41, 91143.7, 91151.29, 91180.63, 91224.09, 91350.4, 91200.58, 91168.04, 91297.56, 91277.84, 91207.18, 91178.18, 91283.27, 91235.34, 91292.03, 91249.17, 91282.54, 91296.67, 91331.13, 91344.66, 91299.52, 91210.08, 91133.91, 91179.4, 91161.51, 90965.45, 91088.99, 91032.83, 91109.04, 92590.43, 92654.98, 92438.27, 92423.79, 92386.69, 92582.15, 92603.65, 92647.21, 92850.74, 92847.86, 92796.78, 93030.3, 92846.67, 92921.89, 92969.39, 93074.66, 93094.75, 92873.16, 92752.7, 92821.55, 92879.56, 92751.83, 92548.13, 92691.47, 92691.67, 92716.85, 93232.3, 93386.34, 93400.94, 93341.75, 93822.89, 93921.03, 93905.81, 93815.0, 93715.17, 93674.11, 93670.39, 93414.96, 93762.82, 94295.71, 94197.75, 94014.17, 93982.6, 94433.14, 94302.3, 94404.08, 94252.33, 94282.7, 93354.71, 93288.43, 93213.76, 93197.77, 93322.42, 93437.88, 93423.19, 93419.84, 93561.8, 93550.68, 93559.69, 93536.82, 93742.54, 93803.78, 93756.96, 93812.65, 93867.92, 93838.3, 93802.66, 93829.04, 93795.37, 93704.89, 93666.04, 93694.77, 94085.77, 94309.4, 94081.55, 93806.04, 93727.43, 94104.43, 93456.49, 93619.1, 93457.44, 92809.06, 92504.28, 92647.65, 92570.58, 92476.01, 92192.69, 91539.0, 91769.1, 91955.6, 91888.77, 91982.58, 92159.23, 92205.2, 92073.86, 92029.55, 92871.82, 92796.33, 92702.8, 92647.82, 92202.59, 91896.88, 91672.02, 91635.19, 91765.35, 91730.1, 91805.67, 91885.42, 92034.41, 92094.7, 92120.48, 92004.22, 91966.4, 91976.28, 91929.98, 91923.07, 91826.42, 92146.18, 92065.71, 91964.8, 91622.94, 91470.64, 91764.23, 91902.82, 91601.62, 91192.93, 91285.65, 91269.65, 91518.71, 91519.24, 91374.46, 91182.94, 91189.14, 91531.34, 91534.37, 91163.82, 91181.81, 91192.19, 91069.65, 90805.96, 90701.7, 90798.75, 90994.45, 91082.82, 90498.43, 90586.39, 90312.63, 90114.06, 90206.45, 89928.74, 89943.4, 89902.12, 89813.84, 90080.12, 90043.02, 90297.26, 90165.78, 90087.64, 89948.08, 90094.47, 89759.77, 89828.48, 89875.71, 89859.66, 89860.59, 89957.49, 89909.91, 89839.29, 89743.79, 89530.13, 89328.46, 89916.8, 90212.49, 90494.76, 90381.82, 90674.11, 90595.52, 90572.68, 90621.42, 90849.23, 91020.82, 90782.21, 91116.34, 91293.68, 91096.15, 91176.68, 90924.55, 91035.76, 91144.05, 90989.78, 91097.62, 90859.87, 90577.28, 90580.14, 90216.63, 89919.95, 90046.74, 90297.65, 90237.92, 90238.12, 90284.38, 90335.78, 90395.77, 90384.2, 90481.64, 90465.99, 90422.37, 90332.48, 90312.13, 90217.3, 90312.73, 90350.07, 90533.5, 90490.14, 90521.96, 90502.31, 90263.44, 90481.56, 90010.34, 90057.02, 90167.0, 91568.28, 91149.85, 91079.31, 91655.83, 91301.7, 91365.93, 91539.6, 91266.71, 91044.1, 91069.89, 91325.17, 91191.45, 90499.81, 90729.23, 90723.88, 90448.24, 90222.75, 90243.61, 90216.67, 90563.48, 90557.79, 90529.45, 90533.01, 90512.98, 90548.91, 90553.81, 90634.08, 90631.41, 90631.57, 90655.25, 90699.72, 90660.24, 90665.59, 90651.1, 90605.28, 90620.63, 90597.66, 90580.03, 90610.54, 90588.03, 90599.31, 90604.1, 90530.76, 90488.55, 90495.73, 90439.4, 90474.21, 90506.49, 90480.5, 90506.34, 90535.27, 90557.29, 90518.3, 90566.4, 90555.21, 90587.26, 90610.69, 90545.43, 90434.17, 90416.95, 90455.22, 90465.8, 90461.51, 90464.15, 90476.93, 90500.74, 90497.3, 90548.94, 90591.33, 90603.06, 90663.81, 90639.2, 90625.5, 90626.31, 90607.58, 90606.2, 90596.23, 90573.87, 90604.86, 90581.48, 90585.93, 90591.98, 90632.76, 90661.88, 90727.98, 90753.1, 90807.04, 90813.24, 90759.18, 90704.4, 90731.88, 90816.3, 90856.15, 90909.77, 90995.97, 90795.04, 90845.06, 90728.45, 90738.39, 90772.51, 90905.84, 90986.71, 90910.7, 90932.79, 90913.88, 90856.56, 90847.4, 90768.23, 90786.3, 90720.01, 90759.07, 90790.73, 90772.06, 90667.56, 90546.07, 91417.07, 91326.98, 90448.02, 90624.32, 90694.22, 90687.67, 90710.89, 90567.61, 90579.82, 90439.68, 90406.12, 90317.29, 90457.37, 90566.7, 90477.04, 90485.92, 90646.95, 90666.83, 90610.12, 90661.14, 90446.91, 90575.61, 90527.77, 90517.17, 90530.63, 90166.34, 90693.98, 90779.22, 90820.99, 91217.0, 91422.04, 91565.52, 91710.24, 92131.58, 92093.59, 92051.47, 91891.3, 91650.72, 91258.95, 91428.85, 91622.01, 91830.15, 91573.26, 91619.67, 91587.35, 91751.64, 91722.08, 91786.6, 91885.66, 91851.95, 92041.99, 92074.57, 92332.34, 92454.12, 92051.26, 92189.21, 92147.12, 92152.52, 91959.32, 92042.97, 92112.19, 92108.54, 91962.54, 91908.35, 91843.39, 91981.23, 92044.62, 92021.01, 91921.91, 92044.3, 92106.31, 91975.97, 91887.64, 92318.95, 92616.41, 92382.56, 92520.66, 92321.37, 92879.9, 93406.17, 93270.85, 93165.71, 93510.88, 93361.56, 93292.37, 93374.5, 93335.34, 93187.62, 93527.77, 93544.24, 93580.82, 93591.4, 93518.4, 93821.97, 93993.02, 94207.93, 95234.75, 95147.96, 94934.42, 94880.78, 95041.36, 95037.45, 94976.47, 95050.07, 95135.92, 95011.04, 95075.82, 95060.3, 94891.52, 94930.38, 94883.03, 94763.05, 94976.03, 95039.65, 95015.45, 95033.48, 94933.41, 95149.9, 95030.79, 94964.38, 95444.42, 95600.38, 95812.88, 96469.23, 96929.6, 96778.66, 96432.05, 96757.3, 97390.75, 97259.42, 97526.82, 97299.06, 97693.22, 97573.73, 97178.53, 96962.41, 96783.4, 97030.36, 96376.11, 96807.12, 97006.0, 97546.97, 97367.35, 97265.02, 96463.15, 96348.0, 96416.8, 96614.46, 96566.3, 96720.53, 97047.4, 97031.56, 96855.66, 96781.33, 96760.98, 96786.9, 96721.84, 96856.1, 96669.73, 96566.05, 96668.13, 96609.16, 96714.31, 96952.31, 96836.36, 96906.46, 96750.31, 96830.21, 97096.14, 96766.53, 95789.57, 96024.43, 96218.02, 95859.39, 95844.22, 96732.57, 96336.51, 96384.58, 96751.31, 96683.64, 96455.82, 96690.58, 96898.11, 96585.61, 96211.6, 96134.01, 95996.93, 95822.98, 95754.32, 95485.35, 95360.42, 95474.68, 95689.28, 95768.4, 95737.96, 95646.41, 95656.59, 95683.4, 95619.72, 95582.79, 95521.5, 95390.68, 95355.84, 95275.28, 95283.56, 95316.09, 95276.09, 95389.97, 95444.36, 95535.85, 95465.52, 95419.22, 95488.88, 95479.82, 95378.1, 95412.44, 95408.91, 95672.37, 95177.77, 95150.92, 95539.25, 94679.42, 94491.0, 94537.25, 94763.61, 94827.65, 94847.39, 94826.68, 94758.46, 94722.84, 94889.28, 95025.7, 95010.63, 95165.04, 95094.76, 94953.11, 94946.81, 94812.26, 94895.72, 94947.34, 95122.89, 95164.57, 95162.61, 95212.95, 95172.78, 95181.98, 95222.85, 95226.28, 95225.4, 95197.66, 95133.86, 95074.2, 95086.4, 95237.43, 95264.36, 95288.01, 95304.98, 95238.01, 95232.31, 95222.67, 95197.34, 95319.54, 95380.7, 95402.4, 95387.84, 95412.26, 95413.31, 95427.26, 95473.4, 95476.97, 95551.47, 95540.47, 95460.85, 95441.65, 95336.64, 95267.62, 95319.92, 95368.01, 95398.68, 95329.78, 95379.19, 95407.41, 95404.53, 95395.27, 95363.09, 95313.75, 95260.01, 95263.94, 95013.93, 95078.77, 95124.56, 95133.58, 95149.83, 95148.8, 95185.33, 95217.15, 95092.98, 95105.21, 95133.86, 95128.39, 95090.1, 95073.29, 95083.26, 95128.05, 95084.82, 95105.89, 95131.97, 95073.08, 95010.58, 94935.53, 95107.68, 95103.2, 95180.42, 95134.36, 95094.89, 94915.19, 94977.91, 95010.03, 94999.16, 95063.07, 95115.39, 95048.07, 95129.26, 95128.7, 95100.5, 95208.69, 95163.17, 95214.85, 95188.91, 95322.38, 95299.02, 95410.28, 95384.11, 95413.9, 95382.45, 95335.3, 92709.54, 92908.2, 93085.93, 93198.24, 92998.84, 93015.21, 92917.1, 92998.6, 92913.5, 92936.16, 92960.85, 93012.39, 92943.66, 93073.33, 93177.98, 93137.83, 92995.71, 92974.27, 93089.56, 93021.78, 92932.56, 92884.76, 93020.83, 92981.05, 92821.05, 92811.1, 92742.77, 92759.15, 92985.21, 92883.0, 92930.23, 93001.27, 92993.93, 93103.47, 93158.85, 93246.87, 93283.98, 93241.78, 93140.6, 93183.58, 93053.37, 92929.07, 93053.62, 93004.04, 93034.76, 93019.02, 93086.5, 93046.48, 90892.36, 91085.79, 90751.49, 91004.99, 90963.33, 90940.32, 90925.39, 90937.49, 91068.22, 91194.88, 91142.04, 91162.99, 91273.52, 91321.91, 91249.55, 91136.47, 91185.05, 91059.06, 91087.6, 91200.84, 90830.94, 90791.97, 90932.48, 90869.62, 91013.27, 90897.18, 90982.65, 90458.71, 90211.07, 90531.34, 90447.57, 90577.02, 90660.32, 90515.91, 90027.95, 90070.83, 90359.34, 90114.72, 89572.13, 89672.48, 89808.72, 89624.68, 89406.95, 89385.63, 89466.03, 89370.53, 89329.78, 89600.77, 89039.95, 89140.55, 88928.17, 89090.03, 89174.68, 89300.97, 89310.67, 89010.56, 89203.69, 89213.53, 89210.61, 89140.25, 89192.04, 89225.29, 89190.83, 88696.48, 88290.43, 88264.48, 88534.66, 88643.21, 88845.04, 88757.11, 88616.62, 88578.96, 89487.61, 89501.33, 89577.7, 89702.09, 90265.71, 89941.32, 90037.93, 90196.18, 89659.46, 89496.05, 88092.14, 87523.03, 87231.41, 87686.14, 87838.52, 87841.93, 87816.82, 87935.23, 88035.79, 88384.52, 88303.55, 89562.64, 89955.01, 90280.58, 89680.63, 89784.72, 89742.68, 89835.74, 89951.16, 89910.53, 90026.63, 89958.98, 89952.2, 89946.63, 89955.13, 89990.28, 89899.75, 89860.08, 89901.42, 89840.68, 89910.27, 89932.83, 89931.03, 89920.17, 89960.28, 90082.42, 89535.54, 89526.6, 89614.18, 89482.68, 89400.58, 89016.39, 89168.08, 88565.66, 89057.41, 88897.6, 88751.02, 88903.53, 88886.28, 88954.25, 89144.24, 89061.1, 89138.48, 89447.74, 89377.77, 89529.35, 89578.17, 89249.37, 89307.07, 89425.52, 89743.14, 89683.89, 89434.79, 89211.85, 89234.65, 89104.11, 89114.7, 89031.82, 88903.92, 88862.79, 88935.71, 88993.71, 89000.98, 88937.65, 89095.62, 89112.84, 89131.04, 89092.12, 89030.79, 89044.87, 89128.46, 89140.34, 89278.03, 89141.53, 89239.33, 89238.1, 89336.96, 89559.53, 88852.63, 88902.81, 88709.25, 88851.27, 89144.12, 89642.28, 89633.73, 89457.24, 90160.48, 90017.67, 90101.87, 90880.71, 90736.48, 90505.84, 90659.84, 90775.1, 90642.15, 90423.96, 90173.23, 89747.51, 89765.59, 89886.26, 89480.03, 89481.13, 89526.82, 89523.19, 89509.98, 89473.55, 89468.21, 89462.35, 89483.76, 89479.53, 89466.84, 89484.77, 89477.03, 89493.65, 89503.95, 89448.84, 89413.07, 89424.28, 89394.09, 89392.27, 89395.69, 89403.71, 89393.52, 89223.67, 89325.05, 89334.8, 89350.68, 89326.73, 89331.25, 89263.95, 89200.92, 89144.2, 89116.98, 89113.19, 89078.12, 89142.0, 89227.13, 89248.27, 89176.51, 89249.98, 89274.31, 89284.22, 89261.32, 89255.49, 89171.22, 89150.67, 89198.44, 89190.89, 88583.29, 88542.92, 88175.55, 88149.39, 88221.16, 88305.14, 88340.44, 88268.57, 88330.56, 88478.82, 88477.81, 88510.78, 88457.24, 88527.48, 88463.45, 88427.17, 88499.68, 88551.59, 88613.82, 88647.26, 88610.98, 88559.81, 88706.16, 88785.04, 88753.25, 88575.53, 88552.81, 88572.48, 88608.57, 88607.88, 88553.43, 88331.34, 87782.46, 87916.7, 87817.96, 87960.38, 87743.69, 87757.68, 87875.55, 87760.71, 87579.35, 87419.99, 86948.31, 87288.93, 87161.46, 86366.54, 86614.74, 86407.76, 87810.59, 88088.14, 87951.46, 87888.85, 87726.32, 87694.97, 87661.89, 87572.19, 87730.68, 87804.68, 87787.85, 87795.96, 87886.41, 87702.32, 87755.84, 87749.85, 87779.42, 87778.94, 87661.36, 87701.48, 87741.93, 87790.39, 87914.14, 87856.09, 87591.07, 87580.68, 88051.2, 88076.01, 88612.69, 88417.2, 87404.05, 87553.27, 87316.48, 87602.57, 87378.73, 87523.18, 87338.59, 87306.92, 87452.61, 87597.98, 87763.09, 87981.2, 87932.17, 88310.87, 88275.07, 88079.0, 88145.17, 87913.14, 88253.69, 88113.66, 88122.78, 88055.89, 87884.78, 87858.33, 87907.03, 87764.51, 87876.52, 87855.88, 87716.71, 87658.75, 87753.88, 87761.82, 87918.47, 87862.32, 87977.69, 87917.16, 87872.93, 87870.31, 87791.98, 87694.72, 87925.08, 87867.92, 88166.75, 88140.77, 87551.59, 87622.44, 87862.35, 87510.48, 87571.75, 87911.88, 88321.98, 88259.65, 88621.12, 88524.11, 87895.25, 87768.92, 87257.39, 87438.19, 87551.02, 87727.56, 87712.81, 88158.7, 88099.33, 88127.1, 88401.63, 88293.55, 89011.62, 88893.52, 88967.57, 88811.58, 88817.9, 88872.13, 89184.26, 89444.1, 89455.22, 89211.32, 89369.35, 89274.02, 89207.68, 89326.86, 89537.95, 89950.3, 89797.7, 89750.8, 89788.88, 89883.87, 90051.96, 90011.92, 90277.18, 90147.0, 90021.17, 89874.68, 89581.74, 89495.68, 88983.4, 89139.67, 89382.75, 89353.91, 89141.95, 89630.03, 89419.77, 89508.59, 89602.56, 89468.36, 89727.65, 90041.12, 89693.54, 89658.23, 89513.77, 89414.64, 89253.73, 89288.3, 88930.72, 89274.27, 87812.29, 88297.17, 87984.94, 87916.66, 87867.54, 87878.46, 87882.66, 87743.9, 87796.23, 87797.39, 87771.62, 87807.18, 87882.13, 87656.59, 87649.12, 87682.23, 87871.94, 87793.08, 87845.41, 87963.98, 87991.36, 88021.13, 87926.04, 87905.87, 87857.03, 87683.28, 87521.21, 86863.7, 85190.98, 85333.93, 84488.27, 84796.32, 84641.26, 84379.57, 84499.07, 85124.1, 85097.29, 84907.01, 84755.15, 84137.6, 84383.1, 83734.62, 83873.9, 83336.24, 83520.18, 83653.16, 84000.36, 83847.65, 82739.51, 82541.32, 82445.3, 82523.79, 82500.49, 82262.95, 82338.72, 82220.16, 82174.75, 82369.97, 82452.65, 82687.66, 82732.48, 82603.7, 82651.22, 83007.22, 82797.55, 82588.84, 82578.62, 82642.67, 82596.15, 82574.55, 82781.56, 82606.59, 82832.69, 82862.63, 83528.91, 82978.1, 83188.5, 82502.63, 83147.12, 82757.83, 82953.88, 83032.26, 83248.54, 83017.49, 82610.82, 83242.33, 83022.25, 82807.63, 82730.22, 82366.33, 82999.59, 83795.36, 84004.98, 84188.1, 84135.53, 84122.84, 83200.56, 82949.71, 82651.77, 82917.19, 82990.48, 82886.14, 83068.98, 82973.5, 82845.75, 82912.19, 83030.48, 83021.89, 82871.73, 82861.93, 82841.52, 82874.08, 82691.76, 82851.53, 82784.62, 82629.43, 82653.48, 82695.83, 82510.98, 82621.8, 82322.96, 81481.22, 80873.37, 81359.56, 81142.31, 81172.5, 81205.87, 81180.71, 80866.76, 80991.79, 80859.85, 80226.9, 78706.83, 79002.51, 78799.28, 78774.54, 78516.05, 78306.92, 77475.76, 77928.09, 78121.57, 77882.49, 77415.04, 77633.35], "simulated": [88568.54, 88492.0399999998, 88469.38000000005, 88352.08000000002, 88296.3199999999, 88393.95999999982, 88527.15999999976, 88592.05999999966, 88623.33999999987, 88705.42000000006, 88603.28999999982, 88339.13999999984, 88266.11999999988, 88187.37000000032, 88318.65000000053, 88304.61000000035, 88214.84000000036, 88181.41000000063, 88237.14000000083, 88315.59000000075, 88194.74000000063, 88058.33000000076, 88091.91000000076, 88210.00000000076, 88349.0300000007, 88091.80000000136, 88603.5500000017, 88609.5900000022, 88470.120000002, 88797.17000000266, 88849.9400000026, 88900.53000000268, 88953.56000000285, 88702.3400000025, 88794.31000000243, 88864.49000000214, 88900.01000000242, 88856.87000000225, 88793.60000000203, 88600.54000000218, 88437.09000000205, 88139.61000000192, 88270.00000000182, 88153.5700000019, 88095.21000000188, 87901.61000000185, 87937.71000000184, 87887.76000000151, 87960.72000000141, 87962.31000000164, 87758.8100000018, 87542.87000000186, 87552.95000000183, 87606.72000000191, 87846.00000000198, 87813.19000000198, 87830.40000000209, 87813.74000000209, 87909.12000000216, 87965.9600000021, 88195.47000000215, 88134.02000000236, 88259.31000000218, 88258.73000000237, 88186.04000000248, 88216.08000000239, 88197.23000000235, 88157.33000000205, 88086.46000000222, 88132.67000000221, 88075.14000000231, 88113.32000000245, 88134.51000000234, 88160.81000000244, 87833.90000000269, 87921.13000000258, 87836.88000000229, 87177.29000000234, 87121.44000000226, 87034.62000000257, 86823.3400000025, 86810.17000000246, 86710.58000000246, 86874.03000000241, 86985.0100000025, 86957.96000000247, 86950.17000000256, 86877.08000000274, 86904.89000000249, 86933.85000000242, 86987.76000000235, 87033.44000000226, 87023.86000000221, 86973.05000000233, 87119.75000000244, 87010.35000000257, 87167.5400000026, 87190.86000000252, 87221.0200000025, 87333.1900000025, 87383.51000000254, 87382.69000000264, 87239.79000000282, 87549.93000000293, 87554.24000000276, 87424.48000000262, 87265.54000000247, 87205.55000000242, 87223.97000000239, 87173.47000000255, 87283.9200000024, 87183.23000000222, 87023.66000000224, 86936.12000000203, 86794.56000000218, 86861.32000000235, 86832.6100000023, 86935.82000000232, 86796.93000000232, 86647.07000000242, 86777.1900000022, 87064.9800000023, 86881.28000000237, 86697.25000000214, 86493.8200000023, 86434.66000000239, 86640.31000000243, 86604.90000000242, 86567.56000000241, 86566.72000000214, 86621.64000000224, 86667.81000000222, 86592.04000000231, 86613.33000000217, 86548.08000000232, 86665.77000000217, 86943.47000000221, 87019.04000000199, 86909.72000000201, 87039.5200000021, 86887.99000000214, 87070.62000000208, 87152.60000000204, 87151.60000000194, 87037.41000000203, 87063.53000000177, 86947.4500000017, 86977.88000000158, 86881.14000000167, 86590.2800000016, 86604.20000000151, 86399.33000000163, 86512.69000000203, 86361.62000000225, 86119.22000000229, 86203.02000000238, 86162.12000000227, 86195.49000000219, 86310.51000000197, 86240.04000000197, 85992.01000000178, 86155.30000000181, 86135.15000000178, 86023.19000000191, 86092.52000000207, 86325.03000000192, 86194.99000000193, 86086.97000000175, 86050.47000000176, 86270.56000000199, 86805.820000002, 86882.31000000265, 86818.64000000275, 87341.46000000267, 86831.56000000249, 86570.50000000242, 86701.27000000252, 86891.76000000288, 87238.80000000286, 87259.7900000026, 87313.8300000025, 87364.30000000237, 87322.78000000212, 87057.95000000218, 87213.36000000211, 87060.49000000239, 87237.29000000251, 87095.84000000254, 87315.98000000251, 87338.49000000252, 87121.86000000242, 87189.11000000223, 87384.97000000211, 87416.520000002, 87503.33000000195, 87598.79000000183, 87623.09000000202, 87488.19000000203, 87460.24000000207, 87556.30000000216, 87633.64000000204, 87385.96000000183, 87608.28000000175, 87727.97000000182, 87824.97000000176, 87832.60000000165, 87874.21000000152, 87784.4800000016, 87705.38000000178, 87675.87000000208, 87735.47000000195, 87776.35000000172, 87562.01000000165, 87658.64000000172, 87735.48000000176, 87665.06000000173, 87857.5200000017, 87572.48000000144, 87747.15000000174, 87902.1500000012, 87551.60000000127, 87558.51000000133, 87211.14000000157, 87258.2200000014, 87415.50000000121, 87608.89000000102, 87665.65000000091, 88052.2400000011, 88259.82000000101, 88238.40000000155, 88042.96000000137, 87621.3900000011, 87598.19000000111, 87578.3400000012, 87411.35000000097, 87655.36000000106, 87756.66000000069, 87544.5000000009, 87358.58000000051, 87194.47000000051, 87187.3900000004, 87161.92000000035, 87029.61000000006, 87055.77000000028, 87102.57000000017, 87287.93999999978, 87042.8800000001, 87050.01, 87301.61999999984, 87257.27999999972, 87493.87999999996, 87418.40999999992, 87517.16999999998, 87646.97999999984, 87583.66000000002, 87698.70999999998, 87777.85999999991, 87712.31000000006, 87667.09999999976, 87674.04999999964, 87727.17999999932, 87560.0999999993, 87828.51999999913, 87836.47999999898, 87662.04999999912, 87631.03999999896, 87372.2799999991, 87332.23999999913, 87405.67999999912, 87960.9399999995, 87740.14999999943, 87616.21999999949, 87722.00999999973, 87616.9399999995, 87398.48999999909, 87636.80999999939, 87608.83999999959, 87450.44999999952, 87588.48999999954, 87548.66999999942, 87344.70999999951, 87715.73999999969, 87657.54999999977, 87776.79000000023, 88048.09000000058, 88056.03000000086, 88121.83000000096, 88084.41000000096, 88052.56000000091, 88075.35000000092, 88005.97000000098, 87924.6000000014, 88134.84000000144, 87695.28000000137, 87804.34000000138, 87907.03000000147, 87849.23000000107, 88152.24000000075, 88232.43000000063, 88127.25000000057, 88098.89000000058, 88189.65000000066, 88203.30000000053, 88218.63000000066, 89256.31000000064, 89350.73000000065, 89082.46000000095, 89014.01000000106, 88927.67000000118, 88944.56000000122, 88978.02000000124, 89030.10000000142, 89062.10000000142, 89383.72000000159, 89566.00000000156, 89957.27000000124, 89821.65000000117, 89595.70000000186, 89252.31000000186, 89237.14000000175, 88942.14000000221, 89173.6400000019, 89384.91000000204, 89208.2800000024, 88794.41000000239, 88816.42000000243, 88764.92000000238, 88679.83000000256, 88533.2700000026, 88337.76000000241, 88146.49000000216, 88023.14000000214, 87901.1700000023, 87786.88000000229, 87682.19000000242, 87843.87000000244, 87757.18000000263, 87925.61000000263, 87803.78000000237, 87427.2200000026, 87318.76000000228, 87232.43000000222, 87219.32000000216, 87083.97000000237, 87249.76000000238, 87060.2600000021, 87233.93000000219, 87312.7500000022, 87402.54000000202, 87640.99000000197, 87852.04000000196, 88044.59000000186, 88000.0700000019, 87941.97000000178, 87935.59000000186, 88015.77000000195, 88031.30000000216, 88136.64000000227, 87683.13000000239, 87865.89000000272, 87830.39000000291, 88000.59000000317, 87683.88000000292, 87548.52000000341, 87810.83000000344, 88086.67000000324, 87728.78000000409, 87171.42000000416, 87236.36000000392, 87382.82000000388, 87491.27000000396, 87424.42000000391, 87413.91000000393, 87009.26000000394, 86909.55000000415, 87165.35000000401, 86908.93000000433, 87293.10000000446, 87395.20000000457, 87205.96000000468, 87417.69000000438, 87434.49000000433, 87328.11000000394, 87087.56000000403, 87015.82000000401, 86999.40000000407, 86982.43000000421, 87081.7600000041, 87200.63000000414, 87195.42000000422, 87261.77000000417, 87258.70000000425, 87188.30000000405, 87131.83000000386, 87170.11000000387, 87057.11000000389, 87142.93000000388, 87227.79000000378, 87082.830000004, 87040.41000000398, 86922.44000000393, 86982.7200000039, 87010.29000000395, 87171.35000000408, 87088.25000000402, 87021.190000004, 87023.22000000397, 87057.98000000406, 87025.99000000407, 86938.3600000041, 86888.88000000398, 86823.890000004, 86975.29000000423, 86934.22000000431, 86972.43000000421, 87005.06000000425, 87040.73000000395, 87010.39000000402, 87182.03000000388, 87214.85000000385, 87149.21000000385, 87097.3200000038, 87071.82000000375, 87149.97000000392, 87242.34000000393, 87350.17000000393, 87332.37000000398, 87330.42000000403, 87297.33000000395, 87470.15000000394, 87361.25000000384, 87351.69000000383, 87262.14000000394, 87108.490000004, 86900.46000000398, 86846.100000004, 86874.96000000402, 87005.9900000042, 86766.61000000425, 86796.43000000434, 86797.34000000435, 86776.04000000443, 86832.1000000044, 86916.05000000437, 86902.80000000428, 86915.88000000431, 86936.7900000042, 87024.26000000411, 87088.03000000406, 87171.52000000403, 87063.62000000398, 87016.78000000407, 86953.960000004, 86888.41000000393, 86790.64000000384, 86697.48000000376, 86590.95000000384, 86477.99000000382, 86382.98000000359, 86549.78000000342, 86536.8200000034, 86640.76000000343, 86607.51000000344, 86725.82000000376, 86810.02000000369, 86901.43000000366, 86903.96000000343, 86801.46000000363, 86890.83000000364, 86856.42000000367, 86810.88000000353, 86872.20000000345, 87090.33000000344, 86847.99000000363, 86915.31000000362, 86889.33000000379, 86839.26000000395, 86697.97000000408, 86612.19000000422, 86880.61000000431, 86867.64000000397, 86794.62000000408, 87005.96000000392, 87433.5000000035, 87449.89000000378, 87199.25000000403, 87071.17000000399, 87039.65000000401, 86905.34000000387, 87210.8000000039, 87220.170000004, 87080.16000000396, 86913.13000000367, 87154.59000000372, 86990.5300000035, 87001.51000000365, 86838.27000000367, 86696.45000000382, 86562.48000000394, 86488.72000000408, 86427.45000000397, 86173.56000000425, 86219.87000000411, 86166.89000000422, 86096.10000000412, 86046.95000000404, 86320.13000000424, 86069.32000000405, 85806.14000000397, 86128.41000000392, 86209.18000000378, 86235.92000000349, 86170.59000000329, 86234.09000000324, 86218.00000000349, 86185.18000000349, 86025.64000000324, 86146.73000000317, 86324.00000000287, 86069.39000000288, 85957.35000000286, 85800.31000000268, 86088.72000000264, 86144.13000000271, 86299.1000000029, 86065.21000000297, 85976.43000000282, 85854.75000000272, 85829.24000000274, 85776.98000000253, 85731.65000000244, 85914.7700000023, 85856.41000000236, 86113.82000000241, 86203.73000000273, 86547.06000000301, 86512.36000000301, 86684.37000000289, 86644.64000000301, 86462.43000000312, 86427.7900000028, 86503.43000000295, 86394.40000000288, 86463.88000000284, 86433.10000000281, 86348.10000000258, 86410.52000000255, 86514.68000000241, 86564.1400000024, 86620.00000000256, 86941.47000000284, 86905.81000000237, 87083.16000000235, 87192.7600000024, 87468.61000000285, 87371.67000000295, 87196.9000000028, 87204.59000000266, 86892.85000000276, 86777.62000000285, 86746.24000000292, 86651.86000000233, 86657.50000000276, 86494.2300000028, 86232.18000000269, 86319.77000000242, 86334.23000000272, 86267.79000000285, 86107.18000000264, 85963.98000000235, 86134.59000000257, 86252.79000000245, 86306.58000000236, 86208.3000000023, 86302.96000000219, 86312.37000000209, 86311.12000000193, 86419.12000000203, 86549.9500000021, 86467.19000000214, 86490.63000000229, 86466.2300000021, 86296.94000000205, 86137.04000000205, 85974.21000000207, 85667.30000000187, 85734.12000000165, 85748.47000000163, 85526.08000000166, 85429.7600000015, 85502.58000000153, 85680.83000000165, 85599.7300000015, 85773.49000000115, 85754.12000000082, 85854.18000000058, 85907.79000000055, 86113.95000000058, 86048.51000000071, 86001.59000000072, 85961.3600000004, 86232.6000000004, 86458.72000000034, 86314.2900000003, 86373.78000000067, 86676.83000000066, 86206.51000000065, 86415.59000000032, 86497.54000000021, 86457.62999999996, 86632.92999999993, 86451.10999999996, 86342.11999999956, 86416.01999999944, 86218.86999999969, 86283.34999999986, 86094.25999999965, 85778.00999999922, 86064.70999999953, 85982.46999999949, 86012.59999999919, 86075.99999999932, 85860.69999999952, 86048.34999999967, 86045.05999999972, 85992.64999999959, 85950.88999999968, 85799.5599999997, 85969.46999999981, 85856.78999999969, 85781.58999999975, 85711.47999999968, 85958.99999999955, 85959.96999999971, 85371.62999999958, 85479.77999999964, 85655.59999999955, 85655.15999999933, 85549.22999999925, 85350.8699999992, 85430.81999999919, 85527.3699999995, 85664.71999999948, 85428.81999999951, 85496.7099999993, 85565.4799999991, 85319.73999999935, 85388.21999999932, 85534.99999999958, 85456.79999999957, 85663.7399999994, 85551.8699999995, 85218.10999999897, 85328.00999999842, 84809.80999999864, 85219.61999999828, 85487.60999999849, 85595.39999999884, 85637.93999999932, 85620.81999999906, 85472.41999999911, 85573.26999999958, 85636.96999999958, 87026.13999999907, 87162.52999999915, 87040.30999999902, 87051.49999999888, 87201.36999999882, 87210.90999999858, 87130.56999999844, 87311.06999999844, 87468.36999999813, 87411.6299999981, 87370.02999999792, 87465.82999999794, 87615.94999999802, 87495.28999999833, 87467.79999999821, 87342.66999999818, 87335.07999999805, 87292.53999999801, 87266.3899999981, 87283.72999999809, 87123.35999999839, 87244.43999999837, 87423.14999999829, 87516.07999999827, 87490.13999999818, 87447.55999999827, 87526.47999999832, 87450.2899999982, 87569.14999999807, 87566.65999999792, 87671.789999998, 87722.559999998, 87239.03999999813, 87219.93999999802, 87276.62999999788, 87191.60999999839, 87360.72999999838, 87591.09999999878, 87573.68999999847, 87315.59999999835, 87190.05999999846, 86998.31999999883, 86880.76999999915, 86760.48999999934, 86954.80999999968, 86919.17999999963, 86767.26999999952, 86824.11999999952, 87096.08999999952, 87236.53999999932, 87227.29999999916, 87029.81999999908, 86847.0799999991, 86831.98999999941, 86754.51999999955, 86773.9799999997, 86908.50999999979, 86898.6399999999, 87101.25000000003, 86917.50000000009, 87083.25000000013, 87152.0100000002, 87071.77000000028, 87040.54000000047, 86918.84000000045, 86909.18000000034, 86945.37000000029, 86928.24000000056, 86971.51000000068, 86984.00000000074, 87051.86000000071, 87279.15000000063, 87283.79000000065, 87393.12000000071, 87472.26000000085, 87491.07000000095, 87622.35000000098, 87689.5900000011, 87693.04000000108, 87731.31000000103, 87661.46000000104, 87714.13000000114, 87801.77000000105, 87928.75000000077, 87999.42000000071, 88010.5700000006, 87949.87000000055, 88049.20000000046, 88028.6700000003, 87960.80000000034, 87952.84000000026, 87774.0300000001, 87696.9300000001, 87619.49999999994, 87596.21, 87605.02999999994, 87476.63000000015, 87613.03000000009, 87554.35, 87595.00999999991, 87477.01999999993, 87505.32999999984, 87488.42999999998, 87572.56999999996, 87649.73999999998, 87757.65, 87794.03999999995, 87714.50999999988, 87744.19999999997, 87797.8899999999, 87831.57999999999, 87742.22000000009, 87826.41000000006, 87669.6899999996, 87567.45999999961, 87645.25999999956, 87616.1899999996, 87771.53999999972, 87944.31999999977, 87916.63999999962, 87991.72999999965, 88054.94999999965, 87929.76999999961, 88607.79999999961, 88712.20999999964, 88609.88999999968, 88664.26999999996, 88528.43999999989, 88539.22999999985, 88452.39999999973, 88391.87999999974, 88308.58999999975, 88426.39999999951, 88405.40999999958, 88304.46999999948, 88371.34999999942, 88241.07999999952, 88086.45999999963, 88328.89999999979, 88278.74999999985, 88497.2599999999, 88507.5099999998, 88477.51999999979, 88443.57999999965, 88382.6799999997, 88399.38999999962, 88338.09999999967, 88425.52999999966, 88306.9899999996, 88217.2599999995, 88102.11999999966, 87906.42999999959, 87871.23999999932, 87926.71999999923, 87957.57999999922, 87880.5699999993, 87975.70999999928, 87985.74999999926, 87875.6299999993, 87832.26999999926, 87803.80999999944, 87918.11999999946, 87854.64999999957, 87704.6799999994, 87697.41999999934, 87612.29999999945, 87805.03999999947, 87647.87999999964, 87571.41999999953, 87784.2499999996, 87704.55999999966, 87588.1399999995, 87528.14999999948, 87509.6299999996, 87401.20999999986, 87430.65999999974, 87589.01999999968, 87742.23999999964, 87776.0999999997, 87899.0399999995, 87796.40999999932, 87972.77999999933, 87749.91999999933, 87781.04999999929, 87913.56999999926, 87909.5799999995, 87991.17999999959, 88044.70999999961, 87975.30999999953, 87852.13999999939, 87966.27999999934, 88084.98999999934, 87929.76999999922, 88062.15999999928, 87970.64999999921, 87794.61999999938, 87860.37999999938, 87657.91999999943, 87810.84999999967, 87766.48999999963, 87882.55999999974, 87783.11999999965, 87584.0599999995, 87590.18999999939, 87683.46999999942, 87612.00999999934, 87590.42999999919, 87647.01999999915, 87603.579999999, 87565.28999999916, 87540.96999999933, 87333.67999999943, 87193.2599999995, 87143.91999999934, 87130.90999999938, 87206.14999999927, 87144.87999999919, 87013.85999999926, 87181.80999999901, 87233.36999999915, 87284.43999999911, 87341.14999999944, 87007.90999999973, 86812.8899999998, 86964.3099999996, 87099.43999999997, 87246.28000000001, 87121.47000000022, 87041.39999999986, 86872.83999999923, 86596.20999999934, 86643.15999999945, 86545.03999999954, 86494.94999999923, 86427.23999999897, 86236.21999999922, 86039.75999999938, 86096.60999999894, 86093.40999999916, 85739.9699999994, 85836.9599999991, 85855.11999999896, 85915.57999999884, 86060.12999999922, 85837.1299999992, 85840.3399999994, 85682.02999999942, 85730.77999999943, 85536.49999999943, 85674.29999999926, 85576.99999999916, 85489.65999999935, 85524.82999999952, 85484.72999999947, 85353.60999999965, 85313.58999999968, 85509.57999999968, 85281.40999999973, 85410.34999999969, 85394.03999999978, 85371.59999999982, 85412.81999999976, 85466.11999999982, 85312.61999999963, 85523.89999999957, 85451.22999999954, 84974.83999999995, 85190.10999999983, 85067.19999999966, 85133.81999999958, 85241.94999999947, 85212.12999999957, 85383.99999999923, 85395.15999999935, 85417.64999999916, 85375.2999999994, 85073.09000000016, 85762.86000000047, 85661.40000000014, 85727.0400000001, 85545.24000000069, 85635.14000000097, 85489.36000000095, 85201.75000000114, 84854.03000000182, 84410.90000000168, 83825.80000000198, 83868.0600000019, 83984.38000000181, 83737.02000000217, 84092.41000000219, 84178.80000000214, 84403.87000000197, 84205.32000000171, 84744.03000000161, 84658.97000000175, 84198.25000000202, 84382.3900000022, 84310.75000000221, 84336.4700000021, 84118.67000000211, 84361.61000000231, 84426.89000000236, 84304.40000000245, 84417.43000000235, 84500.7200000023, 84681.99000000203, 84737.530000002, 84735.840000002, 84754.95000000206, 84937.59000000187, 85112.03000000195, 84948.69000000179, 84908.79000000177, 84895.85000000175, 84717.44000000182, 84617.37000000181, 84676.11000000188, 84638.08000000172, 84468.13000000153, 84296.28000000135, 84502.50000000118, 84394.13000000123, 84041.3100000011, 84150.9900000011, 83528.25000000092, 83774.42000000093, 83316.69000000083, 82617.96000000104, 82694.86000000063, 82485.78000000055, 82610.61000000055, 82608.72, 82736.49999999983, 82707.10999999967, 82759.97999999962, 82650.5899999998, 82757.44999999958, 82859.53999999937, 82732.2599999992, 82201.30999999911, 82042.60999999932, 82271.16999999937, 82281.06999999928, 82333.38999999911, 82338.38999999908, 82205.04999999912, 82297.66999999913, 82415.67999999927, 82549.6199999994, 82523.64999999944, 82717.4899999993, 82742.55999999936, 82851.53999999983, 82958.01999999973, 82904.79999999962, 82906.26999999968, 82908.49999999967, 82874.99999999967, 82813.83999999984, 83099.79999999994, 83159.99999999967, 83250.66999999969, 83119.89999999976, 83075.1699999996, 83089.12999999961, 83027.30999999966, 83025.82999999965, 83007.94999999963, 82793.48999999979, 82806.64999999986, 82943.54999999989, 82174.97000000047, 82191.7900000005, 82204.7500000003, 82562.34000000045, 82651.74000000086, 82568.70000000061, 82863.37000000053, 82567.58000000076, 82495.60000000043, 82423.46000000068, 82617.04000000113, 82421.84000000152, 82434.39000000177, 82542.01000000193, 82497.14000000202, 82766.67000000195, 82773.12000000187, 82600.50000000186, 82186.35000000143, 82445.46000000142, 82486.1200000014, 82527.76000000152, 82455.77000000156, 82529.6200000016, 82572.67000000172, 82479.49000000172, 82418.0500000019, 82424.19000000191, 82483.13000000201, 82600.94000000204, 82549.14000000196, 82588.39000000195, 82621.71000000183, 82641.31000000174, 82615.16000000191, 82511.22000000195, 82554.37000000193, 82419.2100000019, 82506.6800000017, 82502.23000000171, 82400.52000000175, 82300.44000000182, 82368.99000000174, 82323.01000000178, 82396.14000000177, 82525.00000000167, 82562.58000000156, 82607.47000000144, 82615.6700000015, 82422.76000000117, 82489.31000000118, 82651.82000000114, 82638.17000000108, 82689.10000000105, 82870.58000000102, 82774.38000000105, 82607.75000000109, 82581.89000000109, 82552.40000000093, 82515.62000000106, 82522.92000000108, 82569.86000000098, 82571.84000000109, 82553.12000000113, 82561.90000000133, 82410.6800000014, 82373.63000000145, 82303.86000000141, 82334.0500000014, 82271.60000000136, 82284.9700000016, 82277.9000000017, 82232.74000000182, 82304.31000000183, 82231.57000000191, 82141.000000002, 82164.85000000206, 82084.57000000213, 82061.88000000211, 82018.67000000215, 81878.89000000223, 81748.94000000227, 81750.72000000246, 81838.65000000254, 81763.3800000026, 81667.9200000027, 81672.01000000251, 81772.67000000238, 81787.20000000238, 81737.78000000239, 81718.12000000238, 81585.85000000233, 81669.6700000021, 81536.0000000021, 81488.3800000019, 81508.63000000188, 81410.17000000173, 81435.45000000192, 81351.30000000198, 81372.60000000198, 81555.20000000215, 82391.17000000195, 82236.38000000204, 82167.56000000195, 81995.5900000019, 81852.68000000199, 81843.6100000022, 81785.59000000206, 81691.95000000196, 81629.48000000179, 81365.33000000138, 81446.9900000018, 81535.01000000178, 81590.100000002, 81729.33000000296, 81789.8200000029, 81647.13000000287, 81523.2600000032, 81697.71000000309, 81790.92000000308, 81686.14000000298, 81446.5100000031, 81415.5100000031, 81366.0600000029, 81326.36000000281, 81163.53000000272, 81133.1100000025, 80948.29000000235, 81114.89000000246, 81070.20000000253, 81043.43000000253, 81021.87000000231, 81005.42000000228, 81085.88000000203, 81257.68000000202, 81254.70000000182, 81185.4200000019, 81330.85000000174, 81373.5100000018, 81250.51000000184, 81280.61000000213, 81283.88000000225, 81305.6700000021, 81552.17000000218, 81302.55000000267, 81374.30000000256, 80898.49000000292, 80766.89000000342, 80852.70000000318, 80980.69000000283, 80710.42000000257, 80461.06000000284, 80150.81000000278, 80432.11000000266, 80535.25000000291, 80461.32000000282, 80587.80000000293, 80554.12000000276, 80665.97000000287, 80781.36000000314, 80737.00000000301, 80442.53000000345, 80359.11000000348, 80217.80000000329, 80106.79000000327, 80168.17000000355, 80143.29000000363, 80171.01000000353, 80199.32000000363, 80218.46000000386, 80057.29000000375, 80095.45000000378, 80202.87000000391, 80141.81000000391, 80239.79000000407, 77654.82000000404, 77609.9900000042, 77565.64000000419, 77450.78000000428, 77414.61000000426, 77403.37000000442, 77455.1500000044, 77498.75000000435, 77453.87000000433, 77489.44000000448, 77549.91000000435, 77623.48000000443, 77517.88000000459, 77581.25000000492, 77654.70000000506, 77661.46000000491, 77592.8500000052, 77498.56000000492, 77316.77000000521, 77067.66000000515, 76787.29000000493, 76967.54000000449, 77135.63000000497, 77282.47000000498, 77195.40000000449, 77152.96000000433, 76968.28000000428, 76909.68000000442, 76908.64000000426, 76984.20000000471, 77079.92000000476, 77068.33000000463, 76963.81000000487, 77264.74000000485, 77166.56000000483, 76976.7400000047, 77061.5000000048, 77064.9600000048, 77041.98000000489, 77072.54000000494, 77135.90000000477, 77209.23000000483, 77208.11000000496, 77267.24000000514, 77182.76000000509, 77083.9500000053, 77602.32000000539, 77562.6100000055, 77522.41000000552, 77385.55000000559, 77291.5500000056, 77392.08000000581, 77360.94000000575, 77193.16000000515, 77215.26000000535, 77125.95000000497, 77082.66000000498, 76994.05000000497, 76884.23000000493, 76746.05000000498, 76644.35000000516, 76765.68000000468, 76844.30000000473, 76830.63000000457, 76711.08000000505, 77091.95000000516, 76806.07000000567, 78266.74000000578, 79484.95000000563, 79731.91000000635, 79681.68000000635, 79656.5700000063, 79438.52000000635, 79403.24000000638, 79420.49000000671, 79626.32000000658, 79579.47000000707, 79418.5800000075, 79619.570000008, 79575.080000008, 79384.93000000788, 79512.22000000786, 80161.01000000745, 79729.46000000706, 80040.02000000696, 80109.56000000732, 80199.76000000729, 80045.61000000745, 80083.33000000764, 79991.64000000765, 79804.71000000769, 79932.93000000746, 80130.32000000744, 80232.9900000076, 80439.45000000748, 80369.95000000746, 80427.38000000766, 80378.4900000076, 80425.62000000777, 80482.99000000778, 80468.2300000078, 80386.80000000769, 80338.92000000767, 80248.13000000778, 80296.76000000771, 80479.75000000755, 80407.18000000755, 80264.86000000748, 80162.14000000748, 80095.1600000074, 80337.18000000737, 80227.13000000737, 80079.6500000071, 80475.39000000732, 79673.59000000787, 79622.39000000757, 79419.82000000778, 79141.52000000767, 79349.80000000738, 79358.80000000716, 79711.31000000719, 79561.39000000754, 80040.45000000752, 79915.8300000071, 80094.65000000704, 80156.63000000633, 79877.72000000648, 79950.9200000065, 79602.87000000686, 79883.73000000659, 79573.39000000655, 79757.07000000677, 79816.61000000688, 79606.99000000677, 79682.54000000676, 79379.3300000064, 79403.68000000634, 79248.85000000625, 79238.09000000622, 79636.34000000618, 79681.10000000613, 79662.99000000604, 79884.08000000629, 79913.05000000629, 79813.88000000654, 79706.57000000666, 79652.67000000678, 79860.19000000689, 79978.12000000695, 80690.06000000663, 80860.03000000647, 80798.70000000672, 80890.9200000069, 81119.93000000664, 81173.54000000631, 81132.72000000619, 81499.39000000636, 81778.90000000631, 81761.68000000631, 81822.14000000615, 80942.3700000061, 80789.04000000609, 80777.99000000555, 80578.27000000511, 80287.0000000053, 80155.81000000468, 80163.17000000479, 79828.3600000054, 77793.75000000565, 76774.78000000554, 76862.5100000059, 76647.03000000578, 76487.40000000587, 76551.82000000558, 76625.98000000487, 76237.47000000525, 76122.45000000481, 75162.4500000039, 75409.38000000456, 74889.1300000054, 74853.93000000544, 74718.54000000523, 74703.69000000518, 74726.07000000535, 74262.68000000525, 74193.72000000533, 74464.78000000525, 74353.78000000495, 74506.9600000051, 74592.82000000504, 74593.71000000516, 74695.3600000052, 74837.6700000053, 74831.98000000542, 74907.46000000552, 74852.92000000548, 74862.0600000052, 74834.79000000526, 74933.27000000539, 74882.27000000543, 74924.75000000543, 74813.00000000543, 74999.22000000528, 74855.48000000535, 74817.26000000496, 74727.04000000491, 75067.69000000479, 75651.73000000494, 76064.62000000427, 75688.4000000045, 75958.40000000526, 76137.52000000517, 76429.04000000482, 76482.77000000443, 76018.1300000045, 76291.55000000546, 76365.17000000563, 76269.9800000048, 76458.06000000409, 77198.1200000033, 78604.28000000273, 78964.02000000194, 79084.45000000148, 79106.5300000011, 79541.57000000049, 78774.55000000053, 77753.78999999996, 77332.97999999965, 77358.24999999983, 77633.35], "actual_fast_jumps": [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 89518.99, 89101.44, null, 89682.92, 89352.7, null, 89981.86, 90091.77, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 93386.34, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 93456.49, null, null, null, 92504.28, null, null, null, null, 91539.0, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 91672.02, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 91764.23, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 89328.46, 89916.8, null, null, null, null, null, null, null, 90849.23, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 89919.95, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 90521.96, null, null, null, null, null, null, 91568.28, null, null, 91655.83, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 90448.02, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 91258.95, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 92106.31, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 96469.23, 96929.6, null, null, null, null, null, null, 97299.06, 97693.22, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 95789.57, 96024.43, null, null, null, 96732.57, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 95474.68, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 90211.07, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 88290.43, null, null, null, null, null, null, null, 89487.61, null, null, null, null, null, null, null, null, null, 88092.14, 87523.03, null, null, null, null, null, null, null, 88384.52, null, 89562.64, 89955.01, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 89400.58, 89016.39, null, null, 89057.41, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 88852.63, null, null, 88851.27, null, null, null, null, null, null, null, null, 90736.48, 90505.84, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 87916.7, 87817.96, null, null, null, null, null, null, null, null, 87288.93, null, null, 86614.74, 86407.76, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 88051.2, 88076.01, null, null, 87404.05, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 88158.7, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 89693.54, null, null, null, null, null, 88930.72, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 85190.98, null, null, null, null, null, null, 85124.1, null, null, null, 84137.6, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 82978.1, null, null, 83147.12, null, null, null, null, null, null, 83242.33, null, null, null, 82366.33, null, 83795.36, 84004.98, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 81481.22, 80873.37, 81359.56, null, null, null, null, null, 80991.79, 80859.85, 80226.9, 78706.83, null, null, null, null, 78306.92, 77475.76, 77928.09, null, 77882.49, 77415.04, null]};
+    const numSamples = Math.min(rawSampleData.actual.length, rawSampleData.simulated.length);
+    const sampleLabels = Array.from({length: numSamples}, (_, i) => i + 1);
+
+    const ctxSample = document.getElementById('sampleChart').getContext('2d');
+    new Chart(ctxSample, {
+        type: 'line',
+        data: {
+            labels: sampleLabels,
+            datasets: [
+                {
+                    type: 'scatter',
+                    label: 'Fast Jumps (>50 pips in <1200s)',
+                    data: rawSampleData.actual_fast_jumps,
+                    backgroundColor: 'rgba(239, 68, 68, 1)',
+                    borderColor: 'rgba(239, 68, 68, 1)',
+                    pointStyle: 'circle',
+                    pointRadius: 2,
+                    pointHoverRadius: 3,
+                    showLine: false,
+                    order: 0
+                },
+                {
+                    label: 'Actual Data (Close)',
+                    data: rawSampleData.actual,
+                    borderColor: 'rgba(59, 130, 246, 0.8)',
+                    borderWidth: 1.5,
+                    fill: false,
+                    pointRadius: 0
+                },
+                {
+                    label: 'Simulated (Close)',
+                    data: rawSampleData.simulated,
+                    borderColor: 'rgba(249, 115, 22, 0.8)',
+                    borderWidth: 1.5,
+                    fill: false,
+                    pointRadius: 0
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'top', align: 'start', labels: { usePointStyle: true, boxWidth: 8 } }
+            },
+            scales: {
+                x: {
+                    title: { display: true, text: 'Time Block Index', color: '#64748b' },
+                    grid: { display: false },
+                    ticks: { maxTicksLimit: 10 }
+                },
+                y: {
+                    title: { display: true, text: 'Price', color: '#64748b' },
+                    grid: { color: '#f1f5f9' }
+                }
+            }
+        }
+    });
+</script>
+
+</body>
+</html>

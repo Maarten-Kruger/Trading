@@ -5,17 +5,18 @@ import json
 # ==========================================
 # CONFIGURATION & VARIABLES
 # ==========================================
-FILE_PATH = 'EURUSD_Jan.csv'         # Path to your tick data file
-OUTPUT_HTML = 'EURUSD_tick_experiment_50.html' # Name of the generated HTML file
+FILE_PATH = 'BTCUSD_Jan.csv'         # Path to your tick data file
+OUTPUT_HTML = 'BTCUSD_50_Exness.html' # Name of the generated HTML file
 
-POINT_MULTIPLIER = 100000            # Conversion to points (100,000 for 5-decimal pairs like EURUSD)
-THRESHOLD_POINTS = 50                # 5 pips = 50 points. Change this to test different breakout sizes
-MAX_TICK_JUMP_CAP = 50               # Caps extreme outliers in single-tick data errors
+POINT_MULTIPLIER = 1            # Conversion to points (100,000 for 5-decimal pairs like EURUSD)
+THRESHOLD_POINTS = 500                # 5 pips = 50 points. Change this to test different breakout sizes
+MAX_TICK_JUMP_CAP = 500               # Caps extreme outliers in single-tick data errors
 HISTOGRAM_BINS = 200                 # Number of bins for the smooth histogram
 START_HOUR = 8                       # Filter ticks starting at this hour (e.g. 8 for 08:00)
-END_HOUR = 17                        # Filter ticks ending at this hour (e.g. 17 for 17:59)
-BLOCK_MINUTES = 5                    # Size of time blocks in minutes
+END_HOUR = 19                        # Filter ticks ending at this hour (e.g. 17 for 17:59)
+BLOCK_MINUTES = 15                    # Size of time blocks in minutes
 SAMPLE_BLOCKS = 10000                # Number of time blocks to show in sample OHLC path
+FAST_JUMP_LIMIT_SECONDS = 1200       # Threshold to consider a jump "fast" for overlay purposes (e.g. 10.5 seconds)
 
 
 # ==========================================
@@ -69,6 +70,7 @@ def get_blocks_data(price_array, threshold, timestamp_array):
     durations = []
     maes = []
     directions = []
+    end_times = [] # <--- NEW: Track when the jump completes
     ref_price = price_array[0]
     ref_idx = 0
 
@@ -90,6 +92,7 @@ def get_blocks_data(price_array, threshold, timestamp_array):
             # duration in seconds
             time_diff = (timestamp_array[i] - timestamp_array[ref_idx])
             durations.append(time_diff / np.timedelta64(1, 's'))
+            end_times.append(timestamp_array[i]) # <--- NEW: Record the time
 
             if diff >= threshold:
                 # Upward breakout: MAE is the maximum unfavorable (downward) movement.
@@ -109,11 +112,10 @@ def get_blocks_data(price_array, threshold, timestamp_array):
             ref_idx = i
             max_price = current_price
             min_price = current_price
+    return durations, maes, directions, end_times
 
-    return durations, maes, directions
-
-durations_actual, mae_actual, dirs_actual = get_blocks_data(prices, THRESHOLD_POINTS, timestamps)
-durations_sim, mae_sim, dirs_sim = get_blocks_data(sim_prices, THRESHOLD_POINTS, timestamps)
+durations_actual, mae_actual, dirs_actual, end_times_actual = get_blocks_data(prices, THRESHOLD_POINTS, timestamps)
+durations_sim, mae_sim, dirs_sim, end_times_sim = get_blocks_data(sim_prices, THRESHOLD_POINTS, timestamps)
 
 def calc_stats(data_array):
     if not data_array:
@@ -296,10 +298,30 @@ size_stats = {
 # Take sample for OHLC Path Line Overlay
 sample_act_closes = ohlc_act['close'].head(SAMPLE_BLOCKS).tolist()
 sample_sim_closes = ohlc_sim['close'].head(SAMPLE_BLOCKS).tolist()
+sample_timestamps = ohlc_act.index[:SAMPLE_BLOCKS].values
+
+# --- MAP FAST JUMPS TO OHLC SAMPLE ---
+actual_fast_jumps = [None] * len(sample_act_closes)
+
+# Filter jump times that happened in <= 10.5 seconds
+fast_jump_times = [
+    end_times_actual[i] for i in range(len(durations_actual)) 
+    if durations_actual[i] <= FAST_JUMP_LIMIT_SECONDS
+]
+
+# Map them onto our chart's time blocks
+for jt in fast_jump_times:
+    # Check if the jump occurred within our sample timeframe
+    if jt >= sample_timestamps[0] and jt <= sample_timestamps[-1]:
+        # Find which OHLC block this timestamp falls into
+        idx = np.searchsorted(sample_timestamps, jt) - 1
+        if 0 <= idx < len(actual_fast_jumps):
+            actual_fast_jumps[idx] = sample_act_closes[idx]
 
 sample_json = json.dumps({
     "actual": sample_act_closes,
-    "simulated": sample_sim_closes
+    "simulated": sample_sim_closes,
+    "actual_fast_jumps": actual_fast_jumps
 })
 
 
@@ -881,6 +903,18 @@ html_template = f"""<!DOCTYPE html>
         data: {{
             labels: sampleLabels,
             datasets: [
+                {{
+                    type: 'scatter',
+                    label: 'Fast Jumps (>{int(THRESHOLD_POINTS / 10)} pips in <{FAST_JUMP_LIMIT_SECONDS}s)',
+                    data: rawSampleData.actual_fast_jumps,
+                    backgroundColor: 'rgba(239, 68, 68, 1)',
+                    borderColor: 'rgba(239, 68, 68, 1)',
+                    pointStyle: 'circle',
+                    pointRadius: 2,
+                    pointHoverRadius: 3,
+                    showLine: false,
+                    order: 0
+                }},
                 {{
                     label: 'Actual Data (Close)',
                     data: rawSampleData.actual,
