@@ -6,14 +6,17 @@ import json
 # CONFIGURATION & VARIABLES
 # ==========================================
 FILE_PATH = 'EURUSD_Jan.csv'         # Path to your tick data file
-OUTPUT_HTML = 'EURUSD_tick_experiment_100.html' # Name of the generated HTML file
+OUTPUT_HTML = 'EURUSD_tick_experiment_50.html' # Name of the generated HTML file
 
 POINT_MULTIPLIER = 100000            # Conversion to points (100,000 for 5-decimal pairs like EURUSD)
-THRESHOLD_POINTS = 100                # 5 pips = 50 points. Change this to test different breakout sizes
+THRESHOLD_POINTS = 50                # 5 pips = 50 points. Change this to test different breakout sizes
 MAX_TICK_JUMP_CAP = 50               # Caps extreme outliers in single-tick data errors
 HISTOGRAM_BINS = 200                 # Number of bins for the smooth histogram
 START_HOUR = 8                       # Filter ticks starting at this hour (e.g. 8 for 08:00)
 END_HOUR = 17                        # Filter ticks ending at this hour (e.g. 17 for 17:59)
+BLOCK_MINUTES = 5                    # Size of time blocks in minutes
+SAMPLE_BLOCKS = 10000                # Number of time blocks to show in sample OHLC path
+
 
 # ==========================================
 # 1. LOAD DATA & GET PROBABILITY PROFILE
@@ -231,73 +234,74 @@ sim_streak_stats = calc_stats(streaks_sim)
 
 
 # ==========================================
-# 4.7 VOLATILITY AUTOCORRELATION
+# 4.7 OHLC TIME BLOCKS & SIZE DISTRIBUTION
 # ==========================================
-print("Calculating Volatility Autocorrelation...")
-def calc_vol_autocorr(durations, directions, quantiles=5):
-    if len(durations) < 2:
-        return []
+print(f"Calculating OHLC Time Blocks & Size Metrics ({BLOCK_MINUTES} mins)...")
 
-    durations = np.array(durations)
-    directions = np.array(directions)
+df_act = pd.DataFrame({'price': prices}, index=timestamps)
+df_sim = pd.DataFrame({'price': sim_prices}, index=timestamps)
 
-    # We want to group by the PREVIOUS duration to see the NEXT duration
-    prev_durations = durations[:-1]
-    next_durations = durations[1:]
+def calc_ohlc_metrics(df, block_minutes):
+    ohlc = df['price'].resample(f'{block_minutes}min').ohlc().dropna()
+    ohlc['total_size'] = ohlc['high'] - ohlc['low']
+    ohlc['body'] = abs(ohlc['close'] - ohlc['open'])
+    ohlc['head'] = ohlc['high'] - np.maximum(ohlc['open'], ohlc['close'])
+    ohlc['tail'] = np.minimum(ohlc['open'], ohlc['close']) - ohlc['low']
+    return ohlc
 
-    prev_dirs = directions[:-1]
-    next_dirs = directions[1:]
+ohlc_act = calc_ohlc_metrics(df_act, BLOCK_MINUTES)
+ohlc_sim = calc_ohlc_metrics(df_sim, BLOCK_MINUTES)
 
-    # Direction relation: 1 if continuation, -1 if reversal
-    dir_relation = prev_dirs * next_dirs
+max_size_ohlc = max(np.percentile(ohlc_act['total_size'], 95) if len(ohlc_act) > 0 else 100,
+                    np.percentile(ohlc_sim['total_size'], 95) if len(ohlc_sim) > 0 else 100)
 
-    # Bin the previous durations into quantiles
-    try:
-        bins = np.percentile(prev_durations, np.linspace(0, 100, quantiles + 1))
-        bins[-1] += 1e-9 # ensure highest value is included
-        bin_indices = np.digitize(prev_durations, bins) - 1
-    except Exception:
-        return []
+bins_size = np.linspace(0, max_size_ohlc * 1.2, 50)
+bin_centers_size = (bins_size[:-1] + bins_size[1:]) / 2
 
-    results = []
-    labels = ["Very Fast", "Fast", "Average", "Slow", "Very Slow"]
+ohlc_act['bin'] = pd.cut(ohlc_act['total_size'], bins=bins_size, labels=bin_centers_size)
+ohlc_sim['bin'] = pd.cut(ohlc_sim['total_size'], bins=bins_size, labels=bin_centers_size)
 
-    for i in range(quantiles):
-        mask = (bin_indices == i)
-        if not np.any(mask):
-            continue
+grouped_act_mean = ohlc_act.groupby('bin', observed=False)[['body', 'head', 'tail']].mean().fillna(0)
+grouped_sim_mean = ohlc_sim.groupby('bin', observed=False)[['body', 'head', 'tail']].mean().fillna(0)
 
-        mask_cont = mask & (dir_relation == 1)
-        mask_rev = mask & (dir_relation == -1)
+count_act = ohlc_act.groupby('bin', observed=False).size()
+count_sim = ohlc_sim.groupby('bin', observed=False).size()
 
-        avg_cont = np.mean(next_durations[mask_cont]) if np.any(mask_cont) else 0
-        avg_rev = np.mean(next_durations[mask_rev]) if np.any(mask_rev) else 0
-
-        results.append({
-            "speed_bin": labels[i] if i < len(labels) else f"Bin {i}",
-            "continuation": round(float(avg_cont), 2),
-            "reversal": round(float(avg_rev), 2)
-        })
-
-    return results
-
-vol_autocorr_act = calc_vol_autocorr(durations_actual, dirs_actual)
-vol_autocorr_sim = calc_vol_autocorr(durations_sim, dirs_sim)
-
-# Combine into a single JSON struct
-combined_autocorr = []
-for i in range(len(vol_autocorr_act)):
-    act_data = vol_autocorr_act[i]
-    sim_data = vol_autocorr_sim[i] if i < len(vol_autocorr_sim) else {"continuation": 0, "reversal": 0}
-    combined_autocorr.append({
-        "speed_bin": act_data["speed_bin"],
-        "act_cont": act_data["continuation"],
-        "act_rev": act_data["reversal"],
-        "sim_cont": sim_data["continuation"],
-        "sim_rev": sim_data["reversal"]
+size_dist_data = []
+for i, b in enumerate(bin_centers_size):
+    size_dist_data.append({
+        "size_bin": round(float(b), 1),
+        "act_body": float(grouped_act_mean.loc[b, 'body']),
+        "act_head": float(grouped_act_mean.loc[b, 'head']),
+        "act_tail": float(grouped_act_mean.loc[b, 'tail']),
+        "act_count": int(count_act.loc[b]),
+        "sim_body": float(grouped_sim_mean.loc[b, 'body']),
+        "sim_head": float(grouped_sim_mean.loc[b, 'head']),
+        "sim_tail": float(grouped_sim_mean.loc[b, 'tail']),
+        "sim_count": int(count_sim.loc[b]),
     })
 
-autocorr_json_string = json.dumps(combined_autocorr)
+size_dist_json = json.dumps(size_dist_data)
+
+# Global Size Stats
+size_stats = {
+    'act_body': ohlc_act['body'].mean() if len(ohlc_act) > 0 else 0,
+    'act_head': ohlc_act['head'].mean() if len(ohlc_act) > 0 else 0,
+    'act_tail': ohlc_act['tail'].mean() if len(ohlc_act) > 0 else 0,
+    'sim_body': ohlc_sim['body'].mean() if len(ohlc_sim) > 0 else 0,
+    'sim_head': ohlc_sim['head'].mean() if len(ohlc_sim) > 0 else 0,
+    'sim_tail': ohlc_sim['tail'].mean() if len(ohlc_sim) > 0 else 0,
+}
+
+# Take sample for OHLC Path Line Overlay
+sample_act_closes = ohlc_act['close'].head(SAMPLE_BLOCKS).tolist()
+sample_sim_closes = ohlc_sim['close'].head(SAMPLE_BLOCKS).tolist()
+
+sample_json = json.dumps({
+    "actual": sample_act_closes,
+    "simulated": sample_sim_closes
+})
+
 
 # ==========================================
 # 5. GENERATE HTML WIDGET (LIGHT THEME DASHBOARD)
@@ -446,13 +450,17 @@ html_template = f"""<!DOCTYPE html>
         </div>
     </div>
 
-
-
+    <div class="card">
+        <div class="card-header">Time Block Size Distribution (Head, Body, Tail)</div>
+        <div class="chart-container">
+            <canvas id="sizeChart"></canvas>
+        </div>
+    </div>
 
     <div class="card">
-        <div class="card-header">Volatility Autocorrelation (Next Move Duration based on Previous Move Speed)</div>
+        <div class="card-header">Sample Path Overlay</div>
         <div class="chart-container">
-            <canvas id="autocorrChart"></canvas>
+            <canvas id="sampleChart"></canvas>
         </div>
     </div>
 
@@ -505,6 +513,19 @@ html_template = f"""<!DOCTYPE html>
                     <span class="stat-value">{max(act_lens, default=0):.0f}</span>
                 </div>
 
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Time Block Avg Size (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Body</span>
+                    <span class="stat-value">{size_stats['act_body']:.1f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Head</span>
+                    <span class="stat-value">{size_stats['act_head']:.1f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Tail</span>
+                    <span class="stat-value">{size_stats['act_tail']:.1f}</span>
+                </div>
 
             </div>
 
@@ -553,6 +574,19 @@ html_template = f"""<!DOCTYPE html>
                     <span class="stat-value">{max(sim_lens, default=0):.0f}</span>
                 </div>
 
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Time Block Avg Size (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Body</span>
+                    <span class="stat-value">{size_stats['sim_body']:.1f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Head</span>
+                    <span class="stat-value">{size_stats['sim_head']:.1f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Tail</span>
+                    <span class="stat-value">{size_stats['sim_tail']:.1f}</span>
+                </div>
 
             </div>
         </div>
@@ -691,66 +725,6 @@ html_template = f"""<!DOCTYPE html>
         }}
     }});
 
-
-
-    // --- VOLATILITY AUTOCORRELATION CHART ---
-    const rawAutocorr = {autocorr_json_string};
-    const autoLabels = rawAutocorr.map(d => d.speed_bin);
-
-    const ctxAuto = document.getElementById('autocorrChart').getContext('2d');
-    new Chart(ctxAuto, {{
-        type: 'bar',
-        data: {{
-            labels: autoLabels,
-            datasets: [
-                {{
-                    label: 'Actual - Continuation',
-                    data: rawAutocorr.map(d => d.act_cont),
-                    backgroundColor: 'rgba(59, 130, 246, 0.9)', // Solid Blue
-                    borderWidth: 0
-                }},
-                {{
-                    label: 'Actual - Reversal',
-                    data: rawAutocorr.map(d => d.act_rev),
-                    backgroundColor: 'rgba(59, 130, 246, 0.4)', // Light Blue
-                    borderWidth: 0
-                }},
-                {{
-                    label: 'Simulated - Continuation',
-                    data: rawAutocorr.map(d => d.sim_cont),
-                    backgroundColor: 'rgba(249, 115, 22, 0.9)', // Solid Orange
-                    borderWidth: 0
-                }},
-                {{
-                    label: 'Simulated - Reversal',
-                    data: rawAutocorr.map(d => d.sim_rev),
-                    backgroundColor: 'rgba(249, 115, 22, 0.4)', // Light Orange
-                    borderWidth: 0
-                }}
-            ]
-        }},
-        options: {{
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: {{ mode: 'index', intersect: false }},
-            plugins: {{
-                legend: {{ position: 'top', align: 'start', labels: {{ usePointStyle: true, boxWidth: 8 }} }}
-            }},
-            scales: {{
-                x: {{
-                    title: {{ display: true, text: 'Previous Move Speed Quantile', color: '#64748b' }},
-                    grid: {{ display: false }}
-                }},
-                y: {{
-                    type: 'linear',
-                    title: {{ display: true, text: 'Average Next Move Duration (Seconds)', color: '#64748b' }},
-                    grid: {{ color: '#f1f5f9' }},
-                    beginAtZero: true
-                }}
-            }}
-        }}
-    }});
-
     // --- MAE CHART ---
     const rawMaeData = {mae_json_string};
     const maeLabels = rawMaeData.map(d => d.mae_points);
@@ -805,6 +779,142 @@ html_template = f"""<!DOCTYPE html>
                     title: {{ display: true, text: 'Frequency', color: '#64748b' }},
                     grid: {{ color: '#f1f5f9' }},
                     beginAtZero: true
+                }}
+            }}
+        }}
+    }});
+
+    // --- SIZE DISTRIBUTION CHART ---
+    const rawSizeData = {size_dist_json};
+    const sizeLabels = rawSizeData.map(d => d.size_bin);
+
+    const ctxSize = document.getElementById('sizeChart').getContext('2d');
+    new Chart(ctxSize, {{
+        type: 'bar',
+        data: {{
+            labels: sizeLabels,
+            datasets: [
+                {{
+                    label: 'Actual - Tail',
+                    data: rawSizeData.map(d => d.act_tail),
+                    backgroundColor: 'rgba(59, 130, 246, 0.4)',
+                    stack: 'actual',
+                    borderWidth: 0
+                }},
+                {{
+                    label: 'Actual - Body',
+                    data: rawSizeData.map(d => d.act_body),
+                    backgroundColor: 'rgba(59, 130, 246, 0.9)',
+                    stack: 'actual',
+                    borderWidth: 0
+                }},
+                {{
+                    label: 'Actual - Head',
+                    data: rawSizeData.map(d => d.act_head),
+                    backgroundColor: 'rgba(59, 130, 246, 0.6)',
+                    stack: 'actual',
+                    borderWidth: 0
+                }},
+                {{
+                    label: 'Simulated - Tail',
+                    data: rawSizeData.map(d => d.sim_tail),
+                    backgroundColor: 'rgba(249, 115, 22, 0.4)',
+                    stack: 'simulated',
+                    borderWidth: 0
+                }},
+                {{
+                    label: 'Simulated - Body',
+                    data: rawSizeData.map(d => d.sim_body),
+                    backgroundColor: 'rgba(249, 115, 22, 0.9)',
+                    stack: 'simulated',
+                    borderWidth: 0
+                }},
+                {{
+                    label: 'Simulated - Head',
+                    data: rawSizeData.map(d => d.sim_head),
+                    backgroundColor: 'rgba(249, 115, 22, 0.6)',
+                    stack: 'simulated',
+                    borderWidth: 0
+                }}
+            ]
+        }},
+        options: {{
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {{ mode: 'index', intersect: false }},
+            plugins: {{
+                legend: {{ position: 'top', align: 'start', labels: {{ usePointStyle: true, boxWidth: 8 }} }},
+                tooltip: {{
+                    callbacks: {{
+                        label: function(context) {{
+                            const dataset = context.dataset;
+                            const index = context.dataIndex;
+                            const isActual = dataset.stack === 'actual';
+                            const count = isActual ? rawSizeData[index].act_count : rawSizeData[index].sim_count;
+                            return `${{dataset.label}}: ${{context.parsed.y.toFixed(2)}} (Count: ${{count}})`;
+                        }}
+                    }}
+                }}
+            }},
+            scales: {{
+                x: {{
+                    title: {{ display: true, text: 'Total Block Size (Points)', color: '#64748b' }},
+                    grid: {{ display: false }}
+                }},
+                y: {{
+                    title: {{ display: true, text: 'Average Size Components (Points)', color: '#64748b' }},
+                    grid: {{ color: '#f1f5f9' }},
+                    beginAtZero: true
+                }}
+            }}
+        }}
+    }});
+
+    // --- SAMPLE PATH CHART ---
+    const rawSampleData = {sample_json};
+    const numSamples = Math.min(rawSampleData.actual.length, rawSampleData.simulated.length);
+    const sampleLabels = Array.from({{length: numSamples}}, (_, i) => i + 1);
+
+    const ctxSample = document.getElementById('sampleChart').getContext('2d');
+    new Chart(ctxSample, {{
+        type: 'line',
+        data: {{
+            labels: sampleLabels,
+            datasets: [
+                {{
+                    label: 'Actual Data (Close)',
+                    data: rawSampleData.actual,
+                    borderColor: 'rgba(59, 130, 246, 0.8)',
+                    borderWidth: 1.5,
+                    fill: false,
+                    pointRadius: 0
+                }},
+                {{
+                    label: 'Simulated (Close)',
+                    data: rawSampleData.simulated,
+                    borderColor: 'rgba(249, 115, 22, 0.8)',
+                    borderWidth: 1.5,
+                    fill: false,
+                    pointRadius: 0
+                }}
+            ]
+        }},
+        options: {{
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {{ mode: 'index', intersect: false }},
+            plugins: {{
+                legend: {{ position: 'top', align: 'start', labels: {{ usePointStyle: true, boxWidth: 8 }} }}
+            }},
+            scales: {{
+                x: {{
+                    title: {{ display: true, text: 'Time Block Index', color: '#64748b' }},
+                    grid: {{ display: false }},
+                    ticks: {{ maxTicksLimit: 10 }}
+                }},
+                y: {{
+                    title: {{ display: true, text: 'Price', color: '#64748b' }},
+                    grid: {{ color: '#f1f5f9' }}
                 }}
             }}
         }}
