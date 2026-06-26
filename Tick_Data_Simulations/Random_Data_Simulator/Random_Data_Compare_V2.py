@@ -17,7 +17,8 @@ END_HOUR = 19                        # Filter ticks ending at this hour (e.g. 17
 BLOCK_MINUTES = 15                    # Size of time blocks in minutes
 SAMPLE_BLOCKS = 10000                # Number of time blocks to show in sample OHLC path
 FAST_JUMP_LIMIT_SECONDS = 1200       # Threshold to consider a jump "fast" for overlay purposes (e.g. 10.5 seconds)
-
+SR_LOOKBACK_BLOCKS = 5                # Number of blocks before and after to define Support/Resistance
+SR_PRICE_BINS = 100                   # Number of bins for the Support/Resistance sideways histogram
 
 # ==========================================
 # 1. LOAD DATA & GET PROBABILITY PROFILE
@@ -254,6 +255,59 @@ def calc_ohlc_metrics(df, block_minutes):
 ohlc_act = calc_ohlc_metrics(df_act, BLOCK_MINUTES)
 ohlc_sim = calc_ohlc_metrics(df_sim, BLOCK_MINUTES)
 
+# ==========================================
+# 4.8 SUPPORT & RESISTANCE LEVELS
+# ==========================================
+print(f"Calculating Support & Resistance Levels (Lookback {SR_LOOKBACK_BLOCKS} blocks)...")
+
+def find_sr_levels(ohlc, lookback):
+    highs = ohlc['high'].values
+    lows = ohlc['low'].values
+    sr_levels = []
+
+    for i in range(lookback, len(ohlc) - lookback):
+        is_resistance = True
+        is_support = True
+
+        current_high = highs[i]
+        current_low = lows[i]
+
+        for j in range(1, lookback + 1):
+            if highs[i - j] >= current_high or highs[i + j] >= current_high:
+                is_resistance = False
+            if lows[i - j] <= current_low or lows[i + j] <= current_low:
+                is_support = False
+
+        if is_resistance:
+            sr_levels.append(current_high)
+        if is_support:
+            sr_levels.append(current_low)
+
+    return sr_levels
+
+sr_act = find_sr_levels(ohlc_act, SR_LOOKBACK_BLOCKS)
+sr_sim = find_sr_levels(ohlc_sim, SR_LOOKBACK_BLOCKS)
+
+# Combine levels to find global min and max for binning
+all_sr_levels = sr_act + sr_sim
+if all_sr_levels:
+    sr_min = min(all_sr_levels)
+    sr_max = max(all_sr_levels)
+
+    # We want a fixed number of bins for the histogram
+    sr_bins = np.linspace(sr_min, sr_max, SR_PRICE_BINS + 1)
+
+    # Count frequencies for both
+    sr_counts_act, _ = np.histogram(sr_act, bins=sr_bins)
+    sr_counts_sim, _ = np.histogram(sr_sim, bins=sr_bins)
+
+    # Get bin centers for chart labels
+    sr_bin_centers = (sr_bins[:-1] + sr_bins[1:]) / 2
+else:
+    sr_bin_centers = []
+    sr_counts_act = []
+    sr_counts_sim = []
+
 max_size_ohlc = max(np.percentile(ohlc_act['total_size'], 95) if len(ohlc_act) > 0 else 100,
                     np.percentile(ohlc_sim['total_size'], 95) if len(ohlc_sim) > 0 else 100)
 
@@ -324,6 +378,11 @@ sample_json = json.dumps({
     "actual_fast_jumps": actual_fast_jumps
 })
 
+sr_json = json.dumps({
+    "labels": sr_bin_centers.tolist() if isinstance(sr_bin_centers, np.ndarray) else list(sr_bin_centers),
+    "actual_counts": sr_counts_act.tolist() if isinstance(sr_counts_act, np.ndarray) else list(sr_counts_act),
+    "simulated_counts": sr_counts_sim.tolist() if isinstance(sr_counts_sim, np.ndarray) else list(sr_counts_sim)
+})
 
 # ==========================================
 # 5. GENERATE HTML WIDGET (LIGHT THEME DASHBOARD)
@@ -483,6 +542,13 @@ html_template = f"""<!DOCTYPE html>
         <div class="card-header">Sample Path Overlay</div>
         <div class="chart-container">
             <canvas id="sampleChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Support & Resistance Levels</div>
+        <div class="chart-container" style="height: 600px;">
+            <canvas id="srChart"></canvas>
         </div>
     </div>
 
@@ -953,6 +1019,58 @@ html_template = f"""<!DOCTYPE html>
             }}
         }}
     }});
+
+    // --- SUPPORT & RESISTANCE CHART ---
+    const rawSrData = {sr_json};
+    const ctxSr = document.getElementById('srChart').getContext('2d');
+    new Chart(ctxSr, {{
+        type: 'bar',
+        data: {{
+            labels: rawSrData.labels.map(l => l.toFixed(2)),
+            datasets: [
+                {{
+                    label: 'Actual Data S&R',
+                    data: rawSrData.actual_counts,
+                    backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
+                }},
+                {{
+                    label: 'Simulated S&R',
+                    data: rawSrData.simulated_counts,
+                    backgroundColor: 'rgba(249, 115, 22, 0.7)',
+                    borderColor: 'rgba(249, 115, 22, 1)',
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
+                }}
+            ]
+        }},
+        options: {{
+            indexAxis: 'y', // This makes it a sideways histogram
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {{ mode: 'index', intersect: false }},
+            plugins: {{
+                legend: {{ position: 'top', align: 'start', labels: {{ usePointStyle: true, boxWidth: 8 }} }}
+            }},
+            scales: {{
+                x: {{
+                    title: {{ display: true, text: 'Frequency (Number of Levels)', color: '#64748b' }},
+                    grid: {{ color: '#f1f5f9' }},
+                    beginAtZero: true
+                }},
+                y: {{
+                    title: {{ display: true, text: 'Price Level', color: '#64748b' }},
+                    grid: {{ display: false }},
+                    ticks: {{ autoSkip: true, maxTicksLimit: 20 }}
+                }}
+            }}
+        }}
+    }});
+
 </script>
 
 </body>
