@@ -18,7 +18,8 @@ BLOCK_MINUTES = 15                    # Size of time blocks in minutes
 SAMPLE_BLOCKS = 10000                # Number of time blocks to show in sample OHLC path
 FAST_JUMP_LIMIT_SECONDS = 1200       # Threshold to consider a jump "fast" for overlay purposes (e.g. 10.5 seconds)
 SR_LOOKBACK_BLOCKS = 5                # Number of blocks before and after to define Support/Resistance
-SR_PRICE_BINS = 100                   # Number of bins for the Support/Resistance sideways histogram
+SR_BIN_SIZE_POINTS = 50               # Price distance (points) per bin for the Support/Resistance sideways histogram
+
 
 # ==========================================
 # 1. LOAD DATA & GET PROBABILITY PROFILE
@@ -294,8 +295,9 @@ if all_sr_levels:
     sr_min = min(all_sr_levels)
     sr_max = max(all_sr_levels)
 
-    # We want a fixed number of bins for the histogram
-    sr_bins = np.linspace(sr_min, sr_max, SR_PRICE_BINS + 1)
+    # We want bins based on fixed distance
+    # Add an extra SR_BIN_SIZE_POINTS to max to make sure we cover the highest value
+    sr_bins = np.arange(sr_min, sr_max + SR_BIN_SIZE_POINTS, SR_BIN_SIZE_POINTS)
 
     # Count frequencies for both
     sr_counts_act, _ = np.histogram(sr_act, bins=sr_bins)
@@ -307,6 +309,22 @@ else:
     sr_bin_centers = []
     sr_counts_act = []
     sr_counts_sim = []
+
+# S&R Stats
+sr_stats_act = {
+    'count': len(sr_act),
+    'mean': np.mean(sr_act) if sr_act else 0,
+    'min': np.min(sr_act) if sr_act else 0,
+    'max': np.max(sr_act) if sr_act else 0,
+    'std': np.std(sr_act) if sr_act else 0,
+}
+sr_stats_sim = {
+    'count': len(sr_sim),
+    'mean': np.mean(sr_sim) if sr_sim else 0,
+    'min': np.min(sr_sim) if sr_sim else 0,
+    'max': np.max(sr_sim) if sr_sim else 0,
+    'std': np.std(sr_sim) if sr_sim else 0,
+}
 
 max_size_ohlc = max(np.percentile(ohlc_act['total_size'], 95) if len(ohlc_act) > 0 else 100,
                     np.percentile(ohlc_sim['total_size'], 95) if len(ohlc_sim) > 0 else 100)
@@ -377,6 +395,22 @@ sample_json = json.dumps({
     "simulated": sample_sim_closes,
     "actual_fast_jumps": actual_fast_jumps
 })
+
+# Sample Path Stats
+sample_stats_act = {
+    'start': sample_act_closes[0] if sample_act_closes else 0,
+    'end': sample_act_closes[-1] if sample_act_closes else 0,
+    'min': min(sample_act_closes) if sample_act_closes else 0,
+    'max': max(sample_act_closes) if sample_act_closes else 0,
+    'fast_jumps': sum(1 for j in actual_fast_jumps if j is not None)
+}
+
+sample_stats_sim = {
+    'start': sample_sim_closes[0] if sample_sim_closes else 0,
+    'end': sample_sim_closes[-1] if sample_sim_closes else 0,
+    'min': min(sample_sim_closes) if sample_sim_closes else 0,
+    'max': max(sample_sim_closes) if sample_sim_closes else 0,
+}
 
 sr_json = json.dumps({
     "labels": sr_bin_centers.tolist() if isinstance(sr_bin_centers, np.ndarray) else list(sr_bin_centers),
@@ -615,6 +649,34 @@ html_template = f"""<!DOCTYPE html>
                     <span class="stat-value">{size_stats['act_tail']:.1f}</span>
                 </div>
 
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Support & Resistance</div>
+                <div class="stat-row">
+                    <span class="stat-label">Total Levels Found</span>
+                    <span class="stat-value">{sr_stats_act['count']:,}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean Price</span>
+                    <span class="stat-value">{sr_stats_act['mean']:.2f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Min Level</span>
+                    <span class="stat-value">{sr_stats_act['min']:.2f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Max Level</span>
+                    <span class="stat-value">{sr_stats_act['max']:.2f}</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Sample Path Properties</div>
+                <div class="stat-row">
+                    <span class="stat-label">Total Spread</span>
+                    <span class="stat-value">{(sample_stats_act['max'] - sample_stats_act['min']):.2f} pts</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Fast Jumps</span>
+                    <span class="stat-value">{sample_stats_act['fast_jumps']:,}</span>
+                </div>
+
             </div>
 
             <div class="stat-col">
@@ -674,6 +736,34 @@ html_template = f"""<!DOCTYPE html>
                 <div class="stat-row">
                     <span class="stat-label">Tail</span>
                     <span class="stat-value">{size_stats['sim_tail']:.1f}</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Support & Resistance</div>
+                <div class="stat-row">
+                    <span class="stat-label">Total Levels Found</span>
+                    <span class="stat-value">{sr_stats_sim['count']:,}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean Price</span>
+                    <span class="stat-value">{sr_stats_sim['mean']:.2f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Min Level</span>
+                    <span class="stat-value">{sr_stats_sim['min']:.2f}</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Max Level</span>
+                    <span class="stat-value">{sr_stats_sim['max']:.2f}</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Sample Path Properties</div>
+                <div class="stat-row">
+                    <span class="stat-label">Total Spread</span>
+                    <span class="stat-value">{(sample_stats_sim['max'] - sample_stats_sim['min']):.2f} pts</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Fast Jumps</span>
+                    <span class="stat-value">-</span>
                 </div>
 
             </div>
@@ -1045,6 +1135,26 @@ html_template = f"""<!DOCTYPE html>
                     borderWidth: 0,
                     barPercentage: 1.0,
                     categoryPercentage: 1.0
+                }},
+                {{
+                    type: 'line',
+                    label: 'Actual Trend',
+                    data: rawSrData.actual_counts,
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.4,
+                    pointRadius: 0
+                }},
+                {{
+                    type: 'line',
+                    label: 'Simulated Trend',
+                    data: rawSrData.simulated_counts,
+                    borderColor: 'rgba(249, 115, 22, 1)',
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.4,
+                    pointRadius: 0
                 }}
             ]
         }},
@@ -1070,7 +1180,6 @@ html_template = f"""<!DOCTYPE html>
             }}
         }}
     }});
-
 </script>
 
 </body>
