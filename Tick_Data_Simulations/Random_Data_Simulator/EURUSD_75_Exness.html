@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tick Volatility: Actual vs Simulated</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-body: #f8fafc;
+            --bg-card: #ffffff;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --border-color: #e2e8f0;
+            --color-actual: #3b82f6;
+            --color-actual-bg: rgba(59, 130, 246, 0.15);
+            --color-sim: #f97316;
+            --color-sim-bg: rgba(249, 115, 22, 0.15);
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            line-height: 1.5;
+            margin: 0;
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+        .header {
+            margin-bottom: 25px;
+        }
+        h1 {
+            font-size: 24px;
+            font-weight: 700;
+            margin: 0 0 8px 0;
+            color: var(--text-main);
+        }
+        .subtitle {
+            font-size: 14px;
+            color: var(--text-muted);
+            margin: 0;
+        }
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .card-header {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 20px;
+        }
+        .chart-container {
+            position: relative;
+            height: 400px;
+            width: 100%;
+        }
+        
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+        }
+        .stat-col h3 {
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+            margin: 0 0 12px 0;
+        }
+        .title-actual { color: var(--color-actual); }
+        .title-sim { color: var(--color-sim); }
+        
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 14px;
+        }
+        .stat-row:last-child { border-bottom: none; }
+        .stat-label { color: var(--text-muted); }
+        .stat-value { font-weight: 600; color: var(--text-main); }
+        
+        /* Insights & Setup Boxes */
+        .insight-box {
+            background-color: #f1f5f9;
+            border-left: 3px solid #8b5cf6;
+            padding: 16px 20px;
+            border-radius: 4px;
+            margin-top: 24px;
+            font-size: 14px;
+        }
+        .setup-section {
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+        .setup-section p { margin-top: 10px; margin-bottom: 10px; }
+        strong { color: var(--text-main); font-weight: 600; }
+        
+        @media (max-width: 768px) {
+            .stats-grid { grid-template-columns: 1fr; gap: 20px; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>EURUSD Jan — Ticks to ±7 Pips</h1>
+        <p class="subtitle">Actual market data vs. Monte Carlo simulation using empirical tick-move probabilities</p>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Duration Distribution</div>
+        <div class="chart-container">
+            <canvas id="volatilityChart"></canvas>
+        </div>
+
+    <div class="card">
+        <div class="card-header">Streak Distribution (Consecutive Hits in Same Direction)</div>
+        <div class="chart-container">
+            <canvas id="streakChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Maximum Adverse Excursion (MAE) Distribution</div>
+        <div class="chart-container">
+            <canvas id="maeChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Time Block Size Distribution (Head, Body, Tail)</div>
+        <div class="chart-container">
+            <canvas id="sizeChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Sample Path Overlay</div>
+        <div class="chart-container">
+            <canvas id="sampleChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Support & Resistance Levels</div>
+        <div class="chart-container" style="height: 600px;">
+            <canvas id="srChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Summary Statistics</div>
+        
+        <div class="stats-grid">
+            <div class="stat-col">
+                <h3 class="title-actual">Actual EURUSD</h3>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Duration (Seconds)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Trials</span>
+                    <span class="stat-value">576</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">4280.6</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Median</span>
+                    <span class="stat-value">875</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">19351.3</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">MAE (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">28.8</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Median</span>
+                    <span class="stat-value">25</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">22.1</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Streaks</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean Length</span>
+                    <span class="stat-value">2.0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Max Length</span>
+                    <span class="stat-value">10</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Time Block Avg Size (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Body</span>
+                    <span class="stat-value">38.8</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Head</span>
+                    <span class="stat-value">18.7</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Tail</span>
+                    <span class="stat-value">18.5</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Support & Resistance</div>
+                <div class="stat-row">
+                    <span class="stat-label">Total Levels Found</span>
+                    <span class="stat-value">66</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean Price</span>
+                    <span class="stat-value">117336.89</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Min Level</span>
+                    <span class="stat-value">115845.00</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Max Level</span>
+                    <span class="stat-value">120259.00</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Sample Path Properties</div>
+                <div class="stat-row">
+                    <span class="stat-label">Total Spread</span>
+                    <span class="stat-value">4318.00 pts</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Fast Jumps</span>
+                    <span class="stat-value">74</span>
+                </div>
+
+            </div>
+
+            <div class="stat-col">
+                <h3 class="title-sim">Simulated</h3>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Duration (Seconds)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Trials</span>
+                    <span class="stat-value">582</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">4236.8</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Median</span>
+                    <span class="stat-value">1082</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">19043.8</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">MAE (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean</span>
+                    <span class="stat-value">28.2</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Median</span>
+                    <span class="stat-value">24</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Std Dev</span>
+                    <span class="stat-value">20.9</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Streaks</div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean Length</span>
+                    <span class="stat-value">2.0</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Max Length</span>
+                    <span class="stat-value">8</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Time Block Avg Size (Points)</div>
+                <div class="stat-row">
+                    <span class="stat-label">Body</span>
+                    <span class="stat-value">46.2</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Head</span>
+                    <span class="stat-value">20.2</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Tail</span>
+                    <span class="stat-value">19.9</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Support & Resistance</div>
+                <div class="stat-row">
+                    <span class="stat-label">Total Levels Found</span>
+                    <span class="stat-value">60</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Mean Price</span>
+                    <span class="stat-value">117303.83</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Min Level</span>
+                    <span class="stat-value">115988.00</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Max Level</span>
+                    <span class="stat-value">119114.00</span>
+                </div>
+
+                <div style="font-weight: 600; font-size: 13px; margin: 15px 0 5px 0; color: var(--text-main); border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">Sample Path Properties</div>
+                <div class="stat-row">
+                    <span class="stat-label">Total Spread</span>
+                    <span class="stat-value">3015.00 pts</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Fast Jumps</span>
+                    <span class="stat-value">-</span>
+                </div>
+
+            </div>
+        </div>
+
+        <div class="insight-box">
+            <strong>What the gap tells you:</strong> The actual market reaches ±7 pips <em>later</em> than pure random (mean 4280.6 vs 4236.8 seconds). Both distributions share the same tick-size profile — the only thing that differs is direction. The heavier right tail in real data reflects <strong>mean-reversion micro-structure</strong>: consecutive ticks often reverse (market makers ping-ponging the spread), causing the price to "waste" ticks oscillating near the origin before eventually trending far enough to hit the target.
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Experiment Setup</div>
+        <div class="setup-section">
+            <p><strong>What is being measured?</strong></p>
+            <p>We walk forward tick-by-tick through the data series and record <strong>how many seconds it takes until the price has moved ±7 pips (75 points) away from the start</strong>. The count increments by 1 per second elapsed, not per pip.</p>
+            <p>The same experiment is repeated on a <strong>synthetic random walk</strong> that uses the exact same per-tick move distribution observed in the real data — but with no sequential dependence (each tick is drawn independently with a 50/50 directional probability).</p>
+        </div>
+    </div>
+</div>
+
+<script>
+    const rawData = [{"duration_secs": 29.5, "Actual": 42.0, "Simulated": 1.0}, {"duration_secs": 88.6, "Actual": 33.0, "Simulated": 5.0}, {"duration_secs": 147.6, "Actual": 23.0, "Simulated": 16.0}, {"duration_secs": 206.7, "Actual": 25.0, "Simulated": 12.0}, {"duration_secs": 265.7, "Actual": 22.0, "Simulated": 16.0}, {"duration_secs": 324.8, "Actual": 7.0, "Simulated": 25.0}, {"duration_secs": 383.8, "Actual": 21.0, "Simulated": 22.0}, {"duration_secs": 442.9, "Actual": 20.0, "Simulated": 24.0}, {"duration_secs": 501.9, "Actual": 15.0, "Simulated": 19.0}, {"duration_secs": 561.0, "Actual": 17.0, "Simulated": 17.0}, {"duration_secs": 620.0, "Actual": 20.0, "Simulated": 20.0}, {"duration_secs": 679.1, "Actual": 11.0, "Simulated": 24.0}, {"duration_secs": 738.1, "Actual": 12.0, "Simulated": 19.0}, {"duration_secs": 797.2, "Actual": 8.0, "Simulated": 17.0}, {"duration_secs": 856.2, "Actual": 14.0, "Simulated": 21.0}, {"duration_secs": 915.3, "Actual": 17.0, "Simulated": 6.0}, {"duration_secs": 974.3, "Actual": 5.0, "Simulated": 9.0}, {"duration_secs": 1033.4, "Actual": 12.0, "Simulated": 13.0}, {"duration_secs": 1092.4, "Actual": 9.0, "Simulated": 10.0}, {"duration_secs": 1151.5, "Actual": 11.0, "Simulated": 13.0}, {"duration_secs": 1210.5, "Actual": 6.0, "Simulated": 6.0}, {"duration_secs": 1269.6, "Actual": 11.0, "Simulated": 12.0}, {"duration_secs": 1328.6, "Actual": 6.0, "Simulated": 7.0}, {"duration_secs": 1387.7, "Actual": 7.0, "Simulated": 5.0}, {"duration_secs": 1446.7, "Actual": 6.0, "Simulated": 7.0}, {"duration_secs": 1505.8, "Actual": 5.0, "Simulated": 8.0}, {"duration_secs": 1564.8, "Actual": 5.0, "Simulated": 6.0}, {"duration_secs": 1623.9, "Actual": 9.0, "Simulated": 8.0}, {"duration_secs": 1682.9, "Actual": 2.0, "Simulated": 7.0}, {"duration_secs": 1742.0, "Actual": 5.0, "Simulated": 6.0}, {"duration_secs": 1801.0, "Actual": 3.0, "Simulated": 11.0}, {"duration_secs": 1860.1, "Actual": 2.0, "Simulated": 6.0}, {"duration_secs": 1919.1, "Actual": 7.0, "Simulated": 6.0}, {"duration_secs": 1978.2, "Actual": 8.0, "Simulated": 4.0}, {"duration_secs": 2037.2, "Actual": 3.0, "Simulated": 9.0}, {"duration_secs": 2096.3, "Actual": 7.0, "Simulated": 5.0}, {"duration_secs": 2155.3, "Actual": 5.0, "Simulated": 2.0}, {"duration_secs": 2214.4, "Actual": 4.0, "Simulated": 3.0}, {"duration_secs": 2273.4, "Actual": 3.0, "Simulated": 5.0}, {"duration_secs": 2332.5, "Actual": 5.0, "Simulated": 5.0}, {"duration_secs": 2391.5, "Actual": 2.0, "Simulated": 4.0}, {"duration_secs": 2450.6, "Actual": 2.0, "Simulated": 5.0}, {"duration_secs": 2509.6, "Actual": 5.0, "Simulated": 3.0}, {"duration_secs": 2568.7, "Actual": 2.0, "Simulated": 4.0}, {"duration_secs": 2627.7, "Actual": 2.0, "Simulated": 6.0}, {"duration_secs": 2686.8, "Actual": 5.0, "Simulated": 5.0}, {"duration_secs": 2745.8, "Actual": 1.0, "Simulated": 5.0}, {"duration_secs": 2804.9, "Actual": 1.0, "Simulated": 1.0}, {"duration_secs": 2863.9, "Actual": 1.0, "Simulated": 1.0}, {"duration_secs": 2923.0, "Actual": 6.0, "Simulated": 2.0}, {"duration_secs": 2982.0, "Actual": 1.0, "Simulated": 1.0}, {"duration_secs": 3041.1, "Actual": 3.0, "Simulated": 3.0}, {"duration_secs": 3100.1, "Actual": 1.0, "Simulated": 1.0}, {"duration_secs": 3159.2, "Actual": 2.0, "Simulated": 5.0}, {"duration_secs": 3218.2, "Actual": 0.0, "Simulated": 2.0}, {"duration_secs": 3277.3, "Actual": 1.0, "Simulated": 5.0}, {"duration_secs": 3336.3, "Actual": 1.0, "Simulated": 2.0}, {"duration_secs": 3395.4, "Actual": 2.0, "Simulated": 1.0}, {"duration_secs": 3454.4, "Actual": 1.0, "Simulated": 2.0}, {"duration_secs": 3513.5, "Actual": 3.0, "Simulated": 1.0}, {"duration_secs": 3572.5, "Actual": 3.0, "Simulated": 4.0}, {"duration_secs": 3631.6, "Actual": 3.0, "Simulated": 2.0}, {"duration_secs": 3690.6, "Actual": 2.0, "Simulated": 3.0}, {"duration_secs": 3749.7, "Actual": 4.0, "Simulated": 1.0}, {"duration_secs": 3808.7, "Actual": 2.0, "Simulated": 1.0}, {"duration_secs": 3867.8, "Actual": 0.0, "Simulated": 3.0}, {"duration_secs": 3926.8, "Actual": 1.0, "Simulated": 4.0}, {"duration_secs": 3985.9, "Actual": 0.0, "Simulated": 3.0}, {"duration_secs": 4044.9, "Actual": 1.0, "Simulated": 2.0}, {"duration_secs": 4104.0, "Actual": 0.0, "Simulated": 2.0}, {"duration_secs": 4163.0, "Actual": 1.0, "Simulated": 2.0}, {"duration_secs": 4222.1, "Actual": 1.0, "Simulated": 2.0}, {"duration_secs": 4281.1, "Actual": 2.0, "Simulated": 0.0}, {"duration_secs": 4340.2, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 4399.2, "Actual": 2.0, "Simulated": 1.0}, {"duration_secs": 4458.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 4517.3, "Actual": 1.0, "Simulated": 1.0}, {"duration_secs": 4576.4, "Actual": 0.0, "Simulated": 2.0}, {"duration_secs": 4635.4, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 4694.5, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 4753.5, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 4812.6, "Actual": 0.0, "Simulated": 2.0}, {"duration_secs": 4871.6, "Actual": 0.0, "Simulated": 2.0}, {"duration_secs": 4930.7, "Actual": 2.0, "Simulated": 0.0}, {"duration_secs": 4989.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 5048.8, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 5107.8, "Actual": 2.0, "Simulated": 1.0}, {"duration_secs": 5166.9, "Actual": 0.0, "Simulated": 2.0}, {"duration_secs": 5225.9, "Actual": 0.0, "Simulated": 3.0}, {"duration_secs": 5285.0, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 5344.0, "Actual": 1.0, "Simulated": 1.0}, {"duration_secs": 5403.1, "Actual": 1.0, "Simulated": 1.0}, {"duration_secs": 5462.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 5521.2, "Actual": 1.0, "Simulated": 2.0}, {"duration_secs": 5580.2, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 5639.3, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 5698.3, "Actual": 1.0, "Simulated": 3.0}, {"duration_secs": 5757.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 5816.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 5875.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 5934.5, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 5993.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 6052.6, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 6111.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 6170.7, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 6229.8, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 6288.8, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 6347.9, "Actual": 1.0, "Simulated": 1.0}, {"duration_secs": 6406.9, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 6466.0, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 6525.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 6584.1, "Actual": 1.0, "Simulated": 1.0}, {"duration_secs": 6643.1, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 6702.2, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 6761.2, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 6820.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 6879.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 6938.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 6997.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 7056.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 7115.5, "Actual": 2.0, "Simulated": 0.0}, {"duration_secs": 7174.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 7233.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 7292.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 7351.7, "Actual": 1.0, "Simulated": 1.0}, {"duration_secs": 7410.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 7469.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 7528.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 7587.9, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 7646.9, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 7706.0, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 7765.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 7824.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 7883.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 7942.2, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 8001.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 8060.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 8119.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 8178.4, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 8237.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 8296.5, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 8355.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 8414.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 8473.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 8532.7, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 8591.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 8650.8, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 8709.8, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 8768.9, "Actual": 0.0, "Simulated": 1.0}, {"duration_secs": 8827.9, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 8887.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 8946.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 9005.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 9064.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 9123.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 9182.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 9241.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 9300.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 9359.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 9418.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 9477.5, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 9536.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 9595.6, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 9654.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 9713.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 9772.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 9831.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 9890.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 9949.9, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10008.9, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10068.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10127.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10186.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10245.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10304.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10363.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10422.3, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 10481.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10540.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10599.4, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10658.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10717.5, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10776.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10835.6, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10894.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 10953.7, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 11012.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 11071.8, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 11130.9, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 11189.9, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 11249.0, "Actual": 1.0, "Simulated": 0.0}, {"duration_secs": 11308.0, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 11367.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 11426.1, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 11485.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 11544.2, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 11603.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 11662.3, "Actual": 0.0, "Simulated": 0.0}, {"duration_secs": 11721.4, "Actual": 0.0, "Simulated": 0.0}];
+
+    const labels = rawData.map(d => d.duration_secs);
+    const actualData = rawData.map(d => d.Actual);
+    const simData = rawData.map(d => d.Simulated);
+
+    const ctx = document.getElementById('volatilityChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Actual Data',
+                    data: actualData,
+                    backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
+                },
+                {
+                    label: 'Simulated',
+                    data: simData,
+                    backgroundColor: 'rgba(249, 115, 22, 0.7)',
+                    borderColor: 'rgba(249, 115, 22, 1)',
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                tooltip: { 
+                    callbacks: { 
+                        label: function(context) { return context.dataset.label + ': ' + context.parsed.y.toFixed(2); } 
+                    } 
+                },
+                legend: { 
+                    position: 'top',
+                    align: 'start',
+                    labels: {
+                        usePointStyle: true,
+                        boxWidth: 8,
+                        font: { family: "-apple-system, system-ui, sans-serif", size: 13, weight: '500' }
+                    }
+                }
+            },
+            scales: {
+                x: { 
+                    title: { display: true, text: 'Seconds to reach ±7 pips', color: '#64748b', font: { size: 12 } },
+                    grid: { display: false },
+                    ticks: { color: '#64748b' }
+                },
+                y: { 
+                    title: { display: true, text: 'Count', color: '#64748b', font: { size: 12 } },
+                    grid: { color: '#f1f5f9' },
+                    ticks: { color: '#64748b' },
+                    beginAtZero: true 
+                }
+            }
+        }
+    });
+
+    // --- STREAK CHART ---
+    const rawStreakData = [{"streak_len": 1, "Actual": 144, "Simulated": 142}, {"streak_len": 2, "Actual": 73, "Simulated": 77}, {"streak_len": 3, "Actual": 37, "Simulated": 38}, {"streak_len": 4, "Actual": 19, "Simulated": 16}, {"streak_len": 5, "Actual": 8, "Simulated": 5}, {"streak_len": 6, "Actual": 4, "Simulated": 5}, {"streak_len": 7, "Actual": 1, "Simulated": 3}, {"streak_len": 8, "Actual": 0, "Simulated": 4}, {"streak_len": 9, "Actual": 2, "Simulated": 0}, {"streak_len": 10, "Actual": 1, "Simulated": 0}];
+    const streakLabels = rawStreakData.map(d => d.streak_len);
+    const streakAct = rawStreakData.map(d => d.Actual);
+    const streakSim = rawStreakData.map(d => d.Simulated);
+
+    const ctxStreak = document.getElementById('streakChart').getContext('2d');
+    new Chart(ctxStreak, {
+        type: 'bar',
+        data: {
+            labels: streakLabels,
+            datasets: [
+                {
+                    label: 'Actual Data',
+                    data: streakAct,
+                    backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 1
+                },
+                {
+                    label: 'Simulated',
+                    data: streakSim,
+                    backgroundColor: 'rgba(249, 115, 22, 0.7)',
+                    borderColor: 'rgba(249, 115, 22, 1)',
+                    borderWidth: 1
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'top', align: 'start', labels: { usePointStyle: true, boxWidth: 8 } }
+            },
+            scales: {
+                x: { 
+                    title: { display: true, text: 'Consecutive Hits', color: '#64748b' },
+                    grid: { display: false }
+                },
+                y: { 
+                    type: 'linear', 
+                    title: { display: true, text: 'Frequency', color: '#64748b' },
+                    grid: { color: '#f1f5f9' },
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+
+    // --- MAE CHART ---
+    const rawMaeData = [{"mae_points": 0.2, "Actual": 30.0, "Simulated": 22.0}, {"mae_points": 0.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 1.0, "Actual": 24.0, "Simulated": 16.0}, {"mae_points": 1.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 1.9, "Actual": 17.0, "Simulated": 10.0}, {"mae_points": 2.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 2.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 3.1, "Actual": 19.0, "Simulated": 12.0}, {"mae_points": 3.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 4.0, "Actual": 13.0, "Simulated": 12.0}, {"mae_points": 4.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 4.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 5.2, "Actual": 9.0, "Simulated": 15.0}, {"mae_points": 5.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 6.0, "Actual": 9.0, "Simulated": 9.0}, {"mae_points": 6.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 6.9, "Actual": 8.0, "Simulated": 12.0}, {"mae_points": 7.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 7.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 8.1, "Actual": 10.0, "Simulated": 15.0}, {"mae_points": 8.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 8.9, "Actual": 9.0, "Simulated": 14.0}, {"mae_points": 9.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 9.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 10.2, "Actual": 6.0, "Simulated": 8.0}, {"mae_points": 10.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 11.0, "Actual": 11.0, "Simulated": 17.0}, {"mae_points": 11.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 11.9, "Actual": 8.0, "Simulated": 9.0}, {"mae_points": 12.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 12.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 13.1, "Actual": 11.0, "Simulated": 13.0}, {"mae_points": 13.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 13.9, "Actual": 8.0, "Simulated": 7.0}, {"mae_points": 14.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 14.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 15.2, "Actual": 10.0, "Simulated": 16.0}, {"mae_points": 15.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 16.0, "Actual": 6.0, "Simulated": 7.0}, {"mae_points": 16.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 16.9, "Actual": 9.0, "Simulated": 12.0}, {"mae_points": 17.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 17.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 18.1, "Actual": 13.0, "Simulated": 10.0}, {"mae_points": 18.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 18.9, "Actual": 9.0, "Simulated": 13.0}, {"mae_points": 19.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 19.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 20.2, "Actual": 12.0, "Simulated": 7.0}, {"mae_points": 20.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 21.0, "Actual": 9.0, "Simulated": 11.0}, {"mae_points": 21.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 21.8, "Actual": 7.0, "Simulated": 10.0}, {"mae_points": 22.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 22.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 23.1, "Actual": 6.0, "Simulated": 11.0}, {"mae_points": 23.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 23.9, "Actual": 12.0, "Simulated": 7.0}, {"mae_points": 24.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 24.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 25.2, "Actual": 4.0, "Simulated": 6.0}, {"mae_points": 25.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 26.0, "Actual": 12.0, "Simulated": 8.0}, {"mae_points": 26.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 26.8, "Actual": 7.0, "Simulated": 10.0}, {"mae_points": 27.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 27.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 28.1, "Actual": 7.0, "Simulated": 11.0}, {"mae_points": 28.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 28.9, "Actual": 6.0, "Simulated": 9.0}, {"mae_points": 29.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 29.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 30.2, "Actual": 9.0, "Simulated": 11.0}, {"mae_points": 30.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 31.0, "Actual": 8.0, "Simulated": 10.0}, {"mae_points": 31.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 31.8, "Actual": 6.0, "Simulated": 7.0}, {"mae_points": 32.2, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 32.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 33.1, "Actual": 7.0, "Simulated": 1.0}, {"mae_points": 33.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 33.9, "Actual": 6.0, "Simulated": 7.0}, {"mae_points": 34.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 34.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 35.2, "Actual": 9.0, "Simulated": 7.0}, {"mae_points": 35.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 36.0, "Actual": 6.0, "Simulated": 8.0}, {"mae_points": 36.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 36.8, "Actual": 11.0, "Simulated": 10.0}, {"mae_points": 37.2, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 37.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 38.1, "Actual": 4.0, "Simulated": 4.0}, {"mae_points": 38.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 38.9, "Actual": 8.0, "Simulated": 4.0}, {"mae_points": 39.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 39.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 40.2, "Actual": 6.0, "Simulated": 5.0}, {"mae_points": 40.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 41.0, "Actual": 7.0, "Simulated": 3.0}, {"mae_points": 41.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 41.8, "Actual": 3.0, "Simulated": 9.0}, {"mae_points": 42.2, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 42.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 43.1, "Actual": 7.0, "Simulated": 13.0}, {"mae_points": 43.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 43.9, "Actual": 7.0, "Simulated": 1.0}, {"mae_points": 44.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 44.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 45.1, "Actual": 5.0, "Simulated": 9.0}, {"mae_points": 45.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 46.0, "Actual": 4.0, "Simulated": 5.0}, {"mae_points": 46.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 46.8, "Actual": 8.0, "Simulated": 5.0}, {"mae_points": 47.2, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 47.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 48.1, "Actual": 6.0, "Simulated": 3.0}, {"mae_points": 48.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 48.9, "Actual": 0.0, "Simulated": 2.0}, {"mae_points": 49.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 49.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 50.1, "Actual": 4.0, "Simulated": 6.0}, {"mae_points": 50.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 51.0, "Actual": 6.0, "Simulated": 5.0}, {"mae_points": 51.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 51.8, "Actual": 5.0, "Simulated": 3.0}, {"mae_points": 52.2, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 52.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 53.1, "Actual": 6.0, "Simulated": 6.0}, {"mae_points": 53.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 53.9, "Actual": 9.0, "Simulated": 6.0}, {"mae_points": 54.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 54.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 55.1, "Actual": 4.0, "Simulated": 6.0}, {"mae_points": 55.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 56.0, "Actual": 3.0, "Simulated": 7.0}, {"mae_points": 56.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 56.8, "Actual": 5.0, "Simulated": 5.0}, {"mae_points": 57.2, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 57.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 58.0, "Actual": 5.0, "Simulated": 6.0}, {"mae_points": 58.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 58.9, "Actual": 5.0, "Simulated": 5.0}, {"mae_points": 59.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 59.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 60.1, "Actual": 2.0, "Simulated": 5.0}, {"mae_points": 60.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 61.0, "Actual": 4.0, "Simulated": 6.0}, {"mae_points": 61.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 61.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 62.2, "Actual": 6.0, "Simulated": 13.0}, {"mae_points": 62.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 63.0, "Actual": 5.0, "Simulated": 2.0}, {"mae_points": 63.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 63.9, "Actual": 1.0, "Simulated": 4.0}, {"mae_points": 64.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 64.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 65.1, "Actual": 13.0, "Simulated": 0.0}, {"mae_points": 65.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 65.9, "Actual": 7.0, "Simulated": 5.0}, {"mae_points": 66.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 66.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 67.2, "Actual": 7.0, "Simulated": 2.0}, {"mae_points": 67.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 68.0, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 68.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 68.9, "Actual": 6.0, "Simulated": 3.0}, {"mae_points": 69.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 69.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 70.1, "Actual": 5.0, "Simulated": 6.0}, {"mae_points": 70.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 70.9, "Actual": 5.0, "Simulated": 6.0}, {"mae_points": 71.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 71.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 72.2, "Actual": 8.0, "Simulated": 2.0}, {"mae_points": 72.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 73.0, "Actual": 1.0, "Simulated": 3.0}, {"mae_points": 73.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 73.9, "Actual": 4.0, "Simulated": 3.0}, {"mae_points": 74.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 74.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 75.1, "Actual": 1.0, "Simulated": 2.0}, {"mae_points": 75.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 75.9, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 76.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 76.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 77.2, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 77.6, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 78.0, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 78.4, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 78.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 79.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 79.7, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 80.1, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 80.5, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 80.9, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 81.3, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 81.8, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 82.2, "Actual": 0.0, "Simulated": 0.0}, {"mae_points": 82.6, "Actual": 0.0, "Simulated": 0.0}];
+    const maeLabels = rawMaeData.map(d => d.mae_points);
+    const maeAct = rawMaeData.map(d => d.Actual);
+    const maeSim = rawMaeData.map(d => d.Simulated);
+
+    const ctxMae = document.getElementById('maeChart').getContext('2d');
+    new Chart(ctxMae, {
+        type: 'bar',
+        data: {
+            labels: maeLabels,
+            datasets: [
+                {
+                    label: 'Actual Data MAE',
+                    data: maeAct,
+                    backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
+                },
+                {
+                    label: 'Simulated MAE',
+                    data: maeSim,
+                    backgroundColor: 'rgba(249, 115, 22, 0.7)',
+                    borderColor: 'rgba(249, 115, 22, 1)',
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: function(context) { return context.dataset.label + ': ' + context.parsed.y.toFixed(2); }
+                    }
+                },
+                legend: { position: 'top', align: 'start', labels: { usePointStyle: true, boxWidth: 8 } }
+            },
+            scales: {
+                x: {
+                    title: { display: true, text: 'Maximum Adverse Excursion (Points)', color: '#64748b' },
+                    grid: { display: false }
+                },
+                y: {
+                    type: 'linear',
+                    title: { display: true, text: 'Frequency', color: '#64748b' },
+                    grid: { color: '#f1f5f9' },
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+
+    // --- SIZE DISTRIBUTION CHART ---
+    const rawSizeData = [{"size_bin": 1.9, "act_body": 0.0, "act_head": 0.0, "act_tail": 0.0, "act_count": 0, "sim_body": 0.0, "sim_head": 0.0, "sim_tail": 0.0, "sim_count": 0}, {"size_bin": 5.8, "act_body": 0.0, "act_head": 0.0, "act_tail": 0.0, "act_count": 0, "sim_body": 0.0, "sim_head": 0.0, "sim_tail": 0.0, "sim_count": 0}, {"size_bin": 9.7, "act_body": 0.0, "act_head": 0.0, "act_tail": 0.0, "act_count": 0, "sim_body": 0.0, "sim_head": 0.0, "sim_tail": 0.0, "sim_count": 0}, {"size_bin": 13.6, "act_body": 3.666666666661816, "act_head": 3.0, "act_tail": 7.666666666666667, "act_count": 3, "sim_body": 0.0, "sim_head": 0.0, "sim_tail": 0.0, "sim_count": 0}, {"size_bin": 17.5, "act_body": 5.428571428575586, "act_head": 6.000000000002079, "act_tail": 6.714285714281557, "act_count": 7, "sim_body": 0.0, "sim_head": 0.0, "sim_tail": 0.0, "sim_count": 0}, {"size_bin": 21.3, "act_body": 6.368421052633111, "act_head": 7.052631578943539, "act_tail": 8.210526315789474, "act_count": 19, "sim_body": 7.999999999898137, "sim_head": 7.00000000007276, "sim_tail": 8.000000000043656, "sim_count": 1}, {"size_bin": 25.2, "act_body": 11.96296296296458, "act_head": 7.333333333332256, "act_tail": 6.333333333333872, "act_count": 27, "sim_body": 7.333333333430346, "sim_head": 11.999999999873884, "sim_tail": 5.666666666710323, "sim_count": 3}, {"size_bin": 29.1, "act_body": 9.48780487804949, "act_head": 10.585365853658182, "act_tail": 9.63414634146732, "act_count": 41, "sim_body": 7.4000000000974975, "sim_head": 12.39999999996362, "sim_tail": 9.700000000011642, "sim_count": 10}, {"size_bin": 33.0, "act_body": 10.300000000000727, "act_head": 10.499999999998545, "act_tail": 11.899999999999272, "act_count": 20, "sim_body": 11.999999999972351, "sim_head": 16.500000000024738, "sim_tail": 5.000000000018917, "sim_count": 10}, {"size_bin": 36.9, "act_body": 11.565217391304031, "act_head": 13.869565217390988, "act_tail": 11.15217391304411, "act_count": 46, "sim_body": 14.733333333353706, "sim_head": 11.26666666661331, "sim_tail": 10.600000000025224, "sim_count": 15}, {"size_bin": 40.7, "act_body": 17.955882352941178, "act_head": 12.838235294116362, "act_tail": 9.602941176472514, "act_count": 68, "sim_body": 15.025641025685427, "sim_head": 13.897435897446718, "sim_tail": 11.666666666667412, "sim_count": 39}, {"size_bin": 44.6, "act_body": 16.777777777776393, "act_head": 14.539682539683925, "act_tail": 12.904761904760981, "act_count": 63, "sim_body": 15.833333333329522, "sim_head": 15.1428571428516, "sim_tail": 13.642857142876199, "sim_count": 42}, {"size_bin": 48.5, "act_body": 21.580645161290324, "act_head": 12.419354838712025, "act_tail": 14.467741935481992, "act_count": 62, "sim_body": 19.749999999991914, "sim_head": 13.333333333344248, "sim_tail": 14.944444444461826, "sim_count": 36}, {"size_bin": 52.4, "act_body": 22.731343283584046, "act_head": 14.671641791045428, "act_tail": 15.223880597014274, "act_count": 67, "sim_body": 21.574468085090594, "sim_head": 14.80851063828456, "sim_tail": 16.10638297872495, "sim_count": 47}, {"size_bin": 56.3, "act_body": 26.450000000001214, "act_head": 16.08333333333188, "act_tail": 14.016666666668849, "act_count": 60, "sim_body": 26.671641791051726, "sim_head": 14.238805970150556, "sim_tail": 15.686567164165856, "sim_count": 67}, {"size_bin": 60.1, "act_body": 29.081967213113323, "act_head": 17.3770491803293, "act_tail": 13.967213114755053, "act_count": 61, "sim_body": 27.058823529397213, "sim_head": 15.955882352912715, "sim_tail": 17.3382352941521, "sim_count": 68}, {"size_bin": 64.0, "act_body": 28.44444444444768, "act_head": 15.518518518520136, "act_tail": 19.962962962961345, "act_count": 27, "sim_body": 26.01923076933879, "sim_head": 21.826923076895092, "sim_tail": 16.230769230754397, "sim_count": 52}, {"size_bin": 67.9, "act_body": 30.105263157896268, "act_head": 19.13157894736574, "act_tail": 18.236842105262774, "act_count": 38, "sim_body": 30.773584905697994, "sim_head": 15.698113207523283, "sim_tail": 20.8490566037659, "sim_count": 53}, {"size_bin": 71.8, "act_body": 34.536585365852595, "act_head": 17.70731707317002, "act_tail": 19.195121951218447, "act_count": 41, "sim_body": 33.32307692305162, "sim_head": 17.63076923077617, "sim_tail": 20.5230769230814, "sim_count": 65}, {"size_bin": 75.7, "act_body": 32.54545454545521, "act_head": 22.045454545455538, "act_tail": 20.75000000000099, "act_count": 44, "sim_body": 38.71186440678854, "sim_head": 18.864406779674088, "sim_tail": 17.932203389854926, "sim_count": 59}, {"size_bin": 79.5, "act_body": 41.666666666667204, "act_head": 18.444444444445523, "act_tail": 19.370370370372527, "act_count": 27, "sim_body": 35.741935483856885, "sim_head": 21.161290322613034, "sim_tail": 22.25806451610697, "sim_count": 31}, {"size_bin": 83.4, "act_body": 39.470588235297114, "act_head": 22.55882352940834, "act_tail": 21.294117647056254, "act_count": 34, "sim_body": 38.00000000002668, "sim_head": 24.812500000018492, "sim_tail": 20.562500000013035, "sim_count": 48}, {"size_bin": 87.3, "act_body": 42.44000000000233, "act_head": 21.159999999999417, "act_tail": 23.96, "act_count": 25, "sim_body": 40.55555555549331, "sim_head": 22.40740740745322, "sim_tail": 24.574074074073266, "sim_count": 54}, {"size_bin": 91.2, "act_body": 47.31249999999682, "act_head": 21.40625000000091, "act_tail": 22.812500000000455, "act_count": 32, "sim_body": 33.549999999949435, "sim_head": 27.700000000006185, "sim_tail": 30.22500000005639, "sim_count": 40}, {"size_bin": 95.1, "act_body": 50.666666666667204, "act_head": 20.074074074074073, "act_tail": 24.7407407407402, "act_count": 27, "sim_body": 47.10256410259768, "sim_head": 23.48717948719292, "sim_tail": 24.820512820493793, "sim_count": 39}, {"size_bin": 99.0, "act_body": 58.49999999999792, "act_head": 15.142857142860262, "act_tail": 25.071428571428573, "act_count": 14, "sim_body": 47.95454545458845, "sim_head": 25.681818181804953, "sim_tail": 25.45454545456596, "sim_count": 22}, {"size_bin": 102.8, "act_body": 49.62499999999576, "act_head": 30.750000000002427, "act_tail": 22.25000000000121, "act_count": 24, "sim_body": 55.114285714286964, "sim_head": 24.085714285756694, "sim_tail": 23.39999999997256, "sim_count": 35}, {"size_bin": 106.7, "act_body": 59.5, "act_head": 23.28571428571117, "act_tail": 23.428571428575587, "act_count": 14, "sim_body": 62.32258064526315, "sim_head": 21.677419354801625, "sim_tail": 22.41935483872564, "sim_count": 31}, {"size_bin": 110.6, "act_body": 69.94444444444122, "act_head": 21.777777777778585, "act_tail": 18.61111111110626, "act_count": 18, "sim_body": 65.07407407416085, "sim_head": 25.703703703599146, "sim_tail": 19.592592592587202, "sim_count": 27}, {"size_bin": 114.5, "act_body": 64.9999999999983, "act_head": 31.117647058821817, "act_tail": 18.29411764706396, "act_count": 17, "sim_body": 64.45454545444294, "sim_head": 22.59090909088991, "sim_tail": 27.04545454546579, "sim_count": 22}, {"size_bin": 118.4, "act_body": 63.826086956522374, "act_head": 28.391304347823556, "act_tail": 26.347826086957788, "act_count": 23, "sim_body": 63.30434782607177, "sim_head": 26.95652173920193, "sim_tail": 27.999999999981018, "sim_count": 23}, {"size_bin": 122.2, "act_body": 48.714285714285715, "act_head": 43.50000000000104, "act_tail": 31.07142857142961, "act_count": 14, "sim_body": 85.52941176460915, "sim_head": 26.470588235302678, "sim_tail": 10.647058823548244, "sim_count": 17}, {"size_bin": 126.1, "act_body": 69.49999999999434, "act_head": 29.111111111112727, "act_tail": 27.61111111111192, "act_count": 18, "sim_body": 87.20000000004075, "sim_head": 23.066666666643382, "sim_tail": 16.06666666669674, "sim_count": 15}, {"size_bin": 130.0, "act_body": 78.4285714285735, "act_head": 37.71428571428363, "act_tail": 14.142857142855064, "act_count": 7, "sim_body": 96.99999999987631, "sim_head": 9.000000000034925, "sim_tail": 24.100000000091676, "sim_count": 10}, {"size_bin": 133.9, "act_body": 79.37499999999636, "act_head": 18.750000000005457, "act_tail": 35.74999999999818, "act_count": 8, "sim_body": 82.42857142852881, "sim_head": 31.499999999958423, "sim_tail": 19.214285714307543, "sim_count": 14}, {"size_bin": 137.8, "act_body": 88.00000000001164, "act_head": 26.19999999999418, "act_tail": 23.2, "act_count": 5, "sim_body": 93.35714285715014, "sim_head": 25.571428571424413, "sim_tail": 18.28571428572676, "sim_count": 14}, {"size_bin": 141.6, "act_body": 101.84615384615273, "act_head": 14.923076923078042, "act_tail": 24.53846153845706, "act_count": 13, "sim_body": 84.99999999988795, "sim_head": 26.900000000034925, "sim_tail": 29.900000000004365, "sim_count": 10}, {"size_bin": 145.5, "act_body": 76.0, "act_head": 21.00000000000485, "act_tail": 49.0000000000097, "act_count": 3, "sim_body": 106.71428571453309, "sim_head": 19.714285714302346, "sim_tail": 19.28571428570181, "sim_count": 7}, {"size_bin": 149.4, "act_body": 101.8, "act_head": 6.8, "act_tail": 40.20000000000291, "act_count": 5, "sim_body": 65.99999999984175, "sim_head": 38.12500000016007, "sim_tail": 45.62499999999818, "sim_count": 8}, {"size_bin": 153.3, "act_body": 94.55555555555556, "act_head": 24.6666666666699, "act_tail": 34.66666666666505, "act_count": 9, "sim_body": 115.42857142856312, "sim_head": 12.000000000027025, "sim_tail": 25.714285714212956, "sim_count": 7}, {"size_bin": 157.2, "act_body": 93.37500000000182, "act_head": 23.12500000000182, "act_tail": 40.624999999992724, "act_count": 8, "sim_body": 88.50000000045111, "sim_head": 46.499999999919964, "sim_tail": 21.749999999959982, "sim_count": 4}, {"size_bin": 161.0, "act_body": 72.79999999999418, "act_head": 58.60000000000291, "act_tail": 29.99999999999709, "act_count": 5, "sim_body": 115.66666666661816, "sim_head": 36.999999999970896, "sim_tail": 8.666666666710322, "sim_count": 3}, {"size_bin": 164.9, "act_body": 122.75, "act_head": 12.0, "act_tail": 29.25, "act_count": 4, "sim_body": 88.99999999950523, "sim_head": 4.000000000029104, "sim_tail": 71.00000000024738, "sim_count": 1}, {"size_bin": 168.8, "act_body": 126.99999999999636, "act_head": 19.749999999996362, "act_tail": 22.500000000010914, "act_count": 4, "sim_body": 123.00000000017462, "sim_head": 27.33333333344005, "sim_tail": 18.333333333323633, "sim_count": 3}, {"size_bin": 172.7, "act_body": 121.8, "act_head": 35.79999999999709, "act_tail": 14.8, "act_count": 5, "sim_body": 113.00000000008004, "sim_head": 58.000000000116415, "sim_tail": 0.9999999999126885, "sim_count": 2}, {"size_bin": 176.6, "act_body": 107.0, "act_head": 1.000000000007276, "act_tail": 68.49999999997817, "act_count": 2, "sim_body": 120.6666666666788, "sim_head": 22.166666666693345, "sim_tail": 33.66666666663756, "sim_count": 6}, {"size_bin": 180.4, "act_body": 115.66666666667152, "act_head": 21.333333333333332, "act_tail": 44.0, "act_count": 3, "sim_body": 152.00000000017462, "sim_head": 29.999999999898137, "sim_tail": 0.0, "sim_count": 1}, {"size_bin": 184.3, "act_body": 131.00000000000486, "act_head": 34.99999999999515, "act_tail": 17.333333333338185, "act_count": 3, "sim_body": 125.75000000012369, "sim_head": 19.74999999989086, "sim_tail": 40.5000000001055, "sim_count": 4}, {"size_bin": 188.2, "act_body": 136.99999999998545, "act_head": 13.000000000029104, "act_tail": 38.0, "act_count": 1, "sim_body": 172.49999999980355, "sim_head": 5.499999999941792, "sim_tail": 10.500000000043656, "sim_count": 2}];
+    const sizeLabels = rawSizeData.map(d => d.size_bin);
+
+    const ctxSize = document.getElementById('sizeChart').getContext('2d');
+    new Chart(ctxSize, {
+        type: 'bar',
+        data: {
+            labels: sizeLabels,
+            datasets: [
+                {
+                    label: 'Actual - Tail',
+                    data: rawSizeData.map(d => d.act_tail),
+                    backgroundColor: 'rgba(59, 130, 246, 0.4)',
+                    stack: 'actual',
+                    borderWidth: 0
+                },
+                {
+                    label: 'Actual - Body',
+                    data: rawSizeData.map(d => d.act_body),
+                    backgroundColor: 'rgba(59, 130, 246, 0.9)',
+                    stack: 'actual',
+                    borderWidth: 0
+                },
+                {
+                    label: 'Actual - Head',
+                    data: rawSizeData.map(d => d.act_head),
+                    backgroundColor: 'rgba(59, 130, 246, 0.6)',
+                    stack: 'actual',
+                    borderWidth: 0
+                },
+                {
+                    label: 'Simulated - Tail',
+                    data: rawSizeData.map(d => d.sim_tail),
+                    backgroundColor: 'rgba(249, 115, 22, 0.4)',
+                    stack: 'simulated',
+                    borderWidth: 0
+                },
+                {
+                    label: 'Simulated - Body',
+                    data: rawSizeData.map(d => d.sim_body),
+                    backgroundColor: 'rgba(249, 115, 22, 0.9)',
+                    stack: 'simulated',
+                    borderWidth: 0
+                },
+                {
+                    label: 'Simulated - Head',
+                    data: rawSizeData.map(d => d.sim_head),
+                    backgroundColor: 'rgba(249, 115, 22, 0.6)',
+                    stack: 'simulated',
+                    borderWidth: 0
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'top', align: 'start', labels: { usePointStyle: true, boxWidth: 8 } },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const dataset = context.dataset;
+                            const index = context.dataIndex;
+                            const isActual = dataset.stack === 'actual';
+                            const count = isActual ? rawSizeData[index].act_count : rawSizeData[index].sim_count;
+                            return `${dataset.label}: ${context.parsed.y.toFixed(2)} (Count: ${count})`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    title: { display: true, text: 'Total Block Size (Points)', color: '#64748b' },
+                    grid: { display: false }
+                },
+                y: {
+                    title: { display: true, text: 'Average Size Components (Points)', color: '#64748b' },
+                    grid: { color: '#f1f5f9' },
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+
+    // --- SAMPLE PATH CHART ---
+    const rawSampleData = {"actual": [117558.0, 117568.0, 117563.0, 117514.00000000001, 117470.99999999999, 117438.0, 117432.0, 117439.0, 117450.00000000001, 117416.00000000001, 117357.0, 117348.99999999999, 117348.99999999999, 117259.0, 117282.0, 117286.0, 117314.99999999999, 117319.0, 117286.0, 117215.0, 117156.0, 117136.0, 117170.0, 117211.0, 117184.0, 117199.00000000001, 117197.0, 117219.0, 117236.99999999999, 117251.0, 117272.0, 117236.0, 117246.99999999999, 117218.0, 117195.99999999999, 117215.0, 117202.99999999999, 117267.00000000001, 117261.0, 117286.0, 117340.0, 117351.99999999999, 117390.0, 117506.0, 117443.00000000001, 117446.99999999999, 117375.99999999999, 117375.0, 117341.0, 117336.0, 117339.0, 117307.0, 116821.0, 116836.99999999999, 116850.00000000001, 116853.99999999999, 116845.0, 116875.0, 116900.0, 116909.0, 116858.0, 116902.0, 116880.0, 116863.0, 116872.0, 116941.0, 116833.00000000001, 116835.0, 116795.0, 116821.0, 116755.00000000001, 116826.00000000001, 116853.99999999999, 116825.0, 116853.0, 116900.0, 116807.0, 116817.0, 116850.00000000001, 116814.0, 116802.0, 116812.99999999999, 116792.0, 116706.0, 116653.0, 116629.0, 116604.0, 116745.00000000001, 116808.0, 116785.0, 116781.0, 116858.0, 116947.0, 116962.00000000001, 116965.99999999999, 117046.0, 117101.00000000001, 117103.0, 117143.0, 117148.00000000001, 117114.99999999999, 117174.0, 117113.0, 117144.0, 117365.99999999999, 117363.0, 117331.00000000001, 117287.00000000001, 117320.0, 117348.00000000001, 117344.0, 117362.00000000001, 117380.0, 117346.0, 117362.00000000001, 117290.0, 117337.0, 117280.0, 117273.99999999999, 117285.0, 117180.0, 117116.0, 117138.00000000001, 117131.99999999999, 117107.0, 117146.0, 117126.0, 117128.00000000001, 117073.0, 117089.0, 117087.00000000001, 117061.0, 117118.00000000001, 117062.0, 117022.0, 117014.0, 117073.0, 117068.0, 117104.00000000001, 117111.00000000001, 117137.0, 117053.0, 117086.0, 117092.0, 116958.0, 116895.0, 116914.0, 116954.0, 116919.0, 116879.0, 116886.0, 116880.0, 116924.0, 116941.99999999999, 116958.99999999999, 117007.0, 116921.00000000001, 116927.0, 116916.0, 116931.99999999999, 116930.0, 116954.0, 116941.0, 116975.0, 116948.00000000001, 116910.0, 116869.0, 116826.99999999999, 116767.0, 116751.0, 116812.99999999999, 116857.00000000001, 116838.0, 116843.99999999999, 116857.00000000001, 116842.0, 116884.00000000001, 116919.0, 116914.0, 116884.00000000001, 116883.0, 116897.99999999999, 116860.99999999999, 116890.99999999999, 116832.0, 116851.0, 116839.0, 116879.0, 116817.0, 116873.0, 116918.00000000001, 116916.0, 116914.0, 116896.0, 116920.0, 116958.0, 116890.99999999999, 116869.0, 116953.0, 116903.0, 116829.0, 116856.0, 116893.0, 116892.0, 116882.0, 116896.0, 116903.0, 116878.0, 116792.0, 116778.0, 116816.00000000001, 116825.0, 116811.0, 116758.99999999999, 116799.00000000001, 116816.00000000001, 116782.99999999999, 116795.0, 116817.0, 116777.0, 116765.99999999999, 116751.0, 116717.0, 116711.00000000001, 116704.00000000001, 116729.0, 116711.00000000001, 116767.0, 116799.00000000001, 116778.0, 116785.99999999999, 116799.00000000001, 116764.0, 116761.0, 116781.0, 116775.0, 116724.0, 116724.99999999999, 116724.99999999999, 116731.99999999999, 116739.0, 116748.00000000001, 116670.99999999999, 116629.0, 116602.0, 116585.99999999999, 116619.99999999999, 116646.0, 116662.0, 116703.0, 116678.0, 116663.0, 116580.0, 116572.00000000001, 116567.0, 116541.99999999999, 116516.0, 116472.0, 116465.0, 116507.0, 116541.99999999999, 116530.0, 116511.00000000001, 116511.00000000001, 116492.0, 116507.99999999999, 116516.0, 116487.99999999999, 116451.0, 116450.00000000001, 116422.0, 116507.99999999999, 116438.0, 116455.0, 116428.0, 116489.0, 116477.00000000001, 116426.99999999999, 116436.0, 116423.00000000001, 116436.99999999999, 116428.0, 116426.99999999999, 116469.0, 116442.0, 116450.00000000001, 116456.0, 116459.0, 116439.0, 116435.0, 116415.0, 116414.0, 116436.99999999999, 116397.0, 116564.0, 116451.0, 116426.99999999999, 116382.00000000001, 116338.99999999999, 116365.99999999999, 116260.00000000001, 116263.99999999999, 116346.0, 116405.0, 116385.0, 116300.0, 116345.00000000001, 116333.0, 116312.0, 116309.0, 116310.0, 116317.0, 116602.0, 116657.00000000001, 116689.0, 116692.0, 116646.0, 116680.99999999999, 116668.0, 116697.99999999999, 116757.0, 116812.0, 116774.0, 116849.0, 116787.0, 116782.00000000001, 116834.0, 116880.99999999999, 116897.99999999999, 116954.0, 116875.0, 116819.99999999999, 116840.00000000001, 116802.0, 116812.0, 116853.99999999999, 116870.99999999999, 116868.0, 116819.0, 116785.99999999999, 116842.0, 116819.99999999999, 116866.0, 116812.99999999999, 116924.0, 116894.00000000001, 116924.0, 116929.0, 116833.00000000001, 116756.0, 116763.0, 116768.0, 116774.0, 116762.00000000001, 116818.0, 116812.99999999999, 116755.00000000001, 116777.0, 116785.0, 116719.0, 116728.00000000001, 116689.0, 116703.0, 116686.0, 116646.99999999999, 116667.00000000001, 116632.0, 116628.0, 116575.0, 116553.0, 116551.99999999999, 116587.0, 116572.00000000001, 116611.0, 116599.99999999999, 116643.00000000001, 116666.0, 116613.00000000001, 116633.00000000001, 116693.0, 116652.0, 116676.0, 116693.0, 116718.00000000001, 116719.0, 116675.0, 116676.0, 116663.0, 116668.0, 116680.99999999999, 116680.99999999999, 116687.00000000001, 116658.0, 116666.0, 116608.0, 116550.0, 116555.00000000001, 116507.99999999999, 116672.0, 116685.0, 116678.0, 116690.0, 116611.0, 116639.0, 116551.99999999999, 116480.0, 116486.0, 116520.0, 116377.0, 116398.0, 116435.0, 116458.0, 116453.99999999999, 116435.0, 116466.0, 116459.0, 116429.0, 116429.99999999999, 116419.99999999999, 116419.99999999999, 116453.99999999999, 116467.00000000001, 116466.0, 116490.99999999999, 116490.0, 116487.0, 116489.0, 116462.0, 116448.0, 116428.0, 116431.0, 116475.0, 116495.0, 116482.0, 116490.99999999999, 116517.0, 116503.0, 116548.99999999999, 116541.99999999999, 116551.0, 116504.99999999999, 116480.0, 116467.00000000001, 116470.0, 116466.0, 116456.0, 116483.0, 116597.0, 116511.00000000001, 116480.0, 116528.00000000001, 116500.0, 116531.0, 116548.99999999999, 116590.0, 116558.99999999999, 116534.0, 116516.0, 116524.99999999999, 116599.00000000001, 116590.0, 116561.0, 116551.0, 116546.0, 116535.00000000001, 116516.0, 116467.00000000001, 116467.00000000001, 116368.99999999999, 116371.0, 116358.0, 116351.0, 116340.0, 116348.99999999999, 116301.00000000001, 116330.0, 116313.0, 116270.0, 116291.00000000001, 116287.99999999999, 116292.0, 116340.0, 116314.99999999999, 116307.99999999999, 116318.00000000001, 116318.00000000001, 116365.00000000001, 116358.0, 116364.0, 116385.99999999999, 116389.00000000001, 116358.0, 116377.0, 116338.99999999999, 116334.0, 116307.99999999999, 116330.0, 116341.0, 116320.0, 116226.0, 116233.00000000001, 116197.0, 116063.0, 116013.00000000001, 116075.0, 116065.0, 115955.00000000001, 116009.99999999999, 116022.0, 116008.0, 116051.0, 116023.00000000001, 116053.99999999999, 116090.0, 116083.0, 116046.99999999999, 116090.0, 116126.0, 116077.00000000001, 116089.0, 116076.0, 116097.0, 116092.0, 116067.00000000001, 116087.0, 116084.00000000001, 116050.00000000001, 116096.0, 116138.00000000001, 116124.0, 116131.99999999999, 116120.0, 116107.0, 116096.0, 116106.0, 116092.0, 116121.99999999999, 116126.0, 116112.0, 116084.00000000001, 116097.99999999999, 116144.0, 116163.0, 116131.0, 116188.0, 116196.00000000001, 116211.0, 116191.0, 116202.99999999999, 116168.0, 116175.0, 116191.0, 116154.0, 116161.0, 116185.99999999999, 116185.0, 116155.99999999999, 116148.99999999999, 116155.99999999999, 116182.00000000001, 116250.00000000001, 116026.99999999999, 115894.99999999999, 115936.0, 116053.99999999999, 115985.0, 116035.0, 115984.0, 116025.0, 115991.0, 115962.00000000001, 115955.99999999999, 116346.0, 116365.99999999999, 116316.0, 116276.0, 116289.0, 116314.99999999999, 116259.0, 116280.0, 116399.00000000001, 116356.0, 116253.0, 116259.0, 116215.0, 116192.99999999999, 116239.0, 116250.00000000001, 116178.0, 116153.0, 116245.0, 116242.0, 116280.0, 116234.0, 116230.00000000001, 116239.0, 116229.0, 116221.0, 116246.0, 116277.99999999999, 116295.0, 116297.99999999999, 116319.0, 116256.0, 116304.00000000001, 116323.0, 116334.0, 116320.0, 116314.0, 116353.0, 116365.99999999999, 116398.0, 116379.00000000001, 116360.0, 116341.0, 116398.0, 116438.0, 116458.0, 116439.0, 116419.0, 116426.99999999999, 116409.0, 116453.0, 116457.00000000001, 116714.0, 116663.0, 116648.0, 116632.0, 116652.0, 116632.0, 116653.0, 116684.00000000001, 116672.0, 116758.0, 116921.99999999999, 116887.00000000001, 117000.0, 116965.00000000001, 117085.0, 117163.0, 117188.0, 117248.0, 117277.00000000001, 117263.99999999999, 117192.99999999999, 117185.0, 117253.99999999999, 117311.00000000001, 117243.99999999999, 117265.0, 117358.0, 117348.99999999999, 117390.0, 117424.0, 117360.0, 117258.0, 117283.0, 117218.0, 117356.0, 117334.0, 117242.0, 117259.0, 117202.0, 117192.99999999999, 117235.0, 117234.0, 117299.0, 117270.99999999999, 117339.0, 117334.0, 117329.0, 117389.00000000001, 117395.99999999999, 117333.0, 117329.0, 117316.0, 117205.0, 117189.00000000001, 117168.0, 117171.0, 117189.00000000001, 117200.0, 117225.0, 117240.00000000001, 117143.0, 117236.0, 117136.0, 117170.0, 117120.0, 117085.0, 117093.0, 117102.0, 117090.99999999999, 117116.0, 117060.00000000001, 117035.0, 117060.00000000001, 117046.0, 117075.0, 117070.00000000001, 117056.0, 117129.0, 117141.99999999999, 117140.0, 117207.0, 117246.0, 117303.0, 117348.00000000001, 117358.99999999999, 117309.0, 117351.0, 117392.99999999999, 117246.0, 117239.0, 117262.0, 117248.0, 117202.99999999999, 117086.0, 117137.0, 117019.99999999999, 117082.0, 117026.00000000001, 117021.0, 117033.00000000001, 117095.0, 117078.0, 116985.99999999999, 117028.0, 116918.00000000001, 116884.00000000001, 116868.0, 116883.0, 116870.0, 116901.00000000001, 116869.0, 116886.0, 116853.0, 116890.0, 116900.0, 116907.99999999999, 116866.0, 116902.0, 116865.0, 116889.0, 116900.0, 116929.0, 116934.0, 116926.0, 116884.00000000001, 116876.0, 116912.0, 116953.0, 116943.0, 116979.00000000001, 117017.0, 117026.00000000001, 117038.0, 117065.0, 117033.00000000001, 117036.0, 117092.0, 117134.0, 117141.0, 117139.0, 117143.0, 117141.99999999999, 117209.99999999999, 117198.0, 117261.0, 117283.0, 117317.0, 117340.0, 117453.99999999999, 117418.0, 117419.99999999999, 117388.0, 117380.0, 117412.99999999999, 117478.0, 117466.0, 117513.0, 117507.99999999999, 117520.0, 117510.0, 117476.0, 117436.99999999999, 117445.0, 117419.99999999999, 117423.00000000001, 117368.99999999999, 117426.00000000001, 117360.0, 117351.99999999999, 117312.0, 117451.0, 117401.0, 117382.00000000001, 117414.0, 117418.0, 117354.0, 117312.0, 117319.0, 117316.0, 117343.0, 117348.00000000001, 117368.99999999999, 117370.0, 117374.0, 117383.0, 117389.00000000001, 117399.00000000001, 117424.0, 117448.0, 117438.0, 117416.00000000001, 117341.0, 117390.0, 117444.0, 117407.0, 117466.0, 117479.0, 117499.0, 117493.0, 117580.0, 117472.0, 117635.0, 117676.0, 117707.0, 117836.00000000001, 117928.00000000001, 117861.0, 117943.0, 118592.00000000001, 118677.00000000001, 118656.0, 118650.00000000001, 118524.99999999999, 118573.0, 118605.99999999999, 118516.0, 118544.99999999999, 118607.0, 118485.0, 118388.0, 118431.0, 118472.0, 118483.99999999999, 118534.99999999999, 118456.99999999999, 118595.99999999999, 118669.0, 118636.99999999999, 118587.0, 118626.00000000001, 118595.0, 118607.0, 118543.0, 118516.0, 118558.00000000001, 118558.99999999999, 118544.0, 118486.0, 118452.0, 118422.0, 118395.0, 118466.99999999999, 118470.00000000001, 118560.0, 118573.0, 118670.00000000001, 118695.0, 118790.0, 118741.00000000001, 118798.0, 118845.0, 118954.0, 118903.0, 118831.0, 118853.00000000001, 118860.00000000001, 118886.0, 118778.0, 118784.0, 118788.0, 118738.00000000001, 118761.0, 118749.0, 118766.0, 118772.00000000001, 118744.0, 118798.0, 118717.0, 118726.0, 118724.00000000001, 118733.0, 118636.00000000001, 118594.0, 118553.0, 118517.0, 118605.99999999999, 118649.0, 118670.00000000001, 118715.0, 118890.0, 118761.99999999999, 118811.0, 118846.0, 118888.0, 118906.0, 118885.0, 118865.0, 118953.0, 119065.0, 119168.99999999999, 119229.99999999999, 119280.99999999999, 119276.0, 119231.0, 119307.99999999999, 119234.0, 119269.0, 119310.0, 119449.0, 119443.00000000001, 119665.0, 119649.99999999999, 119507.00000000001, 119507.99999999999, 119638.0, 119717.99999999999, 119873.99999999999, 119791.0, 119717.99999999999, 119591.0, 119807.0, 119800.0, 119842.0, 119907.99999999999, 119939.0, 119968.99999999999, 119975.00000000001, 120012.00000000001, 119954.99999999999, 119950.0, 120212.99999999999, 120034.0, 119930.0, 119913.0, 119922.0, 119993.0, 119876.99999999999, 119803.0, 119768.00000000001, 119841.0, 119844.0, 119868.0, 119856.0, 119748.00000000001, 119865.0, 119889.0, 119742.0, 119687.00000000001, 119666.0, 119680.00000000001, 119727.99999999999, 119815.99999999999, 119739.0, 119798.0, 119726.0, 119622.99999999999, 119628.0, 119577.0, 119637.0, 119671.0, 119766.0, 119624.0, 119376.0, 119468.0, 119573.0, 119435.0, 119368.00000000001, 119273.99999999999, 119336.0, 119405.0, 119368.99999999999, 119344.99999999999, 119307.99999999999, 119410.0, 119871.0, 119853.00000000001, 119854.0, 119812.00000000001, 119784.0, 119852.0, 119862.0, 119845.0, 119858.0, 119821.0, 119716.0, 119741.00000000001, 119812.00000000001, 119761.99999999999, 119683.99999999999, 119683.0, 119700.0, 119632.0, 119654.0, 119557.0, 119547.0, 119534.99999999999, 119507.99999999999, 119422.99999999999, 119469.0, 119483.99999999999, 119486.0, 119470.00000000001, 119486.0, 119514.00000000001, 119478.0, 119612.0, 119632.99999999999, 119649.0, 119646.99999999999, 119561.99999999999, 119648.0, 119658.0, 119683.99999999999, 119703.0, 119482.0, 119089.0, 119137.0, 119295.0, 119361.99999999999, 119368.00000000001, 119442.0, 119426.00000000001, 119479.0, 119556.0, 119605.99999999999, 119561.0, 119343.0, 119244.0, 119155.00000000001, 119246.99999999999, 119303.0, 119182.00000000001, 119222.0, 119190.0, 119184.0, 119279.0, 119306.0, 119376.0, 119399.00000000001, 119334.0, 119317.0, 119339.0, 119260.00000000001, 119188.0, 119140.0, 119085.0, 119156.0, 119183.0, 119166.0, 119211.0, 119337.0, 119344.0, 119357.0, 119490.99999999999, 119520.0, 119421.0, 119268.0, 119195.0, 119193.0, 119157.0, 119222.0, 119124.00000000001, 119155.00000000001, 119077.00000000001, 119140.0, 119066.0, 118902.0, 118957.0, 119026.00000000001, 118951.0, 118880.99999999999, 118798.0, 118819.99999999999, 118861.0, 118714.00000000001, 118836.00000000001, 118730.0, 118724.00000000001], "simulated": [117554.00000000017, 117512.99999999993, 117530.99999999994, 117544.0, 117496.00000000001, 117479.99999999999, 117420.00000000016, 117432.00000000017, 117401.0000000004, 117377.00000000051, 117424.0000000007, 117317.00000000058, 117346.99999999965, 117370.9999999991, 117347.9999999988, 117358.99999999885, 117418.9999999989, 117388.99999999921, 117441.9999999986, 117386.99999999886, 117370.99999999866, 117308.99999999866, 117321.99999999872, 117398.9999999985, 117404.99999999833, 117403.99999999849, 117290.99999999875, 117256.99999999892, 117178.9999999986, 117187.99999999831, 117211.99999999785, 117278.9999999979, 117215.99999999766, 117135.99999999713, 117142.99999999673, 117178.99999999683, 117132.99999999678, 117075.99999999678, 117109.99999999643, 117184.99999999683, 117178.99999999658, 117177.9999999964, 117172.99999999614, 117023.99999999667, 117020.99999999706, 116893.99999999705, 116854.9999999971, 116912.99999999683, 116821.99999999651, 116852.9999999969, 116892.99999999702, 116918.99999999678, 116870.99999999638, 116929.99999999658, 116949.99999999661, 116943.99999999603, 117007.99999999563, 116975.99999999584, 117009.99999999582, 117045.99999999582, 116996.9999999956, 117014.99999999581, 116984.99999999616, 117039.99999999667, 117170.99999999675, 117252.99999999761, 117260.9999999975, 117225.99999999761, 117152.9999999979, 117073.99999999785, 117065.99999999774, 117066.99999999796, 117035.99999999769, 117036.9999999975, 117100.99999999761, 117074.99999999756, 117153.99999999782, 117076.99999999812, 117053.99999999849, 117075.99999999824, 117047.99999999869, 117010.99999999898, 116976.9999999987, 116991.99999999857, 117067.99999999853, 117036.99999999805, 116951.99999999793, 117031.99999999811, 117037.99999999786, 116981.9999999982, 116981.9999999983, 117017.99999999786, 116891.99999999868, 116932.99999999849, 116971.99999999824, 116850.99999999806, 116836.99999999773, 116891.9999999976, 116886.9999999976, 116911.9999999977, 116938.99999999767, 116892.99999999769, 116991.99999999811, 117003.99999999799, 117077.99999999795, 117042.99999999814, 117055.9999999979, 117111.99999999793, 117060.99999999821, 117121.99999999776, 117155.9999999978, 117177.99999999782, 117135.99999999767, 117092.99999999805, 117191.99999999777, 117247.99999999776, 117253.99999999786, 117224.99999999846, 117200.99999999869, 117238.99999999834, 117197.9999999983, 117288.9999999982, 117202.99999999856, 117189.99999999831, 117246.99999999811, 117174.99999999795, 117061.99999999852, 117088.99999999841, 117070.9999999984, 117072.99999999852, 117034.99999999836, 117080.99999999901, 117072.99999999876, 117056.99999999856, 117039.99999999824, 117049.99999999834, 116923.99999999815, 116890.99999999763, 116875.9999999984, 116929.9999999979, 116813.99999999843, 116889.99999999866, 116941.99999999831, 116998.99999999852, 117028.99999999932, 117189.99999999898, 117226.99999999875, 117284.99999999886, 117266.99999999894, 117277.99999999859, 117144.99999999834, 117208.9999999984, 117267.99999999824, 117305.99999999815, 117272.99999999772, 117239.99999999738, 117223.99999999744, 117218.99999999734, 117242.99999999712, 117191.99999999716, 117174.99999999694, 117179.99999999674, 117180.99999999693, 117134.99999999718, 117149.99999999722, 117130.99999999763, 117048.99999999738, 117083.99999999728, 117178.999999997, 117137.9999999964, 117118.99999999671, 117146.99999999681, 117162.99999999655, 117194.9999999971, 117226.99999999735, 117188.99999999814, 117248.99999999802, 117247.99999999811, 117284.99999999804, 117204.99999999825, 117195.99999999812, 117146.99999999792, 117165.99999999811, 117107.99999999849, 117037.99999999879, 117085.99999999834, 117132.99999999894, 117108.99999999879, 117092.99999999876, 117142.99999999838, 117109.99999999812, 117120.9999999977, 117094.99999999689, 117099.99999999668, 117150.9999999972, 117137.99999999748, 117359.99999999718, 117386.99999999648, 117407.99999999643, 117512.99999999593, 117463.99999999601, 117482.99999999588, 117430.99999999546, 117473.99999999563, 117514.9999999957, 117546.99999999607, 117523.99999999587, 117549.99999999626, 117547.99999999619, 117560.99999999566, 117539.99999999529, 117574.99999999539, 117527.99999999531, 117470.99999999498, 117583.99999999518, 117657.99999999492, 117685.99999999482, 117655.99999999473, 117623.99999999463, 117617.99999999431, 117636.99999999371, 117666.99999999341, 117662.9999999933, 117652.99999999322, 117744.99999999341, 117700.99999999318, 117714.99999999255, 117786.9999999926, 117859.99999999248, 117769.9999999929, 117806.99999999288, 117780.99999999288, 117708.99999999287, 117760.99999999283, 117755.99999999316, 117716.99999999348, 117705.99999999334, 117671.99999999294, 117625.9999999929, 117639.99999999291, 117717.9999999931, 117789.99999999293, 117811.99999999303, 117709.9999999933, 117728.99999999334, 117748.99999999318, 117712.9999999932, 117750.99999999296, 117832.99999999341, 117845.99999999316, 117819.99999999313, 117775.99999999293, 117752.99999999307, 117737.99999999309, 117714.99999999294, 117809.99999999405, 117887.99999999384, 117899.99999999431, 117873.99999999424, 117837.999999994, 117778.9999999938, 117760.99999999364, 117759.99999999341, 117823.99999999342, 117870.99999999326, 117822.99999999315, 117795.99999999294, 117824.99999999306, 117886.99999999264, 117900.9999999928, 117930.99999999322, 117964.99999999294, 118012.99999999268, 118003.99999999277, 118035.99999999253, 118016.99999999274, 118076.99999999322, 118042.9999999932, 118084.99999999332, 118069.99999999318, 118021.99999999297, 118034.99999999309, 117982.99999999318, 118019.99999999348, 118033.99999999357, 117996.99999999358, 117990.99999999389, 118036.99999999386, 118021.99999999366, 118026.99999999371, 118042.99999999344, 118008.99999999288, 118019.99999999312, 117997.9999999931, 117998.99999999293, 118222.9999999926, 118273.99999999294, 118321.99999999329, 118223.99999999399, 118148.99999999355, 118037.99999999355, 117953.99999999376, 118066.99999999403, 118181.99999999424, 118234.99999999435, 118114.99999999387, 118007.99999999361, 118037.99999999351, 118051.99999999326, 118047.99999999329, 117994.99999999304, 118025.99999999306, 118015.99999999304, 118049.99999999291, 117977.99999999277, 118000.99999999287, 117991.99999999287, 118005.99999999291, 118091.99999999249, 118164.99999999262, 118216.99999999278, 118210.999999993, 118204.99999999319, 118254.99999999318, 118307.99999999291, 118265.99999999281, 118251.99999999281, 118280.99999999351, 118270.99999999347, 118302.99999999278, 118335.99999999284, 118425.9999999928, 118373.99999999291, 118346.99999999355, 118364.99999999344, 118354.99999999357, 118457.99999999395, 118426.99999999406, 118401.99999999386, 118352.99999999416, 118384.9999999944, 118400.99999999432, 118383.99999999364, 118339.9999999939, 118302.99999999382, 118411.99999999384, 118367.99999999403, 118388.99999999402, 118533.99999999457, 118548.99999999502, 118561.99999999521, 118582.99999999521, 118570.9999999948, 118700.99999999476, 118705.99999999482, 118674.99999999475, 118611.99999999498, 118593.99999999483, 118582.99999999504, 118607.99999999515, 118586.99999999464, 118503.99999999478, 118590.99999999486, 118554.99999999473, 118521.99999999505, 118461.99999999473, 118482.99999999467, 118452.99999999526, 118462.9999999951, 118419.99999999446, 118422.9999999948, 118406.99999999466, 118388.99999999464, 118341.99999999523, 118384.99999999504, 118347.99999999489, 118366.99999999443, 118102.99999999402, 118273.99999999405, 118197.99999999354, 118179.9999999937, 118081.99999999408, 118184.99999999371, 118175.99999999347, 118207.99999999341, 118266.99999999342, 118239.99999999374, 118252.99999999367, 118238.99999999416, 118460.99999999377, 118449.9999999938, 118437.99999999416, 118400.99999999447, 118380.99999999453, 118402.99999999437, 118396.99999999406, 118436.9999999941, 118415.99999999389, 118393.99999999425, 118419.99999999523, 118381.9999999956, 118377.99999999537, 118347.99999999497, 118326.99999999537, 118307.99999999542, 118221.99999999529, 118312.99999999604, 118320.99999999626, 118237.99999999546, 118237.9999999949, 118234.99999999478, 118205.99999999497, 118262.99999999511, 118291.99999999545, 118252.99999999549, 118262.99999999582, 118262.99999999585, 118259.999999996, 118262.99999999555, 118328.99999999572, 118349.99999999566, 118405.9999999956, 118403.99999999531, 118435.99999999526, 118406.99999999542, 118370.99999999552, 118376.99999999534, 118340.99999999581, 118291.99999999562, 118250.99999999539, 118226.99999999543, 118185.99999999523, 118168.99999999521, 118100.9999999948, 118154.99999999489, 118067.99999999466, 118058.9999999946, 118061.99999999415, 118053.99999999386, 117976.99999999412, 117933.99999999456, 117934.99999999441, 117881.999999994, 117984.99999999405, 117995.99999999438, 118006.99999999464, 118025.99999999485, 118036.9999999945, 118059.9999999943, 118050.9999999943, 117950.99999999444, 117933.99999999427, 117964.99999999361, 118015.99999999306, 117902.9999999928, 117994.99999999232, 117938.99999999261, 117840.99999999258, 117876.99999999325, 117914.99999999326, 117761.99999999307, 117791.99999999213, 117767.99999999229, 117741.9999999925, 117706.99999999262, 117703.99999999253, 117675.99999999219, 117695.99999999245, 117699.99999999242, 117629.99999999245, 117607.9999999926, 117596.99999999264, 117602.99999999224, 117549.99999999252, 117479.99999999224, 117433.99999999204, 117378.99999999232, 117406.99999999255, 117435.99999999227, 117420.99999999201, 117413.99999999227, 117442.99999999252, 117402.99999999281, 117480.99999999303, 117501.99999999286, 117453.99999999342, 117362.9999999933, 117302.99999999288, 117372.99999999371, 117322.99999999376, 117316.99999999376, 117296.99999999345, 117301.9999999937, 117347.99999999373, 117376.99999999374, 117382.99999999396, 117322.9999999944, 117263.99999999427, 117264.9999999944, 117227.99999999406, 117170.99999999414, 117215.99999999352, 117170.99999999361, 117075.99999999357, 116959.9999999936, 116979.99999999379, 116871.99999999395, 116913.99999999409, 116911.99999999486, 116854.99999999446, 116805.99999999482, 116789.99999999448, 116742.99999999454, 116821.99999999515, 116807.99999999462, 116808.99999999425, 116838.99999999462, 116842.99999999437, 116849.99999999435, 117034.99999999387, 116981.99999999379, 116951.99999999366, 116972.9999999937, 117033.99999999371, 117043.99999999403, 117089.99999999405, 117143.99999999412, 117136.99999999412, 117086.99999999384, 117076.99999999368, 117047.99999999374, 117049.99999999367, 117056.99999999358, 117073.99999999322, 117112.99999999335, 117023.99999999319, 117012.9999999933, 117065.99999999371, 117045.99999999334, 117076.99999999297, 117023.99999999313, 116992.99999999334, 116970.99999999318, 117036.99999999312, 117005.99999999334, 116990.99999999297, 117028.99999999268, 117028.99999999306, 117014.99999999328, 116992.99999999354, 116953.99999999366, 116880.99999999344, 116857.99999999309, 116897.99999999275, 116889.99999999246, 116853.99999999268, 116847.99999999335, 116822.99999999352, 116794.99999999373, 116887.999999994, 116906.99999999421, 116979.99999999479, 116988.99999999428, 116993.9999999941, 117056.99999999395, 117050.9999999946, 117003.99999999543, 116962.99999999568, 117025.99999999591, 117055.99999999651, 117065.99999999668, 117050.99999999638, 117108.99999999658, 117062.99999999668, 117081.9999999964, 117097.99999999673, 117096.99999999657, 117058.99999999627, 117104.99999999622, 117022.99999999556, 116967.99999999521, 116991.99999999587, 116953.999999996, 116962.99999999577, 116787.99999999563, 116765.99999999515, 116695.99999999483, 116562.99999999488, 116302.99999999459, 116301.99999999414, 116372.9999999944, 116320.99999999443, 116251.99999999463, 116267.99999999466, 116244.99999999488, 116272.99999999446, 116229.99999999507, 116251.99999999514, 116277.99999999495, 116274.99999999505, 116269.99999999511, 116298.99999999559, 116216.99999999537, 116219.99999999537, 116266.99999999568, 116296.99999999566, 116348.99999999547, 116415.99999999527, 116487.99999999559, 116426.99999999513, 116485.99999999536, 116460.99999999547, 116436.99999999574, 116353.99999999595, 116309.99999999613, 116398.99999999555, 116367.9999999954, 116359.99999999529, 116341.99999999497, 116316.99999999482, 116312.99999999464, 116264.99999999448, 116258.99999999457, 116255.9999999943, 116237.99999999483, 116209.99999999486, 116109.9999999946, 116081.9999999942, 116058.9999999941, 116162.99999999418, 116189.99999999459, 116213.9999999948, 116247.99999999502, 116222.99999999524, 116248.99999999558, 116339.99999999555, 116318.99999999639, 116324.99999999598, 116364.99999999556, 116163.99999999537, 116051.99999999526, 116042.99999999513, 116138.99999999555, 116262.99999999574, 116278.99999999514, 116290.99999999443, 116275.99999999428, 116250.99999999373, 116345.99999999416, 116319.99999999531, 116276.99999999524, 116368.99999999569, 116307.99999999578, 116350.99999999542, 116402.99999999584, 116451.99999999619, 116329.99999999594, 116381.99999999623, 116438.99999999595, 116357.9999999961, 116302.99999999598, 116267.99999999524, 116262.9999999952, 116317.99999999513, 116327.99999999556, 116267.99999999527, 116304.99999999542, 116299.9999999954, 116285.99999999593, 116387.99999999593, 116367.99999999594, 116240.99999999574, 116375.99999999603, 116386.9999999961, 116440.99999999593, 116468.99999999577, 116486.99999999562, 116465.99999999578, 116451.99999999598, 116464.99999999598, 116416.99999999614, 116444.9999999963, 116498.99999999667, 116526.99999999697, 116558.9999999974, 116498.99999999725, 116541.99999999691, 116490.99999999655, 116551.99999999716, 116612.99999999712, 116621.99999999677, 117011.99999999668, 116921.99999999636, 116888.99999999629, 116928.99999999625, 116944.99999999639, 117000.99999999684, 116970.99999999674, 116928.99999999713, 116980.99999999693, 116955.99999999684, 117004.99999999686, 117028.99999999703, 117091.99999999718, 117040.9999999976, 116934.99999999782, 116911.99999999779, 116883.99999999785, 116941.99999999785, 116960.99999999814, 116952.99999999818, 117003.99999999786, 116922.99999999734, 117061.99999999799, 116978.9999999981, 116973.99999999788, 117208.99999999834, 117079.99999999843, 117006.99999999965, 117000.99999999921, 116965.99999999984, 117004.99999999983, 117074.99999999968, 117094.99999999999, 116968.99999999967, 116961.99999999968, 116944.99999999972, 116917.99999999964, 116884.99999999962, 116989.99999999997, 117027.99999999999, 117009.00000000007, 116985.99999999981, 116998.99999999984, 117022.99999999964, 117060.99999999977, 117031.00000000001, 116968.99999999981, 116969.99999999959, 116887.99999999994, 116878.999999999, 116873.99999999923, 116843.99999999916, 116816.99999999856, 116837.99999999865, 116809.99999999866, 116747.99999999879, 116710.99999999885, 116737.99999999888, 116743.99999999862, 116675.99999999872, 116725.99999999868, 116699.99999999857, 116679.9999999985, 116738.99999999827, 116640.99999999825, 116686.99999999799, 116732.9999999984, 116735.99999999831, 116740.99999999838, 116721.99999999799, 116718.99999999815, 116686.99999999815, 116698.9999999982, 116797.99999999773, 116780.99999999799, 116769.9999999978, 116709.99999999731, 116674.99999999716, 116717.99999999703, 116722.99999999719, 116751.99999999718, 116762.99999999696, 116740.99999999639, 116722.99999999655, 116668.99999999603, 116742.99999999632, 116779.99999999639, 116759.9999999964, 116762.99999999635, 116806.99999999593, 116801.99999999577, 116786.99999999569, 116786.9999999962, 116765.99999999646, 116786.99999999619, 116756.99999999626, 116775.99999999735, 116784.99999999751, 116734.99999999785, 116731.99999999763, 116816.99999999786, 116876.99999999764, 116877.99999999828, 116839.99999999818, 116893.99999999785, 116887.99999999796, 116927.999999998, 116883.99999999795, 116860.99999999814, 116886.99999999789, 116903.99999999738, 116920.99999999779, 116949.99999999732, 116987.99999999706, 117022.99999999757, 117069.99999999724, 117090.9999999975, 117081.99999999737, 117060.99999999744, 116987.99999999786, 116943.99999999783, 116973.99999999744, 116912.99999999731, 116899.99999999694, 116949.99999999662, 116889.99999999655, 116920.9999999964, 116952.99999999705, 116916.99999999741, 116890.99999999744, 116865.99999999766, 116904.99999999792, 116816.99999999766, 116844.99999999774, 116907.99999999808, 116935.99999999772, 116891.9999999982, 116919.99999999796, 116920.99999999837, 116996.99999999773, 116965.99999999782, 117010.9999999981, 116943.99999999783, 116993.99999999773, 117019.99999999788, 117053.99999999805, 116988.99999999796, 117127.99999999815, 117083.9999999984, 117098.99999999868, 117018.99999999876, 116928.99999999853, 116811.99999999945, 116988.9999999994, 116900.00000000001, 116893.00000000061, 116904.0000000007, 116816.00000000116, 116737.0000000023, 116838.00000000172, 116830.00000000221, 116832.00000000214, 116828.00000000272, 116851.0000000036, 116815.00000000342, 116802.00000000332, 116768.00000000278, 116800.00000000307, 116687.00000000285, 116682.00000000326, 116678.00000000352, 116704.00000000352, 116691.00000000307, 116659.00000000282, 116735.00000000258, 116741.00000000281, 116642.00000000228, 116634.00000000231, 116587.00000000226, 116553.0000000027, 116601.00000000189, 116685.00000000262, 116759.00000000343, 116713.00000000367, 116726.00000000394, 116833.00000000444, 116783.00000000463, 116707.00000000455, 116741.00000000432, 116723.00000000471, 116746.00000000471, 116811.00000000527, 116806.00000000549, 116795.00000000563, 116818.00000000565, 116860.00000000515, 116849.00000000525, 116877.00000000536, 116910.00000000541, 116913.00000000512, 116887.00000000506, 116908.00000000469, 116968.00000000445, 116906.00000000482, 116896.00000000474, 116872.00000000533, 116828.00000000489, 116878.00000000506, 116931.00000000495, 117040.00000000524, 117049.00000000469, 116582.00000000499, 116574.00000000483, 116705.00000000489, 116786.00000000492, 116710.00000000503, 116766.00000000503, 116762.00000000473, 116803.00000000463, 116800.000000005, 116811.00000000466, 116756.00000000476, 117194.0000000051, 116984.00000000512, 116903.00000000579, 116972.00000000534, 116925.00000000505, 117033.0000000058, 117026.00000000514, 117105.00000000495, 117104.00000000422, 117088.00000000307, 117104.00000000316, 117219.00000000196, 117303.00000000172, 117368.00000000175, 117384.00000000146, 117423.00000000138, 117317.00000000106, 117324.00000000096, 117284.00000000135, 117211.00000000122, 117250.00000000122, 117160.00000000116, 117182.00000000131, 117156.00000000147, 117144.00000000041, 117134.00000000051, 117137.00000000035, 117176.99999999993, 117171.99999999949, 117159.99999999935, 117100.99999999933, 117039.99999999949, 117231.99999999901, 117158.99999999964, 117054.00000000019, 117087.99999999994, 117054.99999999997, 117212.00000000087, 117127.0000000017, 117177.00000000221, 117181.00000000186, 117110.00000000179, 117159.00000000096, 117193.99999999997, 117128.99999999949, 117176.0000000002, 117218.99999999971, 117154.00000000003, 117240.99999999987, 117243.99999999967, 117275.99999999949, 117283.99999999914, 117359.99999999935, 117381.99999999932, 117405.99999999948, 117390.99999999917, 117375.99999999873, 117398.99999999876, 117403.99999999873, 117460.9999999991, 117392.99999999923, 117289.99999999916, 117203.99999999878, 117327.99999999828, 117287.99999999786, 117378.99999999758, 118016.99999999854, 118167.99999999822, 118225.9999999977, 118154.9999999967, 118196.99999999658, 118081.99999999686, 118082.99999999705, 118176.99999999773, 118190.99999999786, 118159.99999999751, 118168.99999999786, 118111.99999999804, 118069.999999998, 118045.99999999731, 118123.9999999975, 118150.99999999769, 118136.9999999977, 118131.99999999709, 118082.99999999648, 118035.99999999735, 118002.99999999751, 118000.99999999753, 117969.99999999844, 117950.99999999868, 117908.99999999843, 117917.99999999939, 117960.99999999942, 117974.00000000007, 117971.99999999968, 117962.99999999968, 117945.99999999993, 117910.99999999988, 117858.99999999955, 117918.0000000001, 117969.99999999971, 118035.99999999988, 118078.0000000001, 118159.00000000052, 118147.00000000073, 118247.00000000105, 118350.0000000015, 118437.00000000146, 118431.00000000166, 118282.00000000143, 118292.00000000074, 118324.00000000092, 118351.00000000169, 118415.00000000092, 118434.0000000007, 118370.00000000105, 118354.00000000215, 118171.00000000205, 118011.0000000034, 117913.00000000367, 118111.00000000317, 118192.00000000322, 118280.00000000319, 118296.00000000265, 118343.00000000256, 118352.00000000327, 118356.00000000377, 118375.00000000381, 118299.00000000357, 118171.00000000336, 118254.0000000036, 118303.00000000322, 118275.00000000323, 118251.00000000291, 118418.0000000024, 118533.0000000019, 118630.00000000249, 118609.00000000214, 118699.00000000103, 118685.00000000042, 118781.000000001, 118859.00000000122, 118857.00000000055, 118727.00000000016, 118820.99999999929, 118794.99999999924, 118835.99999999886, 118783.99999999946, 118801.99999999988, 118908.9999999992, 118809.99999999888, 118806.99999999905, 118900.99999999932, 118919.99999999935, 118910.99999999943, 118964.99999999945, 118920.9999999993, 118842.99999999923, 118814.00000000012, 118915.99999999971, 119012.99999999977, 119057.99999999916, 118865.99999999863, 118847.99999999879, 118810.9999999981, 118715.99999999806, 118790.9999999983, 118821.99999999875, 118824.99999999844, 118784.99999999833, 118882.9999999981, 118784.99999999811, 118679.9999999982, 118604.99999999868, 118604.99999999869, 118535.99999999949, 118447.9999999996, 118592.99999999968, 118724.00000000001], "actual_fast_jumps": [null, null, null, null, null, null, null, null, null, null, 117357.0, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 116745.00000000001, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 116954.0, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 116890.99999999999, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 116564.0, null, null, null, null, null, 116260.00000000001, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 116924.0, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 116672.0, null, 116678.0, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 116026.99999999999, 115894.99999999999, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 116921.99999999999, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 117356.0, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 117246.0, 117239.0, null, null, null, 117086.0, null, null, null, 117026.00000000001, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 117141.0, null, null, null, null, null, null, null, null, null, null, null, null, null, 117380.0, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 117861.0, null, null, null, null, null, 118524.99999999999, null, null, null, 118544.99999999999, null, null, null, null, null, 118483.99999999999, null, null, 118595.99999999999, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 118903.0, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 118890.0, null, null, null, null, null, null, null, null, null, 119168.99999999999, null, null, null, null, null, 119234.0, null, null, 119449.0, 119443.00000000001, 119665.0, null, null, 119507.99999999999, null, null, 119873.99999999999, null, null, null, 119807.0, null, 119842.0, null, null, null, null, null, 119954.99999999999, null, 120212.99999999999, 120034.0, 119930.0, 119913.0, null, null, null, 119803.0, null, null, 119844.0, null, null, null, null, 119889.0, 119742.0, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 119376.0, 119468.0, null, 119435.0, 119368.00000000001, 119273.99999999999, 119336.0, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 119716.0, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 119561.99999999999, null, null, 119683.99999999999, null, 119482.0, 119089.0, 119137.0, 119295.0, 119361.99999999999, null, null, null, 119479.0, null, null, null, null, null, null, null, null, null, null, null, null, 119279.0, null, null, null, null, 119317.0, null, null, null, null, 119085.0, null, null, null, null, null, null, null, 119490.99999999999, 119520.0, null, null, 119195.0, null, 119157.0, 119222.0, null, null, null, 119140.0, 119066.0, 118902.0, null, 119026.00000000001, 118951.0, null, null, null, null, null, 118836.00000000001, 118730.0, null]};
+    const numSamples = Math.min(rawSampleData.actual.length, rawSampleData.simulated.length);
+    const sampleLabels = Array.from({length: numSamples}, (_, i) => i + 1);
+
+    const ctxSample = document.getElementById('sampleChart').getContext('2d');
+    new Chart(ctxSample, {
+        type: 'line',
+        data: {
+            labels: sampleLabels,
+            datasets: [
+                {
+                    type: 'scatter',
+                    label: 'Fast Jumps (>7 pips in <400s)',
+                    data: rawSampleData.actual_fast_jumps,
+                    backgroundColor: 'rgba(239, 68, 68, 1)',
+                    borderColor: 'rgba(239, 68, 68, 1)',
+                    pointStyle: 'circle',
+                    pointRadius: 2,
+                    pointHoverRadius: 3,
+                    showLine: false,
+                    order: 0
+                },
+                {
+                    label: 'Actual Data (Close)',
+                    data: rawSampleData.actual,
+                    borderColor: 'rgba(59, 130, 246, 0.8)',
+                    borderWidth: 1.5,
+                    fill: false,
+                    pointRadius: 0
+                },
+                {
+                    label: 'Simulated (Close)',
+                    data: rawSampleData.simulated,
+                    borderColor: 'rgba(249, 115, 22, 0.8)',
+                    borderWidth: 1.5,
+                    fill: false,
+                    pointRadius: 0
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'top', align: 'start', labels: { usePointStyle: true, boxWidth: 8 } }
+            },
+            scales: {
+                x: {
+                    title: { display: true, text: 'Time Block Index', color: '#64748b' },
+                    grid: { display: false },
+                    ticks: { maxTicksLimit: 10 }
+                },
+                y: {
+                    title: { display: true, text: 'Price', color: '#64748b' },
+                    grid: { color: '#f1f5f9' }
+                }
+            }
+        }
+    });
+
+    // --- SUPPORT & RESISTANCE CHART ---
+    const rawSrData = {"labels": [115870.0, 115920.0, 115970.0, 116020.0, 116070.0, 116120.0, 116170.0, 116220.0, 116270.0, 116320.0, 116370.0, 116420.0, 116470.0, 116520.0, 116570.0, 116620.0, 116670.0, 116720.0, 116770.0, 116820.0, 116870.0, 116920.0, 116970.0, 117020.0, 117070.0, 117120.0, 117170.0, 117220.0, 117270.0, 117320.0, 117370.0, 117420.0, 117470.0, 117520.0, 117570.0, 117620.0, 117670.0, 117720.0, 117770.0, 117820.0, 117870.0, 117920.0, 117970.0, 118020.0, 118070.0, 118120.0, 118170.0, 118220.0, 118270.0, 118320.0, 118370.0, 118420.0, 118470.0, 118520.0, 118570.0, 118620.0, 118670.0, 118720.0, 118770.0, 118820.0, 118870.0, 118920.0, 118970.0, 119020.0, 119070.0, 119120.0, 119170.0, 119220.0, 119270.0, 119320.0, 119370.0, 119420.0, 119470.0, 119520.0, 119570.0, 119620.0, 119670.0, 119720.0, 119770.0, 119820.0, 119870.0, 119920.0, 119970.0, 120020.0, 120070.0, 120120.0, 120170.0, 120220.0, 120270.0], "actual_counts": [1, 1, 0, 1, 0, 1, 1, 1, 2, 1, 1, 6, 0, 1, 1, 3, 1, 3, 2, 4, 0, 1, 4, 2, 0, 1, 3, 0, 1, 1, 0, 3, 0, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 2, 1, 1, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1], "simulated_counts": [0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 1, 2, 2, 0, 1, 0, 2, 2, 4, 2, 0, 1, 3, 2, 3, 3, 1, 1, 3, 1, 1, 2, 0, 0, 1, 0, 0, 0, 1, 2, 3, 0, 0, 1, 2, 1, 0, 1, 2, 0, 0, 2, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]};
+    const ctxSr = document.getElementById('srChart').getContext('2d');
+    new Chart(ctxSr, {
+        type: 'bar',
+        data: {
+            labels: rawSrData.labels.map(l => l.toFixed(2)),
+            datasets: [
+                {
+                    label: 'Actual Data S&R',
+                    data: rawSrData.actual_counts,
+                    backgroundColor: 'rgba(59, 130, 246, 0.7)',
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
+                },
+                {
+                    label: 'Simulated S&R',
+                    data: rawSrData.simulated_counts,
+                    backgroundColor: 'rgba(249, 115, 22, 0.7)',
+                    borderColor: 'rgba(249, 115, 22, 1)',
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0
+                },
+                {
+                    type: 'line',
+                    label: 'Actual Trend',
+                    data: rawSrData.actual_counts,
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.1,
+                    pointRadius: 0
+                },
+                {
+                    type: 'line',
+                    label: 'Simulated Trend',
+                    data: rawSrData.simulated_counts,
+                    borderColor: 'rgba(249, 115, 22, 1)',
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.1,
+                    pointRadius: 0
+                }
+            ]
+        },
+        options: {
+            indexAxis: 'y', // This makes it a sideways histogram
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'top', align: 'start', labels: { usePointStyle: true, boxWidth: 8 } }
+            },
+            scales: {
+                x: {
+                    title: { display: true, text: 'Frequency (Number of Levels)', color: '#64748b' },
+                    grid: { color: '#f1f5f9' },
+                    beginAtZero: true
+                },
+                y: {
+                    title: { display: true, text: 'Price Level', color: '#64748b' },
+                    grid: { display: false },
+                    ticks: { autoSkip: true, maxTicksLimit: 20 }
+                }
+            }
+        }
+    });
+</script>
+
+</body>
+</html>
