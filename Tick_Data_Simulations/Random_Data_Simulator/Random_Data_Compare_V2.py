@@ -19,6 +19,8 @@ SAMPLE_BLOCKS = 10000                # Number of time blocks to show in sample O
 FAST_JUMP_LIMIT_SECONDS = 1200       # Threshold to consider a jump "fast" for overlay purposes (e.g. 10.5 seconds)
 SR_LOOKBACK_BLOCKS = 5                # Number of blocks before and after to define Support/Resistance
 SR_BIN_SIZE_POINTS = 50               # Price distance (points) per bin for the Support/Resistance sideways histogram
+OVERLAY_CANDLES = 60                  # Number of 1-minute candles per Monte Carlo section
+MAX_OVERLAY_CHUNKS = 1000             # Max non-overlapping chunks for the Monte Carlo chart
 
 
 # ==========================================
@@ -257,7 +259,70 @@ ohlc_act = calc_ohlc_metrics(df_act, BLOCK_MINUTES)
 ohlc_sim = calc_ohlc_metrics(df_sim, BLOCK_MINUTES)
 
 # ==========================================
-# 4.8 SUPPORT & RESISTANCE LEVELS
+# 4.8 MONTE CARLO OVERLAYS & ENDPOINTS
+# ==========================================
+print(f"Generating Monte Carlo Data (Chunks of {OVERLAY_CANDLES} 1-min candles)...")
+
+# 1-min resample
+df_act_1m = df_act['price'].resample('min').last().dropna()
+df_sim_1m = df_sim['price'].resample('min').last().dropna()
+
+def generate_monte_carlo_chunks(series, chunk_size, max_chunks):
+    chunks = []
+    endpoints = []
+
+    # Extract non-overlapping chunks
+    for i in range(0, len(series) - chunk_size + 1, chunk_size):
+        chunk = series.iloc[i : i + chunk_size].values
+        # Normalize to start at 0
+        normalized_chunk = chunk - chunk[0]
+        chunks.append(normalized_chunk.tolist())
+        endpoints.append(normalized_chunk[-1])
+
+    # Limit number of chunks
+    if len(chunks) > max_chunks:
+        import random
+        # random.sample is without replacement
+        indices = random.sample(range(len(chunks)), max_chunks)
+        chunks = [chunks[i] for i in indices]
+        endpoints = [endpoints[i] for i in indices]
+
+    return chunks, endpoints
+
+mc_chunks_act, endpoints_act = generate_monte_carlo_chunks(df_act_1m, OVERLAY_CANDLES, MAX_OVERLAY_CHUNKS)
+mc_chunks_sim, endpoints_sim = generate_monte_carlo_chunks(df_sim_1m, OVERLAY_CANDLES, MAX_OVERLAY_CHUNKS)
+
+mc_json = json.dumps({
+    "actual_chunks": mc_chunks_act,
+    "simulated_chunks": mc_chunks_sim,
+    "candles_x": list(range(OVERLAY_CANDLES))
+})
+
+print("Calculating Endpoint Distributions...")
+# Calculate Endpoints Distribution
+if endpoints_act and endpoints_sim:
+    min_ep = min(min(endpoints_act), min(endpoints_sim))
+    max_ep = max(max(endpoints_act), max(endpoints_sim))
+    # Use 50 bins for the smooth distribution
+    ep_bins = np.linspace(min_ep, max_ep, 50)
+
+    hist_ep_act, _ = np.histogram(endpoints_act, bins=ep_bins)
+    hist_ep_sim, _ = np.histogram(endpoints_sim, bins=ep_bins)
+
+    ep_bin_centers = (ep_bins[:-1] + ep_bins[1:]) / 2
+else:
+    ep_bin_centers = []
+    hist_ep_act = []
+    hist_ep_sim = []
+
+ep_dist_json = json.dumps({
+    "labels": ep_bin_centers.tolist() if isinstance(ep_bin_centers, np.ndarray) else list(ep_bin_centers),
+    "actual": hist_ep_act.tolist() if isinstance(hist_ep_act, np.ndarray) else list(hist_ep_act),
+    "simulated": hist_ep_sim.tolist() if isinstance(hist_ep_sim, np.ndarray) else list(hist_ep_sim)
+})
+
+# ==========================================
+# 4.9 SUPPORT & RESISTANCE LEVELS
 # ==========================================
 print(f"Calculating Support & Resistance Levels (Lookback {SR_LOOKBACK_BLOCKS} blocks)...")
 
@@ -583,6 +648,27 @@ html_template = f"""<!DOCTYPE html>
         <div class="card-header">Support & Resistance Levels</div>
         <div class="chart-container" style="height: 600px;">
             <canvas id="srChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Monte Carlo Overlay (Actual Data - {OVERLAY_CANDLES}x 1min Candles)</div>
+        <div class="chart-container">
+            <canvas id="mcActualChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Monte Carlo Overlay (Simulated Data - {OVERLAY_CANDLES}x 1min Candles)</div>
+        <div class="chart-container">
+            <canvas id="mcSimulatedChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Endpoint Distribution (Bar {OVERLAY_CANDLES})</div>
+        <div class="chart-container">
+            <canvas id="endpointChart"></canvas>
         </div>
     </div>
 
@@ -1176,6 +1262,143 @@ html_template = f"""<!DOCTYPE html>
                     title: {{ display: true, text: 'Price Level', color: '#64748b' }},
                     grid: {{ display: false }},
                     ticks: {{ autoSkip: true, maxTicksLimit: 20 }}
+                }}
+            }}
+        }}
+    }});
+
+    // --- MONTE CARLO ACTUAL CHART ---
+    const rawMcData = {mc_json};
+    const mcLabels = rawMcData.candles_x;
+
+    // Format datasets for Actual Overlay
+    const mcActualDatasets = rawMcData.actual_chunks.map((chunk, index) => ({{
+        label: `Path ${{index + 1}}`,
+        data: chunk,
+        borderColor: 'rgba(59, 130, 246, 0.05)', // Low opacity for density
+        borderWidth: 1,
+        fill: false,
+        pointRadius: 0,
+        pointHoverRadius: 0,
+        animation: false
+    }}));
+
+    const ctxMcAct = document.getElementById('mcActualChart').getContext('2d');
+    new Chart(ctxMcAct, {{
+        type: 'line',
+        data: {{
+            labels: mcLabels,
+            datasets: mcActualDatasets
+        }},
+        options: {{
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            plugins: {{
+                legend: {{ display: false }}, // Hide legend to save space
+                tooltip: {{ enabled: false }} // Disable tooltips for performance
+            }},
+            scales: {{
+                x: {{
+                    title: {{ display: true, text: 'Candle Index (1-Minute Intervals)', color: '#64748b' }},
+                    grid: {{ display: false }}
+                }},
+                y: {{
+                    title: {{ display: true, text: 'Normalized Price Change (Points)', color: '#64748b' }},
+                    grid: {{ color: '#f1f5f9' }}
+                }}
+            }}
+        }}
+    }});
+
+    // --- MONTE CARLO SIMULATED CHART ---
+    const mcSimDatasets = rawMcData.simulated_chunks.map((chunk, index) => ({{
+        label: `Path ${{index + 1}}`,
+        data: chunk,
+        borderColor: 'rgba(249, 115, 22, 0.05)', // Low opacity for density
+        borderWidth: 1,
+        fill: false,
+        pointRadius: 0,
+        pointHoverRadius: 0,
+        animation: false
+    }}));
+
+    const ctxMcSim = document.getElementById('mcSimulatedChart').getContext('2d');
+    new Chart(ctxMcSim, {{
+        type: 'line',
+        data: {{
+            labels: mcLabels,
+            datasets: mcSimDatasets
+        }},
+        options: {{
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            plugins: {{
+                legend: {{ display: false }},
+                tooltip: {{ enabled: false }}
+            }},
+            scales: {{
+                x: {{
+                    title: {{ display: true, text: 'Candle Index (1-Minute Intervals)', color: '#64748b' }},
+                    grid: {{ display: false }}
+                }},
+                y: {{
+                    title: {{ display: true, text: 'Normalized Price Change (Points)', color: '#64748b' }},
+                    grid: {{ color: '#f1f5f9' }}
+                }}
+            }}
+        }}
+    }});
+
+    // --- ENDPOINT DISTRIBUTION CHART ---
+    const rawEpData = {ep_dist_json};
+
+    const ctxEp = document.getElementById('endpointChart').getContext('2d');
+    new Chart(ctxEp, {{
+        type: 'line',
+        data: {{
+            labels: rawEpData.labels.map(l => l.toFixed(2)),
+            datasets: [
+                {{
+                    label: 'Actual Data Endpoints',
+                    data: rawEpData.actual,
+                    backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4,
+                    pointRadius: 0
+                }},
+                {{
+                    label: 'Simulated Endpoints',
+                    data: rawEpData.simulated,
+                    backgroundColor: 'rgba(249, 115, 22, 0.2)',
+                    borderColor: 'rgba(249, 115, 22, 1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4,
+                    pointRadius: 0
+                }}
+            ]
+        }},
+        options: {{
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {{ mode: 'index', intersect: false }},
+            plugins: {{
+                legend: {{ position: 'top', align: 'start', labels: {{ usePointStyle: true, boxWidth: 8 }} }}
+            }},
+            scales: {{
+                x: {{
+                    title: {{ display: true, text: 'Normalized Price Change at Final Candle (Points)', color: '#64748b' }},
+                    grid: {{ display: false }},
+                    ticks: {{ autoSkip: true, maxTicksLimit: 20 }}
+                }},
+                y: {{
+                    title: {{ display: true, text: 'Frequency', color: '#64748b' }},
+                    grid: {{ color: '#f1f5f9' }},
+                    beginAtZero: true
                 }}
             }}
         }}
